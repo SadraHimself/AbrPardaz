@@ -119,15 +119,34 @@ class VirtualizorProvider(BaseProvider):
             "hostname": params.name,
             "rootpass": params.extra.get("root_password", "TeleCloud@2024"),
             "osid": params.os_id,
-            "plid": params.plan_id,
-            "node_select": params.extra.get("node_id", 0),
             "bandwidth": params.extra.get("bandwidth", 1000),
             "ram": params.extra.get("ram", 1024),
             "space": params.extra.get("disk", 20),
             "cores": params.extra.get("cpu", 1),
         }
+        # Only send plid if it's a valid numeric plan ID
+        plan_id_str = str(params.plan_id).strip()
+        if plan_id_str.isdigit() and int(plan_id_str) > 0:
+            payload["plid"] = int(plan_id_str)
+        else:
+            payload["plid"] = 0
+
+        node_id = params.extra.get("node_id")
+        if node_id:
+            payload["node_select"] = node_id
+
         data = await self._request("addvs", payload)
-        vpsid = data.get("addvs", {}).get("vpsid") or data.get("vpsid")
+
+        # Handle different Virtualizor response formats
+        addvs_raw = data.get("addvs")
+        vpsid = None
+        if isinstance(addvs_raw, dict):
+            vpsid = addvs_raw.get("vpsid")
+        elif isinstance(addvs_raw, (int, float)) and addvs_raw:
+            vpsid = int(addvs_raw)
+        if not vpsid:
+            vpsid = data.get("vpsid")
+
         if not vpsid:
             raise RuntimeError("Virtualizor did not return vpsid after create")
         return await self.get_server(str(vpsid))

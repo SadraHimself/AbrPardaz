@@ -507,8 +507,10 @@ async def plan_add_plan_id(message: Message, state: FSMContext, session: AsyncSe
                 await state.set_state(PlanFSM.confirm_autofetch)
                 return
             else:
+                available = ", ".join(str(p.provider_plan_id) for p in plans[:15])
                 await fetch_msg.edit_text(
-                    f"⚠️ Plan ID <code>{plan_id_str}</code> در لیست پلن‌ها یافت نشد.\n"
+                    f"⚠️ Plan ID <code>{plan_id_str}</code> در لیست پلن‌ها یافت نشد.\n\n"
+                    f"📋 IDهای موجود در Virtualizor: <code>{available or 'هیچ پلنی نیست'}</code>\n\n"
                     "مشخصات را دستی وارد کنید:",
                     parse_mode="HTML",
                 )

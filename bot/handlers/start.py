@@ -13,12 +13,11 @@ from aiogram.types import (
     CallbackQuery, InlineKeyboardButton,
     InlineKeyboardMarkup, Message,
 )
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config import settings
 from bot.database.models import BotSettings, User
-from bot.keyboards.main import back_kb, main_menu_kb, request_phone_kb
+from bot.keyboards.main import main_menu_kb, request_phone_kb
 
 router = Router(name="start")
 

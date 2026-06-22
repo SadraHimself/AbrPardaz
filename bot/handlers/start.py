@@ -9,6 +9,7 @@ from aiogram import F, Router
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.enums import ChatMemberStatus
+from aiogram.exceptions import TelegramForbiddenError
 from aiogram.types import (
     CallbackQuery, InlineKeyboardButton,
     InlineKeyboardMarkup, Message,
@@ -58,8 +59,15 @@ async def _check_membership(bot, tg_id: int, channels: list[str]) -> list[str]:
             member = await bot.get_chat_member(ch, tg_id)
             if member.status in (ChatMemberStatus.LEFT, ChatMemberStatus.KICKED):
                 not_joined.append(ch)
-        except Exception:
-            not_joined.append(ch)
+        except TelegramForbiddenError:
+            # Bot not admin in channel — skip, don't block user
+            pass
+        except Exception as e:
+            err = str(e).lower()
+            if "administrator" in err or "admin" in err:
+                pass  # Bot needs admin rights — skip
+            else:
+                not_joined.append(ch)
     return not_joined
 
 

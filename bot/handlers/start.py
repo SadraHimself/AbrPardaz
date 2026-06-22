@@ -8,8 +8,9 @@ from typing import Optional
 from aiogram import F, Router
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
+from aiogram.enums import ChatMemberStatus
 from aiogram.types import (
-    CallbackQuery, ChatMemberStatus, InlineKeyboardButton,
+    CallbackQuery, InlineKeyboardButton,
     InlineKeyboardMarkup, Message,
 )
 from sqlalchemy import select
@@ -56,7 +57,7 @@ async def _check_membership(bot, tg_id: int, channels: list[str]) -> list[str]:
     for ch in channels:
         try:
             member = await bot.get_chat_member(ch, tg_id)
-            if member.status in (ChatMemberStatus.LEFT, ChatMemberStatus.KICKED, ChatMemberStatus.BANNED):
+            if member.status in (ChatMemberStatus.LEFT, ChatMemberStatus.KICKED):
                 not_joined.append(ch)
         except Exception:
             not_joined.append(ch)

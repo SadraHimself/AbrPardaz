@@ -1,0 +1,827 @@
+"""Server management handlers — Virtualizor only, category-based buying with discount codes."""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from aiogram import F, Router
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from bot.database.models import (
+    BillingType, DiscountCode, ProviderAccount, ProviderType,
+    Server, ServerPlan, ServerStatus, SubProduct, SubProductType, SuspendReason, User,
+)
+from bot.keyboards.main import back_kb, cancel_kb, main_menu_kb
+from bot.keyboards.server import (
+    add_traffic_kb, server_actions_kb, server_delete_confirm_kb,
+    server_list_kb, subproducts_buy_kb,
+)
+from bot.providers.virtualizor import VirtualizorProvider
+from bot.services.billing import BillingService
+from bot.services.notification import NotificationService
+from bot.services.server import ServerService
+
+router = Router(name="servers")
+
+
+class BuyServerStates(StatesGroup):
+    selecting_category = State()
+    selecting_plan = State()
+    selecting_billing = State()
+    entering_hostname = State()
+    selecting_os = State()
+    entering_discount = State()
+    confirming = State()
+
+
+class EditServerStates(StatesGroup):
+    waiting_ram = State()
+    waiting_cpu = State()
+    waiting_disk = State()
+
+
+# ── List servers ──────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "my_servers")
+async def cb_my_servers(cb: CallbackQuery, user: User, session: AsyncSession):
+    if not user.is_phone_verified:
+        await cb.answer("ابتدا شماره موبایل خود را تأیید کنید.", show_alert=True)
+        return
+    svc = ServerService(session)
+    servers = await svc.get_user_servers(user.id)
+    if not servers:
+        await cb.message.edit_text(
+            "📭 شما هیچ سروری ندارید.\nبرای خرید از منوی زیر استفاده کنید:",
+            reply_markup=server_list_kb([]),
+        )
+    else:
+        await cb.message.edit_text(
+            f"🖥 <b>سرور‌های شما</b> ({len(servers)} سرور):",
+            parse_mode="HTML",
+            reply_markup=server_list_kb(servers),
+        )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("server:"))
+async def cb_server_detail(cb: CallbackQuery, user: User, session: AsyncSession):
+    server_id = int(cb.data.split(":")[1])
+    server = await session.get(Server, server_id)
+    if not server or server.user_id != user.id:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+
+    status_label = {
+        ServerStatus.ACTIVE: "🟢 فعال",
+        ServerStatus.SUSPENDED: "🔴 ساسپند",
+        ServerStatus.BUILDING: "🔨 در حال ساخت",
+        ServerStatus.REBUILDING: "🔄 ریبیلد",
+        ServerStatus.REBOOTING: "🔄 ریبوت",
+        ServerStatus.DELETED: "⚫ حذف شده",
+        ServerStatus.PENDING: "⏳ در انتظار",
+    }.get(server.status, server.status.value)
+
+    traffic_text = ""
+    if server.traffic_limit_gb:
+        pct = int(server.traffic_used_gb / server.traffic_limit_gb * 100)
+        traffic_text = f"\n📊 ترافیک: {server.traffic_used_gb:.1f}/{server.traffic_limit_gb:.0f} GB ({pct}%)"
+
+    billing_label = "ساعتی" if server.billing_type == BillingType.HOURLY else "ماهیانه"
+    price = server.price_hourly if server.billing_type == BillingType.HOURLY else server.price_monthly
+    price_unit = "تومان/ساعت" if server.billing_type == BillingType.HOURLY else "تومان/ماه"
+
+    await cb.message.edit_text(
+        f"🖥 <b>{server.name}</b>\n\n"
+        f"🌐 IP: <code>{server.ip_address or 'در حال تخصیص'}</code>\n"
+        f"📍 موقعیت: {server.location or 'نامشخص'}\n"
+        f"⚡ وضعیت: {status_label}\n\n"
+        f"💾 RAM: {server.ram} MB | CPU: {server.cpu} | Disk: {server.disk} GB"
+        f"{traffic_text}\n"
+        f"💳 {billing_label} — {price:,.0f} {price_unit}\n"
+        f"🕐 ساخته شده: {server.created_at.strftime('%Y/%m/%d')}",
+        parse_mode="HTML",
+        reply_markup=server_actions_kb(server),
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("srv_refresh:"))
+async def cb_server_refresh(cb: CallbackQuery, user: User, session: AsyncSession):
+    server_id = int(cb.data.split(":")[1])
+    server = await session.get(Server, server_id)
+    if not server or server.user_id != user.id:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    try:
+        svc = ServerService(session)
+        await svc.sync_server_status(server)
+        await cb.answer("✅ بروز شد.")
+    except Exception as e:
+        await cb.answer(f"خطا: {e}", show_alert=True)
+        return
+    cb.data = f"server:{server_id}"
+    await cb_server_detail(cb, user, session)
+
+
+# ── Server actions ────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("srv_action:"))
+async def cb_server_action(cb: CallbackQuery, user: User, session: AsyncSession):
+    _, server_id_str, action = cb.data.split(":")
+    server_id = int(server_id_str)
+    server = await session.get(Server, server_id)
+    if not server or server.user_id != user.id:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+
+    if action == "delete_confirm":
+        await cb.message.edit_text(
+            f"⚠️ آیا سرور <b>{server.name}</b> حذف شود?\nاین عمل قابل بازگشت نیست!",
+            parse_mode="HTML",
+            reply_markup=server_delete_confirm_kb(server_id),
+        )
+        await cb.answer()
+        return
+
+    labels = {"start": "روشن", "stop": "خاموش", "restart": "ریبوت",
+              "delete": "حذف", "change_ip": "تغییر IP",
+              "suspend": "ساسپند", "unsuspend": "رفع ساسپند"}
+    await cb.answer(f"⏳ {labels.get(action, action)}...")
+
+    try:
+        svc = ServerService(session)
+        kwargs = {}
+        if action == "suspend":
+            kwargs["reason"] = SuspendReason.ADMIN
+        ok = await svc.perform_action(server, action, **kwargs)
+        label = labels.get(action, action)
+        if ok:
+            msg = f"✅ {label} با موفقیت انجام شد."
+            if action == "change_ip":
+                msg = f"✅ IP جدید: <code>{server.ip_address}</code>"
+            await cb.message.answer(msg, parse_mode="HTML")
+        else:
+            await cb.message.answer("❌ عملیات ناموفق بود.")
+    except NotImplementedError as e:
+        await cb.message.answer(f"⚠️ {e}")
+    except Exception as e:
+        await cb.message.answer(f"❌ خطا: {e}")
+
+
+# ── Traffic ───────────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("srv_traffic:"))
+async def cb_server_traffic(cb: CallbackQuery, user: User, session: AsyncSession):
+    server_id = int(cb.data.split(":")[1])
+    server = await session.get(Server, server_id)
+    if not server or server.user_id != user.id:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    limit_text = f"{server.traffic_limit_gb:.0f} GB" if server.traffic_limit_gb else "نامحدود"
+    pct = int(server.traffic_used_gb / server.traffic_limit_gb * 100) if server.traffic_limit_gb else 0
+    bar = "█" * (pct // 10) + "░" * (10 - pct // 10)
+    await cb.message.edit_text(
+        f"📊 <b>ترافیک — {server.name}</b>\n\n"
+        f"مصرف: {server.traffic_used_gb:.2f} GB\n"
+        f"حد مجاز: {limit_text}\n"
+        f"[{bar}] {pct}%",
+        parse_mode="HTML",
+        reply_markup=add_traffic_kb(server_id),
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("add_traffic:"))
+async def cb_do_add_traffic(cb: CallbackQuery, user: User, session: AsyncSession):
+    _, server_id_str, gb_str = cb.data.split(":")
+    server_id, gb = int(server_id_str), int(gb_str)
+    server = await session.get(Server, server_id)
+    if not server or server.user_id != user.id:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    total = gb * 500
+    billing = BillingService(session)
+    ok = await billing.debit(user.id, total, server_id=server_id,
+                              description=f"خرید {gb}GB ترافیک — {server.name}")
+    if not ok:
+        await cb.answer("موجودی کافی نیست.", show_alert=True)
+        return
+    try:
+        svc = ServerService(session)
+        await svc.perform_action(server, "add_traffic", gb=gb)
+        if server.traffic_limit_gb:
+            server.traffic_limit_gb += gb
+        await cb.answer(f"✅ {gb} GB اضافه شد.")
+    except Exception as e:
+        await billing.credit(user.id, total, description=f"برگشت وجه ترافیک {gb}GB")
+        await cb.answer(f"❌ خطا: {e}", show_alert=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  BUY SERVER — category → plan → billing → discount → confirm
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data == "buy_server")
+async def cb_buy_server(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
+    if not user.is_phone_verified:
+        await cb.answer("ابتدا شماره موبایل خود را تأیید کنید.", show_alert=True)
+        return
+
+    result = await session.execute(select(ServerPlan.category).distinct())
+    categories = sorted({row[0] for row in result.all() if row[0]})
+
+    if not categories:
+        await cb.answer("در حال حاضر هیچ محصولی موجود نیست.", show_alert=True)
+        return
+
+    await state.set_state(BuyServerStates.selecting_category)
+    builder = InlineKeyboardBuilder()
+    for cat in categories:
+        builder.button(text=f"📁 {cat}", callback_data=f"buycat:{cat}")
+    builder.button(text="❌ انصراف", callback_data="cancel")
+    builder.adjust(1)
+
+    await cb.message.edit_text(
+        "🛒 <b>خرید سرور</b>\n\nدسته‌بندی مورد نظر را انتخاب کنید:",
+        parse_mode="HTML",
+        reply_markup=builder.as_markup(),
+    )
+    await cb.answer()
+
+
+@router.callback_query(BuyServerStates.selecting_category, F.data.startswith("buycat:"))
+async def cb_select_category(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
+    category = cb.data[len("buycat:"):]
+
+    # KYC check for iranian servers
+    if "ایران" in category and not user.is_kyc_verified:
+        await cb.message.edit_text(
+            "🪪 <b>احراز هویت لازم است</b>\n\n"
+            "برای خرید سرور ایران، احراز هویت با شاهکار الزامی است.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🪪 احراز هویت", callback_data="start_kyc")],
+                [InlineKeyboardButton(text="❌ انصراف", callback_data="cancel")],
+            ]),
+        )
+        await state.clear()
+        await cb.answer()
+        return
+
+    await state.update_data(category=category)
+    result = await session.execute(
+        select(ServerPlan).where(
+            ServerPlan.category == category,
+            ServerPlan.is_active == True,
+        ).order_by(ServerPlan.name)
+    )
+    plans = list(result.scalars().all())
+
+    if not plans:
+        await cb.answer("در این دسته‌بندی محصولی موجود نیست.", show_alert=True)
+        return
+
+    builder = InlineKeyboardBuilder()
+    for plan in plans:
+        price_parts = []
+        if plan.price_hourly:
+            price_parts.append(f"ساعتی:{plan.price_hourly:,.0f}T")
+        if plan.price_monthly:
+            price_parts.append(f"ماهانه:{plan.price_monthly:,.0f}T")
+        label = f"{plan.display_name or plan.name} | {plan.ram//1024 or plan.ram}GB/{plan.cpu}C/{plan.disk}G | {' / '.join(price_parts)}"
+        builder.button(text=label, callback_data=f"buyplan:{plan.id}")
+    builder.button(text="🔙 بازگشت", callback_data="buy_server")
+    builder.adjust(1)
+
+    await state.set_state(BuyServerStates.selecting_plan)
+    await cb.message.edit_text(
+        f"📁 <b>{category}</b>\n\nیک محصول انتخاب کنید:",
+        parse_mode="HTML",
+        reply_markup=builder.as_markup(),
+    )
+    await cb.answer()
+
+
+@router.callback_query(BuyServerStates.selecting_plan, F.data.startswith("buyplan:"))
+async def cb_select_plan(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
+    plan_id = int(cb.data.split(":")[1])
+    plan = await session.get(ServerPlan, plan_id)
+    if not plan:
+        await cb.answer("محصول یافت نشد.", show_alert=True)
+        return
+
+    await state.update_data(
+        plan_id=plan_id,
+        provider_account_id=plan.provider_account_id,
+    )
+
+    # Determine available billing types
+    has_hourly = bool(plan.price_hourly)
+    has_monthly = bool(plan.price_monthly)
+
+    if has_hourly and has_monthly:
+        await state.set_state(BuyServerStates.selecting_billing)
+        await cb.message.edit_text(
+            f"📦 <b>{plan.display_name or plan.name}</b>\n\nنوع بیلینگ را انتخاب کنید:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text=f"⏱ ساعتی — {plan.price_hourly:,.0f} T/ساعت", callback_data="buybilling:hourly"),
+                    InlineKeyboardButton(text=f"📅 ماهانه — {plan.price_monthly:,.0f} T/ماه", callback_data="buybilling:monthly"),
+                ],
+                [InlineKeyboardButton(text="❌ انصراف", callback_data="cancel")],
+            ]),
+        )
+    elif has_hourly:
+        await state.update_data(billing="hourly")
+        await _ask_hostname(cb, state)
+    else:
+        await state.update_data(billing="monthly")
+        await _ask_hostname(cb, state)
+
+    await cb.answer()
+
+
+@router.callback_query(BuyServerStates.selecting_billing, F.data.startswith("buybilling:"))
+async def cb_select_billing(cb: CallbackQuery, state: FSMContext):
+    billing = cb.data.split(":")[1]
+    await state.update_data(billing=billing)
+    await _ask_hostname(cb, state)
+    await cb.answer()
+
+
+# ── Hostname + OS selection ───────────────────────────────────────────────────
+
+async def _ask_hostname(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(BuyServerStates.entering_hostname)
+    await cb.message.edit_text(
+        "🖥 <b>نام هاست (Hostname)</b>\n\n"
+        "یک hostname برای سرور خود وارد کنید.\n"
+        "<i>مثال: my-server یا webserver1</i>\n\n"
+        "⚠️ فقط حروف کوچک، اعداد و خط تیره مجاز است.\n"
+        "یا دکمه زیر را بزنید تا سیستم خودکار انتخاب کند:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔀 خودکار", callback_data="buyhost:auto")],
+            [InlineKeyboardButton(text="❌ انصراف", callback_data="cancel")],
+        ]),
+    )
+
+
+@router.callback_query(BuyServerStates.entering_hostname, F.data == "buyhost:auto")
+async def cb_hostname_auto(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
+    await state.update_data(hostname=None)
+    await _ask_os(cb, state, session)
+    await cb.answer()
+
+
+@router.message(BuyServerStates.entering_hostname)
+async def msg_hostname(message: Message, state: FSMContext, session: AsyncSession):
+    import re
+    raw = message.text.strip().lower()
+    if not re.match(r'^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?$', raw):
+        await message.answer(
+            "❌ hostname نامعتبر است.\n"
+            "فقط حروف کوچک (a-z)، اعداد و خط تیره (-) مجاز است.\n"
+            "باید با حرف یا عدد شروع و تموم بشه:"
+        )
+        return
+    await state.update_data(hostname=raw)
+    # Use a fake cb-like object to reuse _ask_os
+    await _ask_os_message(message, state, session)
+
+
+async def _ask_os(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    account = await session.get(ProviderAccount, data.get("provider_account_id")) if data.get("provider_account_id") else None
+
+    os_list = []
+    if account:
+        try:
+            import asyncio
+            prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
+            os_list = await asyncio.wait_for(prov.list_os_templates(), timeout=10)
+        except Exception:
+            pass
+
+    if not os_list:
+        # No templates available — skip to discount
+        await state.update_data(os_id="ubuntu-22.04", os_name="Ubuntu 22.04")
+        await _ask_discount(cb, state)
+        return
+
+    await state.update_data(os_options=[(o["id"], o["name"]) for o in os_list[:20]])
+    await state.set_state(BuyServerStates.selecting_os)
+
+    builder = InlineKeyboardBuilder()
+    for os_item in os_list[:20]:
+        builder.button(text=os_item["name"], callback_data=f"buyos:{os_item['id']}")
+    builder.button(text="❌ انصراف", callback_data="cancel")
+    builder.adjust(2)
+
+    await cb.message.edit_text(
+        "🖥 <b>انتخاب سیستم‌عامل</b>\n\nیک OS برای سرور انتخاب کنید:",
+        parse_mode="HTML",
+        reply_markup=builder.as_markup(),
+    )
+
+
+async def _ask_os_message(message: Message, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    account = await session.get(ProviderAccount, data.get("provider_account_id")) if data.get("provider_account_id") else None
+
+    os_list = []
+    if account:
+        try:
+            import asyncio
+            prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
+            os_list = await asyncio.wait_for(prov.list_os_templates(), timeout=10)
+        except Exception:
+            pass
+
+    if not os_list:
+        await state.update_data(os_id="ubuntu-22.04", os_name="Ubuntu 22.04")
+        await state.set_state(BuyServerStates.entering_discount)
+        await message.answer(
+            "🏷 <b>کد تخفیف</b>\n\n"
+            "اگر کد تخفیف دارید وارد کنید یا دکمه زیر:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⏭ بدون کد تخفیف", callback_data="buydisc:skip")],
+                [InlineKeyboardButton(text="❌ انصراف", callback_data="cancel")],
+            ]),
+        )
+        return
+
+    await state.set_state(BuyServerStates.selecting_os)
+    builder = InlineKeyboardBuilder()
+    for os_item in os_list[:20]:
+        builder.button(text=os_item["name"], callback_data=f"buyos:{os_item['id']}")
+    builder.button(text="❌ انصراف", callback_data="cancel")
+    builder.adjust(2)
+
+    await message.answer(
+        "🖥 <b>انتخاب سیستم‌عامل</b>\n\nیک OS برای سرور انتخاب کنید:",
+        parse_mode="HTML",
+        reply_markup=builder.as_markup(),
+    )
+
+
+@router.callback_query(BuyServerStates.selecting_os, F.data.startswith("buyos:"))
+async def cb_select_os(cb: CallbackQuery, state: FSMContext):
+    os_id = cb.data[len("buyos:"):]
+    # Find the OS name from stored options
+    data = await state.get_data()
+    os_options = data.get("os_options", [])
+    os_name = next((name for oid, name in os_options if str(oid) == str(os_id)), os_id)
+    await state.update_data(os_id=os_id, os_name=os_name)
+    await _ask_discount(cb, state)
+    await cb.answer()
+
+
+async def _ask_discount(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(BuyServerStates.entering_discount)
+    await cb.message.edit_text(
+        "🏷 <b>کد تخفیف</b>\n\n"
+        "اگر کد تخفیف دارید وارد کنید.\n"
+        "در غیر این صورت /skip بزنید یا دکمه زیر را بزنید:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⏭ بدون کد تخفیف", callback_data="buydisc:skip")],
+            [InlineKeyboardButton(text="❌ انصراف", callback_data="cancel")],
+        ]),
+    )
+
+
+@router.callback_query(BuyServerStates.entering_discount, F.data == "buydisc:skip")
+async def cb_discount_skip(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
+    await state.update_data(discount_id=None, discount_percent=0)
+    await _show_confirm(cb.message, state, session, user_balance_tg_id=None)
+    await cb.answer()
+
+
+@router.message(BuyServerStates.entering_discount)
+async def msg_discount_code(message: Message, user: User, state: FSMContext, session: AsyncSession):
+    raw = message.text.strip().upper()
+
+    if raw in ("/SKIP", "SKIP"):
+        await state.update_data(discount_id=None, discount_percent=0)
+        await _show_confirm(message, state, session, from_message=True)
+        return
+
+    now = datetime.now(timezone.utc)
+    result = await session.execute(
+        select(DiscountCode).where(
+            DiscountCode.code == raw,
+            DiscountCode.is_active == True,
+        )
+    )
+    code = result.scalar_one_or_none()
+
+    if not code:
+        await message.answer("❌ کد تخفیف نامعتبر است.")
+        return
+    if code.expires_at and code.expires_at < now:
+        await message.answer("❌ کد تخفیف منقضی شده.")
+        return
+    if code.max_uses and code.use_count >= code.max_uses:
+        await message.answer("❌ ظرفیت این کد تخفیف پر شده.")
+        return
+
+    await state.update_data(discount_id=code.id, discount_percent=code.discount_percent)
+    await message.answer(f"✅ کد تخفیف <b>{code.code}</b> — {code.discount_percent:.0f}% اعمال شد!", parse_mode="HTML")
+    await _show_confirm(message, state, session, from_message=True)
+
+
+async def _show_confirm(msg, state: FSMContext, session, from_message=False, user_balance_tg_id=None):
+    data = await state.get_data()
+    plan = await session.get(ServerPlan, data["plan_id"])
+    if not plan:
+        await msg.answer("محصول یافت نشد.")
+        await state.clear()
+        return
+
+    billing = data["billing"]
+    base_price = plan.price_hourly if billing == "hourly" else plan.price_monthly
+    discount_pct = data.get("discount_percent", 0)
+    final_price = base_price * (1 - discount_pct / 100) if discount_pct else base_price
+    price_unit = "تومان/ساعت" if billing == "hourly" else "تومان/ماه"
+
+    discount_line = ""
+    if discount_pct:
+        discount_line = f"🏷 تخفیف: {discount_pct:.0f}% (قیمت اصلی: {base_price:,.0f} T)\n"
+
+    await state.set_state(BuyServerStates.confirming)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ تأیید و خرید", callback_data="confirm_purchase"),
+            InlineKeyboardButton(text="❌ انصراف", callback_data="cancel"),
+        ]
+    ])
+
+    hostname_line = f"🖥 Hostname: {data['hostname']}\n" if data.get("hostname") else ""
+    os_line = f"💿 OS: {data.get('os_name', 'Ubuntu 22.04')}\n" if data.get("os_name") else ""
+
+    text = (
+        f"✅ <b>تأیید سفارش</b>\n\n"
+        f"📦 {plan.display_name or plan.name}\n"
+        f"📁 {plan.category or ''}\n"
+        f"💾 RAM: {plan.ram} MB | CPU: {plan.cpu} | Disk: {plan.disk} GB\n"
+        f"🌐 Bandwidth: {plan.bandwidth} GB\n"
+        f"📍 {plan.location or 'نامشخص'}\n"
+        f"{hostname_line}"
+        f"{os_line}\n"
+        f"{discount_line}"
+        f"💳 قیمت نهایی: <b>{final_price:,.0f} {price_unit}</b>\n\n"
+        "آیا تأیید می‌کنید؟"
+    )
+
+    if from_message:
+        await msg.answer(text, parse_mode="HTML", reply_markup=kb)
+    else:
+        await msg.edit_text(text, parse_mode="HTML", reply_markup=kb)
+
+
+@router.callback_query(BuyServerStates.confirming, F.data == "confirm_purchase")
+async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    plan = await session.get(ServerPlan, data["plan_id"])
+    if not plan:
+        await cb.answer("محصول یافت نشد.", show_alert=True)
+        return
+
+    billing_str = data["billing"]
+    billing_type = BillingType.HOURLY if billing_str == "hourly" else BillingType.MONTHLY
+    base_price = plan.price_hourly if billing_type == BillingType.HOURLY else plan.price_monthly
+    discount_pct = data.get("discount_percent", 0)
+    final_price = base_price * (1 - discount_pct / 100) if discount_pct else base_price
+
+    if user.balance < (final_price or 0):
+        await cb.answer("موجودی کافی نیست. کیف پول را شارژ کنید.", show_alert=True)
+        return
+
+    await cb.message.edit_text("⏳ در حال ساخت سرور...")
+    await cb.answer()
+    await state.clear()
+
+    # Mark discount as used
+    if data.get("discount_id"):
+        code = await session.get(DiscountCode, data["discount_id"])
+        if code:
+            code.use_count += 1
+            await session.flush()
+
+    hostname = data.get("hostname") or f"srv-{user.telegram_id}"
+    os_id = data.get("os_id") or "ubuntu-22.04"
+
+    try:
+        svc = ServerService(session)
+        server = await svc.create_server(
+            user=user, plan=plan, os_id=os_id,
+            billing_type=billing_type,
+            extra={"root_password": f"TC@{user.telegram_id}!", "hostname": hostname},
+        )
+        billing = BillingService(session)
+        await billing.debit(user.id, final_price or 0, server_id=server.id,
+                            description=f"خرید سرور {server.name}")
+
+        notif = NotificationService(cb.bot)
+        await notif.server_created(user.telegram_id, server)
+
+        from bot.config import settings as _s
+        is_admin = user.is_admin or user.telegram_id in _s.admin_ids
+        await cb.message.answer(
+            f"✅ سرور <b>{server.name}</b> ساخته شد!\n"
+            f"🌐 IP: <code>{server.ip_address or 'در حال تخصیص...'}</code>",
+            parse_mode="HTML",
+            reply_markup=main_menu_kb(is_admin=is_admin),
+        )
+    except Exception as e:
+        from bot.config import settings as _s
+        is_admin = user.is_admin or user.telegram_id in _s.admin_ids
+        await cb.message.answer(
+            f"❌ خطا در ساخت سرور: {e}\nبا پشتیبانی تماس بگیرید.",
+            reply_markup=main_menu_kb(is_admin=is_admin),
+        )
+
+
+# ── VNC ───────────────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("srv_vnc:"))
+async def cb_server_vnc(cb: CallbackQuery, user: User, session: AsyncSession):
+    server_id = int(cb.data.split(":")[1])
+    server = await session.get(Server, server_id)
+    if not server or server.user_id != user.id:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    if server.status != ServerStatus.ACTIVE:
+        await cb.answer("سرور باید فعال باشد.", show_alert=True)
+        return
+
+    account = await session.get(ProviderAccount, server.provider_account_id) if server.provider_account_id else None
+    if not account:
+        await cb.answer("اطلاعات پروایدر یافت نشد.", show_alert=True)
+        return
+
+    await cb.answer()
+    wait = await cb.message.answer("⏳ در حال دریافت اطلاعات VNC...")
+    try:
+        prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
+        vnc_info = await prov.get_vnc(server.provider_server_id)
+        host = vnc_info.get("host", account.api_endpoint.split("//")[-1].split(":")[0])
+        port = vnc_info.get("port", "")
+        passwd = vnc_info.get("password", "")
+        await wait.edit_text(
+            f"🖥 <b>VNC — {server.name}</b>\n\n"
+            f"🌐 Host: <code>{host}</code>\n"
+            f"🔌 Port: <code>{port}</code>\n"
+            f"🔒 Password: <code>{passwd}</code>\n\n"
+            "⚠️ این اطلاعات را با کسی به اشتراک نگذارید.\n"
+            "اتصال VNC با نرم‌افزارهایی مثل RealVNC یا TigerVNC امکان‌پذیر است.",
+            parse_mode="HTML",
+            reply_markup=back_kb(f"server:{server_id}"),
+        )
+    except Exception as e:
+        await wait.edit_text(
+            f"❌ <b>خطا در دریافت VNC:</b> {e}",
+            parse_mode="HTML",
+            reply_markup=back_kb(f"server:{server_id}"),
+        )
+
+
+# ── Sub-products ───────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("srv_subproducts:"))
+async def cb_server_subproducts(cb: CallbackQuery, user: User, session: AsyncSession):
+    server_id = int(cb.data.split(":")[1])
+    server = await session.get(Server, server_id)
+    if not server or server.user_id != user.id:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+
+    if not server.plan_id:
+        await cb.answer("این سرور پلن مشخصی ندارد.", show_alert=True)
+        return
+
+    result = await session.execute(
+        select(SubProduct).where(
+            SubProduct.plan_id == server.plan_id,
+            SubProduct.is_active == True,
+        ).order_by(SubProduct.name)
+    )
+    subs = list(result.scalars().all())
+
+    if not subs:
+        await cb.answer("خدمات اضافه‌ای برای این سرور موجود نیست.", show_alert=True)
+        return
+
+    await cb.message.edit_text(
+        f"📦 <b>خدمات اضافه — {server.name}</b>\n\n"
+        f"💰 موجودی شما: {user.balance:,.0f} تومان\n\n"
+        "یک گزینه را انتخاب کنید:",
+        parse_mode="HTML",
+        reply_markup=subproducts_buy_kb(server_id, subs),
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("buy_subprod:"))
+async def cb_buy_subprod(cb: CallbackQuery, user: User, session: AsyncSession):
+    parts = cb.data.split(":")
+    server_id, sp_id = int(parts[1]), int(parts[2])
+    server = await session.get(Server, server_id)
+    sp = await session.get(SubProduct, sp_id)
+
+    if not server or server.user_id != user.id or not sp:
+        await cb.answer("یافت نشد.", show_alert=True)
+        return
+
+    if user.balance < sp.price:
+        await cb.answer(f"موجودی کافی نیست. نیاز: {sp.price:,.0f}T — موجودی: {user.balance:,.0f}T", show_alert=True)
+        return
+
+    billing = BillingService(session)
+    ok = await billing.debit(user.id, sp.price, server_id=server_id, description=f"خرید {sp.name} — {server.name}")
+    if not ok:
+        await cb.answer("موجودی کافی نیست.", show_alert=True)
+        return
+
+    try:
+        svc = ServerService(session)
+        if sp.type == SubProductType.TRAFFIC:
+            await svc.perform_action(server, "add_traffic", gb=int(sp.value))
+            if server.traffic_limit_gb:
+                server.traffic_limit_gb += sp.value
+        await session.flush()
+        await cb.answer(f"✅ {sp.name} فعال شد!", show_alert=True)
+        cb.data = f"server:{server_id}"
+        await cb_server_detail(cb, user, session)
+    except Exception as e:
+        # refund on failure
+        await billing.credit(user.id, sp.price, description=f"برگشت وجه {sp.name}")
+        await cb.answer(f"❌ خطا: {e}", show_alert=True)
+
+
+# ── Edit server hardware ──────────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("srv_edit:"))
+async def cb_srv_edit(cb: CallbackQuery, user: User, session: AsyncSession, state: FSMContext):
+    server_id = int(cb.data.split(":")[1])
+    server = await session.get(Server, server_id)
+    if not server or server.user_id != user.id:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    await state.update_data(server_id=server_id)
+    await state.set_state(EditServerStates.waiting_ram)
+    await cb.message.edit_text(
+        f"⚙️ <b>ویرایش {server.name}</b>\n\n"
+        f"RAM فعلی: {server.ram} MB\n"
+        "مقدار جدید RAM (MB) یا 0 برای بدون تغییر:",
+        parse_mode="HTML",
+        reply_markup=cancel_kb(),
+    )
+    await cb.answer()
+
+
+@router.message(EditServerStates.waiting_ram, F.text.regexp(r"^\d+$"))
+async def edit_ram(message: Message, state: FSMContext):
+    await state.update_data(ram=int(message.text) or None)
+    await state.set_state(EditServerStates.waiting_cpu)
+    await message.answer("CPU جدید (0 = بدون تغییر):")
+
+
+@router.message(EditServerStates.waiting_cpu, F.text.regexp(r"^\d+$"))
+async def edit_cpu(message: Message, state: FSMContext):
+    await state.update_data(cpu=int(message.text) or None)
+    await state.set_state(EditServerStates.waiting_disk)
+    await message.answer("Disk (GB) جدید (0 = بدون تغییر):")
+
+
+@router.message(EditServerStates.waiting_disk, F.text.regexp(r"^\d+$"))
+async def edit_disk(message: Message, user: User, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    await state.clear()
+    server = await session.get(Server, data["server_id"])
+    if not server or server.user_id != user.id:
+        await message.answer("سرور یافت نشد.")
+        return
+    kwargs = {k: v for k, v in {
+        "ram": data.get("ram"),
+        "cpu": data.get("cpu"),
+        "disk": int(message.text) or None,
+    }.items() if v}
+    if not kwargs:
+        await message.answer("هیچ تغییری اعمال نشد.")
+        return
+    try:
+        svc = ServerService(session)
+        ok = await svc.perform_action(server, "edit", **kwargs)
+        await message.answer("✅ سخت‌افزار ویرایش شد." if ok else "❌ ویرایش ناموفق بود.")
+    except NotImplementedError:
+        await message.answer("⚠️ این پروایدر ویرایش آنلاین را پشتیبانی نمی‌کند.")
+    except Exception as e:
+        await message.answer(f"❌ خطا: {e}")

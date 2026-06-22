@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Abr Pardaz — مدیریت سرور</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Segoe UI', Tahoma, sans-serif;
+            background: var(--tg-theme-bg-color, #1a1a2e);
+            color: var(--tg-theme-text-color, #eee);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .card {
+            background: var(--tg-theme-secondary-bg-color, #16213e);
+            border-radius: 16px;
+            padding: 20px;
+            margin-bottom: 16px;
+        }
+        h1 { font-size: 1.4rem; margin-bottom: 20px; text-align: center; }
+        .server-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        .status-dot {
+            width: 10px; height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-left: 8px;
+        }
+        .status-active { background: #4ade80; }
+        .status-suspended { background: #f87171; }
+        .status-building { background: #fbbf24; animation: pulse 1s infinite; }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+        .btn {
+            background: var(--tg-theme-button-color, #2563eb);
+            color: var(--tg-theme-button-text-color, #fff);
+            border: none; border-radius: 10px;
+            padding: 10px 16px; cursor: pointer;
+            font-size: 0.9rem; transition: opacity .2s;
+        }
+        .btn:hover { opacity: .85; }
+        .btn-sm { padding: 6px 12px; font-size: 0.8rem; }
+        .loading { text-align: center; padding: 40px; opacity: .6; }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div class="loading">⏳ در حال بارگذاری...</div>
+    </div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.ready();
+        tg.expand();
+
+        const BASE = '/api';
+        const initData = tg.initData;
+
+        async function apiFetch(path, options = {}) {
+            const sep = path.includes('?') ? '&' : '?';
+            const res = await fetch(`${BASE}${path}${sep}init_data=${encodeURIComponent(initData)}`, options);
+            if (!res.ok) throw new Error(await res.text());
+            return res.json();
+        }
+
+        async function serverAction(serverId, action) {
+            tg.showConfirm(`عملیات ${action} انجام شود؟`, async (ok) => {
+                if (!ok) return;
+                try {
+                    await apiFetch(`/servers/${serverId}/action`, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ action }),
+                    });
+                    tg.showAlert('✅ عملیات با موفقیت انجام شد.');
+                    renderServers();
+                } catch(e) {
+                    tg.showAlert('❌ خطا: ' + e.message);
+                }
+            });
+        }
+
+        async function renderServers() {
+            const app = document.getElementById('app');
+            app.innerHTML = '<div class="loading">⏳ در حال بارگذاری...</div>';
+            try {
+                const [me, servers] = await Promise.all([
+                    apiFetch('/me'),
+                    apiFetch('/servers'),
+                ]);
+
+                const statusLabel = { active: 'فعال', suspended: 'ساسپند', building: 'در حال ساخت', pending: 'در انتظار' };
+
+                app.innerHTML = `
+                    <div class="card">
+                        <h1>☁️ Abr Pardaz</h1>
+                        <div>👤 ${me.first_name || 'کاربر'}</div>
+                        <div>💰 موجودی: ${me.balance.toLocaleString()} تومان</div>
+                    </div>
+                    <div class="card">
+                        <h3 style="margin-bottom:12px">🖥 سرورهای من (${servers.length})</h3>
+                        ${servers.length === 0 ? '<div style="opacity:.6;text-align:center">سروری ندارید</div>' :
+                            servers.map(s => `
+                            <div class="server-item">
+                                <div>
+                                    <span class="status-dot status-${s.status}"></span>
+                                    <strong>${s.name}</strong><br>
+                                    <small style="opacity:.7">${s.ip || 'بدون IP'} — ${statusLabel[s.status] || s.status}</small>
+                                </div>
+                                <div style="display:flex;gap:6px;flex-wrap:wrap">
+                                    <button class="btn btn-sm" onclick="serverAction(${s.id},'restart')">ریبوت</button>
+                                    <button class="btn btn-sm" onclick="serverAction(${s.id},'stop')">خاموش</button>
+                                    <button class="btn btn-sm" onclick="serverAction(${s.id},'start')">روشن</button>
+                                </div>
+                            </div>`).join('')
+                        }
+                    </div>
+                `;
+            } catch(e) {
+                app.innerHTML = `<div class="card" style="color:#f87171">❌ خطا: ${e.message}</div>`;
+            }
+        }
+
+        renderServers();
+    </script>
+</body>
+</html>

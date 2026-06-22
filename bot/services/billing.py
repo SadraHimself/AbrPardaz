@@ -1,0 +1,138 @@
+"""Billing service: charge, credit, suspend logic."""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Optional
+
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from bot.database.models import (
+    Server, ServerStatus, SuspendReason,
+    Transaction, TransactionType, User,
+)
+
+
+class BillingService:
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    # ── Balance helpers ───────────────────────────────────────────────────────
+
+    async def get_balance(self, user_id: int) -> float:
+        result = await self.session.execute(select(User.balance).where(User.id == user_id))
+        return result.scalar_one_or_none() or 0.0
+
+    async def credit(self, user_id: int, amount: float, description: str = "",
+                     reference_id: Optional[str] = None) -> Transaction:
+        await self.session.execute(
+            update(User).where(User.id == user_id).values(balance=User.balance + amount)
+        )
+        tx = Transaction(
+            user_id=user_id, amount=amount,
+            type=TransactionType.CREDIT,
+            description=description, reference_id=reference_id,
+        )
+        self.session.add(tx)
+        await self.session.flush()
+        return tx
+
+    async def debit(self, user_id: int, amount: float, server_id: Optional[int] = None,
+                    description: str = "") -> bool:
+        """Debit balance. Returns False if insufficient funds."""
+        result = await self.session.execute(
+            select(User).where(User.id == user_id).with_for_update()
+        )
+        user = result.scalar_one_or_none()
+        if not user or user.balance < amount:
+            return False
+
+        user.balance -= amount
+        tx = Transaction(
+            user_id=user_id, server_id=server_id,
+            amount=amount, type=TransactionType.DEBIT,
+            description=description,
+        )
+        self.session.add(tx)
+        await self.session.flush()
+        return True
+
+    # ── Hourly billing ────────────────────────────────────────────────────────
+
+    async def charge_hourly(self, server: Server) -> bool:
+        """
+        Charge one hour of usage. Returns False if balance insufficient
+        (caller should suspend the server).
+        """
+        amount = server.price_hourly or 0.0
+        if amount <= 0:
+            return True
+
+        success = await self.debit(
+            server.user_id, amount,
+            server_id=server.id,
+            description=f"ساعتی — {server.name}",
+        )
+        if success:
+            server.last_billed_at = datetime.now(timezone.utc)
+        return success
+
+    # ── Monthly billing ───────────────────────────────────────────────────────
+
+    async def charge_monthly(self, server: Server) -> bool:
+        amount = server.price_monthly or 0.0
+        if amount <= 0:
+            return True
+
+        success = await self.debit(
+            server.user_id, amount,
+            server_id=server.id,
+            description=f"ماهیانه — {server.name}",
+        )
+        if success:
+            server.last_billed_at = datetime.now(timezone.utc)
+        return success
+
+    # ── Suspension ────────────────────────────────────────────────────────────
+
+    async def suspend_server_db(self, server: Server, reason: SuspendReason) -> None:
+        server.status = ServerStatus.SUSPENDED
+        server.suspend_reason = reason
+        server.suspended_at = datetime.now(timezone.utc)
+        await self.session.flush()
+
+    async def unsuspend_server_db(self, server: Server) -> None:
+        server.status = ServerStatus.ACTIVE
+        server.suspend_reason = None
+        server.suspended_at = None
+        await self.session.flush()
+
+    # ── Traffic billing ───────────────────────────────────────────────────────
+
+    async def update_traffic(self, server: Server, used_gb: float) -> bool:
+        """
+        Update traffic counter. Returns True if within limit, False if exceeded.
+        """
+        server.traffic_used_gb = used_gb
+        await self.session.flush()
+        if server.traffic_limit_gb is not None and used_gb >= server.traffic_limit_gb:
+            return False
+        return True
+
+    # ── Queries ───────────────────────────────────────────────────────────────
+
+    async def get_active_servers_for_billing(self) -> list[Server]:
+        result = await self.session.execute(
+            select(Server).where(Server.status == ServerStatus.ACTIVE)
+        )
+        return list(result.scalars().all())
+
+    async def get_users_with_suspended_servers(self) -> list[int]:
+        result = await self.session.execute(
+            select(Server.user_id).where(
+                Server.status == ServerStatus.SUSPENDED,
+                Server.suspend_reason == SuspendReason.LOW_BALANCE,
+            ).distinct()
+        )
+        return list(result.scalars().all())

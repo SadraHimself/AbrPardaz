@@ -1,0 +1,79 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: telecloud_postgres
+    environment:
+      POSTGRES_USER: telecloud
+      POSTGRES_PASSWORD: StrongPassword
+      POSTGRES_DB: telecloud
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: telecloud_redis
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  bot:
+    build: .
+    container_name: telecloud_bot
+    command: python -m bot.main
+    env_file: .env
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+    volumes:
+      - .:/app
+
+  webapp:
+    build: .
+    container_name: telecloud_webapp
+    command: uvicorn bot.webapp.app:app --host 0.0.0.0 --port 8000
+    env_file: .env
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    volumes:
+      - .:/app
+
+  celery_worker:
+    build: .
+    container_name: telecloud_celery
+    command: celery -A bot.tasks.celery_app worker --loglevel=info --concurrency=4
+    env_file: .env
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+    volumes:
+      - .:/app
+
+  celery_beat:
+    build: .
+    container_name: telecloud_beat
+    command: celery -A bot.tasks.celery_app beat --loglevel=info
+    env_file: .env
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+    volumes:
+      - .:/app
+
+volumes:
+  postgres_data:
+  redis_data:

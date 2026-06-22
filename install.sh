@@ -12,83 +12,84 @@ DB_USER="abrpardaz"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 info()    { echo -e "\n${CYAN}[INFO]${NC} $*"; }
-success() { echo -e "${GREEN}[OK]${NC}   $*"; }
+success() { echo -e "${GREEN}[ OK ]${NC} $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
-die()     { echo -e "\n${RED}[ERR]${NC}  $*"; exit 1; }
+die()     { echo -e "\n${RED}[ ERR]${NC} $*"; exit 1; }
 ask()     { read -r -p "$1" "$2" </dev/tty; }
 
 # ── Root check ────────────────────────────────────────────────
 if [[ $EUID -ne 0 ]]; then
-    die "با sudo اجرا کنید: sudo bash install.sh"
+    die "Please run as root: sudo bash install.sh"
 fi
 
 clear
 echo ""
-echo -e "${CYAN}╔══════════════════════════════════════╗${NC}"
-echo -e "${CYAN}║       ربات ابر پرداز — نصب‌کننده     ║${NC}"
-echo -e "${CYAN}╚══════════════════════════════════════╝${NC}"
+echo -e "${CYAN}  ╔══════════════════════════════════════╗${NC}"
+echo -e "${CYAN}  ║     AbrPardaz Bot  —  Installer      ║${NC}"
+echo -e "${CYAN}  ╚══════════════════════════════════════╝${NC}"
 echo ""
 
-# ── Get config from user ──────────────────────────────────────
-echo -e "${YELLOW}اطلاعات زیر را وارد کنید:${NC}"
+# ── Get config ────────────────────────────────────────────────
+echo -e "  ${YELLOW}Please enter the following information:${NC}"
 echo ""
 
 BOT_TOKEN=""
 while [[ -z "$BOT_TOKEN" ]]; do
-    ask "  🤖 توکن ربات (از @BotFather): " BOT_TOKEN
+    ask "  Bot Token (from @BotFather): " BOT_TOKEN
 done
 
 ADMIN_ID=""
 while [[ -z "$ADMIN_ID" ]]; do
-    ask "  👤 Admin Telegram ID (عدد): " ADMIN_ID
+    ask "  Admin Telegram ID (number): " ADMIN_ID
 done
 
 echo ""
-success "اطلاعات دریافت شد. نصب شروع می‌شود..."
+success "Config received. Starting installation..."
 sleep 1
 
 # ── System packages ───────────────────────────────────────────
-info "نصب پیش‌نیازهای سیستم..."
+info "Installing system packages..."
 if command -v apt-get &>/dev/null; then
-    apt-get update -y || warn "apt-get update با مشکل مواجه شد، ادامه می‌دهیم..."
+    apt-get update -y || warn "apt-get update failed, continuing..."
     apt-get install -y git python3 python3-pip python3-venv curl \
         postgresql postgresql-contrib redis-server build-essential libpq-dev \
-        || die "نصب پیش‌نیازها ناموفق بود."
+        || die "Failed to install system packages."
 elif command -v yum &>/dev/null; then
     yum install -y git python3 python3-pip curl postgresql postgresql-server redis \
-        || die "نصب پیش‌نیازها ناموفق بود."
+        || die "Failed to install system packages."
 else
-    die "سیستم‌عامل پشتیبانی نمی‌شود. Ubuntu/Debian یا CentOS/RHEL لازم است."
+    die "Unsupported OS. Please use Ubuntu/Debian or CentOS/RHEL."
 fi
-success "پیش‌نیازها نصب شدند."
+success "System packages installed."
 
 # ── PostgreSQL ────────────────────────────────────────────────
-info "راه‌اندازی PostgreSQL..."
-systemctl start postgresql  || warn "PostgreSQL start ناموفق"
-systemctl enable postgresql || warn "PostgreSQL enable ناموفق"
+info "Setting up PostgreSQL..."
+systemctl start postgresql  || warn "PostgreSQL start failed."
+systemctl enable postgresql || warn "PostgreSQL enable failed."
 
 DB_PASS="$(openssl rand -hex 16)"
 cd /tmp
 sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';" 2>/dev/null || \
     sudo -u postgres psql -c "ALTER USER $DB_USER WITH PASSWORD '$DB_PASS';" 2>/dev/null || true
 sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;" 2>/dev/null || true
-success "دیتابیس '$DB_NAME' آماده است."
+success "Database '$DB_NAME' is ready."
 
 # ── Redis ─────────────────────────────────────────────────────
-info "راه‌اندازی Redis..."
-systemctl start redis-server  || systemctl start redis || warn "Redis start ناموفق"
-systemctl enable redis-server || systemctl enable redis || warn "Redis enable ناموفق"
-success "Redis آماده است."
+info "Setting up Redis..."
+systemctl start redis-server  || systemctl start redis  || warn "Redis start failed."
+systemctl enable redis-server || systemctl enable redis || warn "Redis enable failed."
+success "Redis is ready."
 
 # ── Clone repo ────────────────────────────────────────────────
-info "دریافت کد از GitHub..."
+info "Cloning repository..."
 if [[ -d "$INSTALL_DIR/.git" ]]; then
     git -C "$INSTALL_DIR" fetch --quiet && \
     git -C "$INSTALL_DIR" reset --hard origin/main --quiet && \
-    success "کد بروز شد." || warn "بروزرسانی ناموفق، از نسخه موجود استفاده می‌شود."
+    success "Repository updated." || warn "Update failed, using existing version."
 else
-    git clone --depth=1 "$REPO_URL" "$INSTALL_DIR" || die "git clone ناموفق. اینترنت سرور را بررسی کنید."
-    success "کد دریافت شد."
+    git clone --depth=1 "$REPO_URL" "$INSTALL_DIR" \
+        || die "git clone failed. Check server internet access."
+    success "Repository cloned."
 fi
 
 # ── System user ───────────────────────────────────────────────
@@ -96,27 +97,29 @@ if ! id "$SERVICE_USER" &>/dev/null; then
     useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
 fi
 chown -R "$SERVICE_USER":"$SERVICE_USER" "$INSTALL_DIR"
+success "System user '$SERVICE_USER' ready."
 
 # ── Python venv ───────────────────────────────────────────────
-info "ساخت محیط Python..."
+info "Creating Python virtual environment..."
 VENV="$INSTALL_DIR/.venv"
 PYTHON_BIN=$(command -v python3.12 2>/dev/null || \
              command -v python3.11 2>/dev/null || \
              command -v python3.10 2>/dev/null || \
-             command -v python3    2>/dev/null || \
-             die "Python 3 یافت نشد.")
+             command -v python3    2>/dev/null) \
+             || die "Python 3 not found."
 
-$PYTHON_BIN -m venv "$VENV" || die "ساخت venv ناموفق بود."
+$PYTHON_BIN -m venv "$VENV" || die "Failed to create venv."
 PIP="$VENV/bin/pip"
 PYTHON_EXEC="$VENV/bin/python"
 
-"$PIP" install --upgrade pip -q || warn "upgrade pip ناموفق"
-info "نصب کتابخانه‌های Python (چند دقیقه طول می‌کشد)..."
-"$PIP" install -r "$INSTALL_DIR/requirements.txt" || die "نصب requirements ناموفق بود."
-success "کتابخانه‌ها نصب شدند."
+"$PIP" install --upgrade pip -q || warn "pip upgrade failed."
+
+info "Installing Python packages (this may take a few minutes)..."
+"$PIP" install -r "$INSTALL_DIR/requirements.txt" || die "Failed to install requirements."
+success "Python packages installed."
 
 # ── .env ──────────────────────────────────────────────────────
-info "ساخت فایل .env..."
+info "Creating .env file..."
 ENV_FILE="$INSTALL_DIR/.env"
 cat > "$ENV_FILE" << ENV
 BOT_TOKEN=${BOT_TOKEN}
@@ -142,20 +145,20 @@ VIRTUALIZOR_API_PASS=
 ENV
 chown "$SERVICE_USER":"$SERVICE_USER" "$ENV_FILE"
 chmod 600 "$ENV_FILE"
-success ".env ساخته شد."
+success ".env created."
 
-# ── DB Migration ──────────────────────────────────────────────
-info "اجرای مایگریشن دیتابیس..."
+# ── DB migrations ─────────────────────────────────────────────
+info "Running database migrations..."
 cd "$INSTALL_DIR"
 if sudo -u "$SERVICE_USER" "$VENV/bin/alembic" upgrade head; then
-    success "مایگریشن‌ها اعمال شدند."
+    success "Migrations applied."
 else
-    warn "مایگریشن ناموفق بود."
-    warn "بعداً دستی اجرا کنید: cd $INSTALL_DIR && sudo -u $SERVICE_USER .venv/bin/alembic upgrade head"
+    warn "Migration failed. Run manually later:"
+    warn "  cd $INSTALL_DIR && sudo -u $SERVICE_USER .venv/bin/alembic upgrade head"
 fi
 
 # ── Systemd services ──────────────────────────────────────────
-info "نصب سرویس‌های systemd..."
+info "Installing systemd services..."
 
 cat > /etc/systemd/system/abrpardaz-bot.service << EOF
 [Unit]
@@ -220,38 +223,39 @@ EOF
 systemctl daemon-reload
 systemctl enable abrpardaz-bot abrpardaz-worker abrpardaz-beat
 systemctl start  abrpardaz-bot abrpardaz-worker abrpardaz-beat
-success "سرویس‌ها راه‌اندازی شدند."
+success "Services installed and started."
 
-# ── Check bot ─────────────────────────────────────────────────
-info "بررسی اتصال ربات به تلگرام..."
+# ── Check bot connection ──────────────────────────────────────
+info "Checking bot connection to Telegram..."
 sleep 6
 LOG=$(journalctl -u abrpardaz-bot -n 30 --no-pager 2>/dev/null)
 
 if echo "$LOG" | grep -q "Bot started\|Started polling"; then
-    echo -e "\n  ${GREEN}✅ ربات با موفقیت متصل شد!${NC}"
+    echo -e "\n  ${GREEN}✅ Bot connected successfully!${NC}"
 elif echo "$LOG" | grep -q "Unauthorized\|401"; then
-    echo -e "\n  ${RED}✗ توکن ربات نامعتبر است.${NC}"
-    echo "  ویرایش: nano $ENV_FILE"
-    echo "  ری‌استارت: systemctl restart abrpardaz-bot"
+    echo -e "\n  ${RED}✗ Invalid bot token.${NC}"
+    echo "  Edit: nano $ENV_FILE"
+    echo "  Restart: systemctl restart abrpardaz-bot"
 elif echo "$LOG" | grep -q "Conflict\|409"; then
-    echo -e "\n  ${YELLOW}⚠ ربات در جای دیگری در حال اجراست (conflict).${NC}"
+    echo -e "\n  ${YELLOW}⚠ Bot is already running elsewhere (conflict).${NC}"
+    echo "  Stop the other instance first."
 else
-    echo -e "\n  ${YELLOW}⚠ وضعیت نامشخص — لاگ:${NC}"
+    echo -e "\n  ${YELLOW}⚠ Status unknown — last logs:${NC}"
     echo "$LOG" | tail -8 | sed 's/^/    /'
 fi
 
-# ── Summary ───────────────────────────────────────────────────
+# ── Done ──────────────────────────────────────────────────────
 echo ""
-echo -e "${GREEN}╔══════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║   ✅  نصب AbrPardaz با موفقیت انجام شد        ║${NC}"
-echo -e "${GREEN}╚══════════════════════════════════════════╝${NC}"
+echo -e "${GREEN}  ╔══════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}  ║   ✅  AbrPardaz installed successfully!  ║${NC}"
+echo -e "${GREEN}  ╚══════════════════════════════════════════╝${NC}"
 echo ""
-echo "  مسیر نصب     : $INSTALL_DIR"
-echo "  فایل config  : $ENV_FILE"
+echo "  Install path : $INSTALL_DIR"
+echo "  Config file  : $ENV_FILE"
 echo ""
-echo "  دستورات مفید:"
-echo "    لاگ ربات      → journalctl -u abrpardaz-bot -f"
-echo "    وضعیت ربات    → systemctl status abrpardaz-bot"
-echo "    ری‌استارت     → systemctl restart abrpardaz-bot abrpardaz-worker abrpardaz-beat"
-echo "    ویرایش config → nano $ENV_FILE"
+echo "  Useful commands:"
+echo "    Live bot log  -> journalctl -u abrpardaz-bot -f"
+echo "    Bot status    -> systemctl status abrpardaz-bot"
+echo "    Restart all   -> systemctl restart abrpardaz-bot abrpardaz-worker abrpardaz-beat"
+echo "    Edit config   -> nano $ENV_FILE"
 echo ""

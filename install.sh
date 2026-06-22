@@ -1,104 +1,124 @@
 #!/usr/bin/env bash
-# ================================================================
-#  Abr Pardaz Bot — Auto Installer
-#  Usage: sudo bash install.sh
-# ================================================================
-set -euo pipefail
+# ─────────────────────────────────────────────────────────────
+#  AbrPardaz — Automated Installer
+#  Usage: curl -fsSL https://raw.githubusercontent.com/SadraHimself/AbrPardaz/main/install.sh | sudo bash
+# ─────────────────────────────────────────────────────────────
 
-R='\033[0;31m'; G='\033[0;32m'; Y='\033[1;33m'
-C='\033[0;36m'; W='\033[1m'; N='\033[0m'
+REPO_URL="https://github.com/SadraHimself/AbrPardaz.git"
+INSTALL_DIR="/opt/abrpardaz"
+SERVICE_USER="abrpardaz"
+DB_NAME="abrpardaz"
+DB_USER="abrpardaz"
 
-ok()   { echo -e "  ${G}✓${N} $1"; }
-info() { echo -e "\n${C}▶${N} $1"; }
-warn() { echo -e "  ${Y}⚠${N} $1"; }
-die()  { echo -e "\n${R}✗ Error:${N} $1" >&2; exit 1; }
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
+info()    { echo -e "\n${CYAN}[INFO]${NC} $*"; }
+success() { echo -e "${GREEN}[OK]${NC}   $*"; }
+warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
+die()     { echo -e "\n${RED}[ERR]${NC}  $*"; exit 1; }
+ask()     { read -r -p "$1" "$2" </dev/tty; }
 
-PROJ="/opt/abr-pardaz"
-VENV="$PROJ/.venv"
-DB_NAME="telecloud"
-DB_USER="telecloud"
-DB_PASS=""
+# ── Root check ────────────────────────────────────────────────
+if [[ $EUID -ne 0 ]]; then
+    die "با sudo اجرا کنید: sudo bash install.sh"
+fi
+
+clear
+echo ""
+echo -e "${CYAN}╔══════════════════════════════════════╗${NC}"
+echo -e "${CYAN}║       ربات ابر پرداز — نصب‌کننده     ║${NC}"
+echo -e "${CYAN}╚══════════════════════════════════════╝${NC}"
+echo ""
+
+# ── Get config from user ──────────────────────────────────────
+echo -e "${YELLOW}اطلاعات زیر را وارد کنید:${NC}"
+echo ""
+
 BOT_TOKEN=""
+while [[ -z "$BOT_TOKEN" ]]; do
+    ask "  🤖 توکن ربات (از @BotFather): " BOT_TOKEN
+done
+
 ADMIN_ID=""
-PYTHON=""
+while [[ -z "$ADMIN_ID" ]]; do
+    ask "  👤 Admin Telegram ID (عدد): " ADMIN_ID
+done
 
-# ── 1. Config ───────────────────────────────────────────────────
-get_config() {
-    clear
-    echo -e "${C}╔══════════════════════════════════════╗${N}"
-    echo -e "${C}║   ☁️  Abr Pardaz Bot — Installer    ║${N}"
-    echo -e "${C}╚══════════════════════════════════════╝${N}\n"
+echo ""
+success "اطلاعات دریافت شد. نصب شروع می‌شود..."
+sleep 1
 
-    read -rp "  Bot Token   [Enter = keep default]: " _t
-    BOT_TOKEN="${_t:-8716134766:AAEzHo4MQohBrgWQMWKpmq985-Wv06d4AJU}"
+# ── System packages ───────────────────────────────────────────
+info "نصب پیش‌نیازهای سیستم..."
+if command -v apt-get &>/dev/null; then
+    apt-get update -y || warn "apt-get update با مشکل مواجه شد، ادامه می‌دهیم..."
+    apt-get install -y git python3 python3-pip python3-venv curl \
+        postgresql postgresql-contrib redis-server build-essential libpq-dev \
+        || die "نصب پیش‌نیازها ناموفق بود."
+elif command -v yum &>/dev/null; then
+    yum install -y git python3 python3-pip curl postgresql postgresql-server redis \
+        || die "نصب پیش‌نیازها ناموفق بود."
+else
+    die "سیستم‌عامل پشتیبانی نمی‌شود. Ubuntu/Debian یا CentOS/RHEL لازم است."
+fi
+success "پیش‌نیازها نصب شدند."
 
-    read -rp "  Admin ID    [Enter = keep default]: " _a
-    ADMIN_ID="${_a:-6972925122}"
+# ── PostgreSQL ────────────────────────────────────────────────
+info "راه‌اندازی PostgreSQL..."
+systemctl start postgresql  || warn "PostgreSQL start ناموفق"
+systemctl enable postgresql || warn "PostgreSQL enable ناموفق"
 
-    DB_PASS="$(openssl rand -hex 12)"
+DB_PASS="$(openssl rand -hex 16)"
+cd /tmp
+sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';" 2>/dev/null || \
+    sudo -u postgres psql -c "ALTER USER $DB_USER WITH PASSWORD '$DB_PASS';" 2>/dev/null || true
+sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;" 2>/dev/null || true
+success "دیتابیس '$DB_NAME' آماده است."
 
-    echo -e "\n  ${G}Config confirmed. Starting install...${N}\n"
-    sleep 1
-}
+# ── Redis ─────────────────────────────────────────────────────
+info "راه‌اندازی Redis..."
+systemctl start redis-server  || systemctl start redis || warn "Redis start ناموفق"
+systemctl enable redis-server || systemctl enable redis || warn "Redis enable ناموفق"
+success "Redis آماده است."
 
-# ── 2. System packages ──────────────────────────────────────────
-install_system() {
-    info "Installing system packages"
-    [ "$EUID" -ne 0 ] && die "Must run as root: sudo bash install.sh"
+# ── Clone repo ────────────────────────────────────────────────
+info "دریافت کد از GitHub..."
+if [[ -d "$INSTALL_DIR/.git" ]]; then
+    git -C "$INSTALL_DIR" fetch --quiet && \
+    git -C "$INSTALL_DIR" reset --hard origin/main --quiet && \
+    success "کد بروز شد." || warn "بروزرسانی ناموفق، از نسخه موجود استفاده می‌شود."
+else
+    git clone --depth=1 "$REPO_URL" "$INSTALL_DIR" || die "git clone ناموفق. اینترنت سرور را بررسی کنید."
+    success "کد دریافت شد."
+fi
 
-    [ -f /etc/os-release ] && { . /etc/os-release; ok "OS: $PRETTY_NAME"; }
+# ── System user ───────────────────────────────────────────────
+if ! id "$SERVICE_USER" &>/dev/null; then
+    useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
+fi
+chown -R "$SERVICE_USER":"$SERVICE_USER" "$INSTALL_DIR"
 
-    apt-get update -qq
-    DEBIAN_FRONTEND=noninteractive apt-get install -yq \
-        python3 python3-pip python3-venv python3-dev \
-        postgresql postgresql-contrib \
-        redis-server \
-        build-essential libpq-dev openssl curl wget git 2>&1 | tail -3
+# ── Python venv ───────────────────────────────────────────────
+info "ساخت محیط Python..."
+VENV="$INSTALL_DIR/.venv"
+PYTHON_BIN=$(command -v python3.12 2>/dev/null || \
+             command -v python3.11 2>/dev/null || \
+             command -v python3.10 2>/dev/null || \
+             command -v python3    2>/dev/null || \
+             die "Python 3 یافت نشد.")
 
-    PYTHON=$(command -v python3.12 2>/dev/null \
-        || command -v python3.11 2>/dev/null \
-        || command -v python3.10 2>/dev/null \
-        || command -v python3 2>/dev/null \
-        || die "Python 3 not found")
-    ok "Python: $($PYTHON --version)"
-}
+$PYTHON_BIN -m venv "$VENV" || die "ساخت venv ناموفق بود."
+PIP="$VENV/bin/pip"
+PYTHON_EXEC="$VENV/bin/python"
 
-# ── 3. Database ─────────────────────────────────────────────────
-setup_db() {
-    info "Setting up PostgreSQL"
-    systemctl start postgresql && systemctl enable postgresql --quiet
-    ok "PostgreSQL running"
+"$PIP" install --upgrade pip -q || warn "upgrade pip ناموفق"
+info "نصب کتابخانه‌های Python (چند دقیقه طول می‌کشد)..."
+"$PIP" install -r "$INSTALL_DIR/requirements.txt" || die "نصب requirements ناموفق بود."
+success "کتابخانه‌ها نصب شدند."
 
-    # Create user if not exists, ALWAYS sync password (prevents mismatch on re-runs)
-    cd /tmp && sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';" 2>/dev/null || true
-    cd /tmp && sudo -u postgres psql -c "ALTER USER $DB_USER WITH PASSWORD '$DB_PASS';" >/dev/null 2>&1
-    ok "DB user '$DB_USER' ready (password synced)"
-
-    cd /tmp && sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'" 2>/dev/null | grep -q 1 \
-        || sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;" >/dev/null 2>&1
-    ok "Database '$DB_NAME' ready"
-
-    info "Setting up Redis"
-    systemctl start redis-server && systemctl enable redis-server --quiet
-    redis-cli ping 2>/dev/null | grep -q PONG && ok "Redis ready" || warn "Redis did not respond"
-}
-
-# ── 4. Python venv ──────────────────────────────────────────────
-setup_venv() {
-    info "Creating Python virtual environment"
-    $PYTHON -m venv "$VENV"
-    "$VENV/bin/pip" install --quiet --upgrade pip
-    ok "venv created: $VENV"
-
-    info "Installing Python packages (may take 3-5 minutes)"
-    "$VENV/bin/pip" install --quiet -r "$PROJ/requirements.txt"
-    ok "All packages installed"
-}
-
-# ── 5. .env file ────────────────────────────────────────────────
-setup_env() {
-    info "Creating .env"
-    cat > "$PROJ/.env" << ENV
+# ── .env ──────────────────────────────────────────────────────
+info "ساخت فایل .env..."
+ENV_FILE="$INSTALL_DIR/.env"
+cat > "$ENV_FILE" << ENV
 BOT_TOKEN=${BOT_TOKEN}
 ADMIN_IDS=[${ADMIN_ID}]
 WEBAPP_URL=
@@ -120,167 +140,118 @@ VIRTUALIZOR_PANEL_URL=
 VIRTUALIZOR_API_KEY=
 VIRTUALIZOR_API_PASS=
 ENV
-    chmod 600 "$PROJ/.env"
-    ok ".env created (chmod 600)"
-}
+chown "$SERVICE_USER":"$SERVICE_USER" "$ENV_FILE"
+chmod 600 "$ENV_FILE"
+success ".env ساخته شد."
 
-# ── 6. DB Migration ─────────────────────────────────────────────
-run_migration() {
-    info "Running database migrations"
-    cd "$PROJ"
-    set -a; source .env; set +a
+# ── DB Migration ──────────────────────────────────────────────
+info "اجرای مایگریشن دیتابیس..."
+cd "$INSTALL_DIR"
+if sudo -u "$SERVICE_USER" "$VENV/bin/alembic" upgrade head; then
+    success "مایگریشن‌ها اعمال شدند."
+else
+    warn "مایگریشن ناموفق بود."
+    warn "بعداً دستی اجرا کنید: cd $INSTALL_DIR && sudo -u $SERVICE_USER .venv/bin/alembic upgrade head"
+fi
 
-    if [ -z "$(ls -A alembic/versions/ 2>/dev/null | grep -v .gitkeep)" ]; then
-        "$VENV/bin/alembic" revision --autogenerate -m "initial" 2>&1 | tail -3
-        ok "Initial migration created"
-    else
-        ok "Migration already exists"
-    fi
-    "$VENV/bin/alembic" upgrade head 2>&1 | tail -3
-    ok "Database tables ready"
-}
+# ── Systemd services ──────────────────────────────────────────
+info "نصب سرویس‌های systemd..."
 
-# ── 7. systemd services ─────────────────────────────────────────
-setup_services() {
-    info "Creating systemd services"
-
-    cat > /etc/systemd/system/abr-pardaz-bot.service << SVC
+cat > /etc/systemd/system/abrpardaz-bot.service << EOF
 [Unit]
-Description=Abr Pardaz Telegram Bot
+Description=AbrPardaz Telegram Bot
 After=network.target postgresql.service redis.service
 
 [Service]
 Type=simple
-User=root
-WorkingDirectory=${PROJ}
-ExecStart=${VENV}/bin/python -m bot.main
-Restart=always
+User=$SERVICE_USER
+WorkingDirectory=$INSTALL_DIR
+EnvironmentFile=$ENV_FILE
+ExecStart=$PYTHON_EXEC -m bot.main
+Restart=on-failure
 RestartSec=5
-EnvironmentFile=${PROJ}/.env
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=abr-bot
 
 [Install]
 WantedBy=multi-user.target
-SVC
+EOF
 
-    cat > /etc/systemd/system/abr-pardaz-celery.service << SVC
+cat > /etc/systemd/system/abrpardaz-worker.service << EOF
 [Unit]
-Description=Abr Pardaz Celery Worker
-After=network.target redis.service postgresql.service
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=${PROJ}
-ExecStart=${VENV}/bin/celery -A bot.tasks.celery_app worker --loglevel=info --concurrency=2
-Restart=always
-RestartSec=5
-EnvironmentFile=${PROJ}/.env
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=abr-celery
-
-[Install]
-WantedBy=multi-user.target
-SVC
-
-    cat > /etc/systemd/system/abr-pardaz-beat.service << SVC
-[Unit]
-Description=Abr Pardaz Celery Beat
+Description=AbrPardaz Celery Worker
 After=network.target redis.service
 
 [Service]
 Type=simple
-User=root
-WorkingDirectory=${PROJ}
-ExecStart=${VENV}/bin/celery -A bot.tasks.celery_app beat --loglevel=info
-Restart=always
+User=$SERVICE_USER
+WorkingDirectory=$INSTALL_DIR
+EnvironmentFile=$ENV_FILE
+ExecStart=$VENV/bin/celery -A bot.tasks.celery_app worker -l info --concurrency=4
+Restart=on-failure
 RestartSec=5
-EnvironmentFile=${PROJ}/.env
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=abr-beat
 
 [Install]
 WantedBy=multi-user.target
-SVC
+EOF
 
-    systemctl daemon-reload
-    systemctl enable abr-pardaz-bot abr-pardaz-celery abr-pardaz-beat --quiet
-    systemctl start abr-pardaz-bot
-    sleep 4
-    systemctl start abr-pardaz-celery abr-pardaz-beat 2>/dev/null || true
-    ok "Services started"
-}
+cat > /etc/systemd/system/abrpardaz-beat.service << EOF
+[Unit]
+Description=AbrPardaz Celery Beat Scheduler
+After=network.target redis.service
 
-# ── 8. Connection check ─────────────────────────────────────────
-check_bot() {
-    info "Checking bot connection to Telegram"
-    sleep 5
+[Service]
+Type=simple
+User=$SERVICE_USER
+WorkingDirectory=$INSTALL_DIR
+EnvironmentFile=$ENV_FILE
+ExecStart=$VENV/bin/celery -A bot.tasks.celery_app beat -l info --schedule /tmp/abrpardaz-beat.db
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
 
-    LOG=$(journalctl -u abr-pardaz-bot -n 50 --no-pager 2>/dev/null)
+[Install]
+WantedBy=multi-user.target
+EOF
 
-    if echo "$LOG" | grep -q "Bot started"; then
-        BOT_USER=$(echo "$LOG" | grep "Bot started:" | tail -1 | sed 's/.*@//')
-        echo -e "\n  ${G}${W}✅ Bot connected! @${BOT_USER}${N}"
-    elif echo "$LOG" | grep -q "Unauthorized"; then
-        echo -e "\n  ${R}✗ Invalid bot token!${N}"
-        echo -e "  Edit: ${Y}nano $PROJ/.env${N}"
-        echo -e "  Then: ${Y}systemctl restart abr-pardaz-bot${N}"
-    elif echo "$LOG" | grep -q "Conflict"; then
-        echo -e "\n  ${Y}⚠ Bot is already running elsewhere (conflict)!${N}"
-        echo -e "  Stop the other instance, then: ${Y}systemctl restart abr-pardaz-bot${N}"
-    elif echo "$LOG" | grep -q "Cannot connect\|Network\|ConnectionError"; then
-        echo -e "\n  ${R}✗ Server cannot reach Telegram (blocked/firewall)${N}"
-        echo -e "  Configure a proxy or use a non-restricted server"
-    else
-        echo -e "\n  ${Y}⚠ Status unknown — last logs:${N}"
-        echo "$LOG" | tail -15 | sed 's/^/    /'
-    fi
-}
+systemctl daemon-reload
+systemctl enable abrpardaz-bot abrpardaz-worker abrpardaz-beat
+systemctl start  abrpardaz-bot abrpardaz-worker abrpardaz-beat
+success "سرویس‌ها راه‌اندازی شدند."
 
-# ── Summary ─────────────────────────────────────────────────────
-summary() {
-    echo ""
-    echo -e "${C}══════════════════════════════════════════════${N}"
-    echo -e "${W}  Service status:${N}"
-    for svc in abr-pardaz-bot abr-pardaz-celery abr-pardaz-beat; do
-        systemctl is-active --quiet "$svc" 2>/dev/null \
-            && echo -e "  ${G}●${N} $svc — running" \
-            || echo -e "  ${R}●${N} $svc — stopped"
-    done
-    echo ""
-    echo -e "${W}  File locations:${N}"
-    echo -e "  ${Y}$PROJ/.env${N}          ← API keys & config"
-    echo -e "  ${Y}$PROJ/bot/${N}           ← bot source code"
-    echo -e "  ${Y}$PROJ/alembic/${N}       ← database migrations"
-    echo -e "  ${Y}$PROJ/.venv/${N}         ← Python virtual environment"
-    echo ""
-    echo -e "${W}  Useful commands:${N}"
-    echo -e "  ${C}journalctl -u abr-pardaz-bot -f${N}       # live bot log"
-    echo -e "  ${C}systemctl restart abr-pardaz-bot${N}       # restart bot"
-    echo -e "  ${C}systemctl status abr-pardaz-bot${N}        # status"
-    echo -e "  ${C}journalctl -u abr-pardaz-celery -f${N}     # billing log"
-    echo -e "  ${C}nano $PROJ/.env${N}                        # edit config"
-    echo ""
-    echo -e "${W}  After editing .env, always restart:${N}"
-    echo -e "  ${C}systemctl restart abr-pardaz-bot abr-pardaz-celery abr-pardaz-beat${N}"
-    echo -e "${C}══════════════════════════════════════════════${N}\n"
-}
+# ── Check bot ─────────────────────────────────────────────────
+info "بررسی اتصال ربات به تلگرام..."
+sleep 6
+LOG=$(journalctl -u abrpardaz-bot -n 30 --no-pager 2>/dev/null)
 
-# ── Main ────────────────────────────────────────────────────────
-main() {
-    get_config
-    install_system
-    setup_db
-    setup_venv
-    setup_env
-    run_migration
-    setup_services
-    check_bot
-    summary
-}
+if echo "$LOG" | grep -q "Bot started\|Started polling"; then
+    echo -e "\n  ${GREEN}✅ ربات با موفقیت متصل شد!${NC}"
+elif echo "$LOG" | grep -q "Unauthorized\|401"; then
+    echo -e "\n  ${RED}✗ توکن ربات نامعتبر است.${NC}"
+    echo "  ویرایش: nano $ENV_FILE"
+    echo "  ری‌استارت: systemctl restart abrpardaz-bot"
+elif echo "$LOG" | grep -q "Conflict\|409"; then
+    echo -e "\n  ${YELLOW}⚠ ربات در جای دیگری در حال اجراست (conflict).${NC}"
+else
+    echo -e "\n  ${YELLOW}⚠ وضعیت نامشخص — لاگ:${NC}"
+    echo "$LOG" | tail -8 | sed 's/^/    /'
+fi
 
-main "$@"
+# ── Summary ───────────────────────────────────────────────────
+echo ""
+echo -e "${GREEN}╔══════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}║   ✅  نصب AbrPardaz با موفقیت انجام شد        ║${NC}"
+echo -e "${GREEN}╚══════════════════════════════════════════╝${NC}"
+echo ""
+echo "  مسیر نصب     : $INSTALL_DIR"
+echo "  فایل config  : $ENV_FILE"
+echo ""
+echo "  دستورات مفید:"
+echo "    لاگ ربات      → journalctl -u abrpardaz-bot -f"
+echo "    وضعیت ربات    → systemctl status abrpardaz-bot"
+echo "    ری‌استارت     → systemctl restart abrpardaz-bot abrpardaz-worker abrpardaz-beat"
+echo "    ویرایش config → nano $ENV_FILE"
+echo ""

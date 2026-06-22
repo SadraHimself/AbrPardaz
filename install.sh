@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────
-#  AbrPardaz — Automated Installer
+#  AbrPardaz — Installer / Updater
 #  Usage: curl -fsSL https://raw.githubusercontent.com/SadraHimself/AbrPardaz/main/install.sh | sudo bash
 # ─────────────────────────────────────────────────────────────
 
@@ -29,7 +29,91 @@ echo -e "${CYAN}  ║     AbrPardaz Bot  —  Installer      ║${NC}"
 echo -e "${CYAN}  ╚══════════════════════════════════════╝${NC}"
 echo ""
 
-# ── Get config ────────────────────────────────────────────────
+# ── Detect mode: fresh install or update ─────────────────────
+if [[ -d "$INSTALL_DIR/.git" ]] && [[ -f "$INSTALL_DIR/.env" ]]; then
+    MODE="update"
+else
+    MODE="install"
+fi
+
+# ═══════════════════════════════════════════════════════════════
+# UPDATE MODE — pull new code, migrate, restart
+# ═══════════════════════════════════════════════════════════════
+if [[ "$MODE" == "update" ]]; then
+    echo -e "  ${YELLOW}Existing installation detected — running update...${NC}"
+    echo ""
+
+    VENV="$INSTALL_DIR/.venv"
+    ENV_FILE="$INSTALL_DIR/.env"
+
+    # Stop services
+    info "Stopping services..."
+    systemctl stop abrpardaz-bot abrpardaz-worker abrpardaz-beat 2>/dev/null || true
+    success "Services stopped."
+
+    # Pull latest code
+    info "Pulling latest code from GitHub..."
+    git config --global --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
+    if git -C "$INSTALL_DIR" fetch --quiet && \
+       git -C "$INSTALL_DIR" reset --hard origin/main --quiet; then
+        success "Code updated."
+    else
+        warn "git pull failed. Starting with existing code..."
+    fi
+    chown -R "$SERVICE_USER":"$SERVICE_USER" "$INSTALL_DIR"
+
+    # Install any new Python packages
+    info "Updating Python packages..."
+    "$VENV/bin/pip" install -q -r "$INSTALL_DIR/requirements.txt" \
+        || warn "pip install had errors, continuing..."
+    success "Packages up to date."
+
+    # Run migrations (safe — only applies new ones, skips existing)
+    info "Running database migrations..."
+    cd "$INSTALL_DIR"
+    if sudo -u "$SERVICE_USER" "$VENV/bin/alembic" upgrade head; then
+        success "Migrations applied."
+    else
+        warn "Migration failed. Run manually:"
+        warn "  cd $INSTALL_DIR && sudo -u $SERVICE_USER .venv/bin/alembic upgrade head"
+    fi
+
+    # Restart services
+    info "Restarting services..."
+    systemctl start abrpardaz-bot abrpardaz-worker abrpardaz-beat
+    success "Services restarted."
+
+    # Check bot
+    info "Checking bot connection..."
+    sleep 6
+    LOG=$(journalctl -u abrpardaz-bot -n 20 --no-pager 2>/dev/null)
+    if echo "$LOG" | grep -q "Bot started\|Started polling"; then
+        echo -e "\n  ${GREEN}✅ Bot updated and running!${NC}"
+    elif echo "$LOG" | grep -q "Unauthorized\|401"; then
+        echo -e "\n  ${RED}✗ Invalid bot token.${NC}"
+        echo "  Edit: nano $ENV_FILE"
+        echo "  Restart: systemctl restart abrpardaz-bot"
+    else
+        echo -e "\n  ${YELLOW}⚠ Last logs:${NC}"
+        echo "$LOG" | tail -6 | sed 's/^/    /'
+    fi
+
+    echo ""
+    echo -e "${GREEN}  ╔══════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}  ║   ✅  AbrPardaz updated successfully!    ║${NC}"
+    echo -e "${GREEN}  ╚══════════════════════════════════════════╝${NC}"
+    echo ""
+    echo "  Useful commands:"
+    echo "    Live log    -> journalctl -u abrpardaz-bot -f"
+    echo "    Bot status  -> systemctl status abrpardaz-bot"
+    echo "    Edit config -> nano $ENV_FILE"
+    echo ""
+    exit 0
+fi
+
+# ═══════════════════════════════════════════════════════════════
+# INSTALL MODE — fresh installation
+# ═══════════════════════════════════════════════════════════════
 echo -e "  ${YELLOW}Please enter the following information:${NC}"
 echo ""
 
@@ -82,15 +166,9 @@ success "Redis is ready."
 
 # ── Clone repo ────────────────────────────────────────────────
 info "Cloning repository..."
-if [[ -d "$INSTALL_DIR/.git" ]]; then
-    git -C "$INSTALL_DIR" fetch --quiet && \
-    git -C "$INSTALL_DIR" reset --hard origin/main --quiet && \
-    success "Repository updated." || warn "Update failed, using existing version."
-else
-    git clone --depth=1 "$REPO_URL" "$INSTALL_DIR" \
-        || die "git clone failed. Check server internet access."
-    success "Repository cloned."
-fi
+git clone --depth=1 "$REPO_URL" "$INSTALL_DIR" \
+    || die "git clone failed. Check server internet access."
+success "Repository cloned."
 
 # ── System user ───────────────────────────────────────────────
 if ! id "$SERVICE_USER" &>/dev/null; then
@@ -247,7 +325,7 @@ fi
 # ── Done ──────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}  ╔══════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}  ║   ✅  AbrPardaz installed successfully!  ║${NC}"
+echo -e "${GREEN}  ║   ✅  AbrPardaz installed successfully!   ║${NC}"
 echo -e "${GREEN}  ╚══════════════════════════════════════════╝${NC}"
 echo ""
 echo "  Install path : $INSTALL_DIR"
@@ -258,4 +336,5 @@ echo "    Live bot log  -> journalctl -u abrpardaz-bot -f"
 echo "    Bot status    -> systemctl status abrpardaz-bot"
 echo "    Restart all   -> systemctl restart abrpardaz-bot abrpardaz-worker abrpardaz-beat"
 echo "    Edit config   -> nano $ENV_FILE"
+echo "    Update bot    -> curl -fsSL https://raw.githubusercontent.com/SadraHimself/AbrPardaz/main/install.sh | sudo bash"
 echo ""

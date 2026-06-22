@@ -1,81 +1,98 @@
-# TeleCloud Bot 🖥
+# AbrPardaz 🖥
 
-ربات تلگرام برای فروش و مدیریت سرور مجازی (VPS) روی پنل Virtualizor
+**ربات ابر پرداز** — ربات تلگرام برای فروش و مدیریت سرور مجازی (VPS) روی پنل Virtualizor
+
+[![GitHub](https://img.shields.io/badge/GitHub-AbrPardaz-blue?logo=github)](https://github.com/SadraHimself/AbrPardaz)
+[![Python](https://img.shields.io/badge/Python-3.11+-green?logo=python)](https://python.org)
+[![aiogram](https://img.shields.io/badge/aiogram-3.x-blue)](https://aiogram.dev)
+
+---
+
+## نصب سریع (یک خط)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SadraHimself/AbrPardaz/main/install.sh | sudo bash
+```
+
+> اسکریپت به صورت خودکار ربات را در `/opt/abrpardaz` نصب می‌کند، محیط Python می‌سازد، سرویس‌های systemd را ثبت می‌کند و ربات را راه‌اندازی می‌کند.
+>
+> **پیش‌نیاز:** Ubuntu/Debian یا CentOS/RHEL — اجرا به عنوان root یا با sudo
 
 ---
 
 ## ویژگی‌ها
 
-- **خرید سرور** با انتخاب OS، hostname، نوع بیلینگ (ساعتی / ماهانه)
-- **مدیریت سرور**: روشن/خاموش/ریبوت/حذف، تغییر IP، VNC
-- **ترافیک**: نمایش مصرف + خرید ترافیک اضافه
+- **خرید سرور** با انتخاب OS از Virtualizor، hostname دلخواه، نوع بیلینگ (ساعتی / ماهانه)
+- **مدیریت سرور**: روشن/خاموش/ریبوت/حذف، تغییر IP، اتصال VNC
+- **ترافیک**: نمایش مصرف + خرید ترافیک اضافه و IP اضافه (sub-products)
 - **کیف پول**: شارژ آنلاین، تاریخچه تراکنش‌ها
-- **کد تخفیف**: درصدی، با انقضا و محدودیت استفاده
+- **کد تخفیف**: درصدی، با انقضا و محدودیت استفاده، قابل اختصاص به کاربر خاص
 - **احراز هویت**: تأیید شماره موبایل ایرانی از طریق Shahkar
-- **قوانین و مقررات**: flow تأیید قوانین + عضویت اجباری در کانال
+- **قوانین و مقررات**: flow قبول قوانین + عضویت اجباری در کانال
 - **پنل ادمین کامل**: مدیریت کاربران، محصولات، آمار، تنظیمات، broadcast
 
 ---
 
 ## پیش‌نیازها
 
-- Python 3.11+
-- PostgreSQL 14+
-- Redis 6+
-- پنل Virtualizor (با API فعال)
+| نرم‌افزار | نسخه |
+|-----------|-------|
+| Python | 3.11+ |
+| PostgreSQL | 14+ |
+| Redis | 6+ |
+| Virtualizor | پنل KVM با API فعال |
 
 ---
 
-## نصب و راه‌اندازی
+## نصب دستی
 
-### ۱. کلون و نصب وابستگی‌ها
+### ۱. دریافت کد
 
 ```bash
-git clone <repo-url>
-cd telecloud-bot
-python -m venv .venv
-source .venv/bin/activate   # Linux/Mac
-# یا: .venv\Scripts\activate  # Windows
+git clone https://github.com/SadraHimself/AbrPardaz.git /opt/abrpardaz
+cd /opt/abrpardaz
+```
 
+### ۲. محیط Python
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### ۲. فایل `.env`
+### ۳. فایل تنظیمات
 
 ```bash
 cp .env.example .env
-# ویرایش .env با مقادیر واقعی
 nano .env
 ```
 
 متغیرهای اجباری:
-```
+
+```env
 BOT_TOKEN=your_bot_token
 ADMIN_IDS=[123456789]
-DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/telecloud
+DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/abrpardaz
 REDIS_URL=redis://localhost:6379/0
 ```
 
-### ۳. مایگریشن دیتابیس
+### ۴. مایگریشن دیتابیس
 
 ```bash
 alembic upgrade head
 ```
 
-### ۴. اجرا
+### ۵. اجرا
 
-**ربات:**
 ```bash
+# ربات
 python -m bot.main
-```
 
-**Celery worker** (بیلینگ و sync ترافیک):
-```bash
+# Celery worker (بیلینگ + sync ترافیک)
 celery -A bot.tasks.celery_app worker -l info
-```
 
-**Celery beat** (وظایف زمان‌بندی‌شده):
-```bash
+# Celery beat (وظایف زمان‌بندی‌شده)
 celery -A bot.tasks.celery_app beat -l info
 ```
 
@@ -84,52 +101,57 @@ celery -A bot.tasks.celery_app beat -l info
 ## تنظیمات Virtualizor
 
 در پنل Virtualizor:
+
 1. **Configuration → API** را باز کنید
 2. **Enable API** را فعال کنید
-3. IP سرور ربات را whitelist کنید
+3. IP سرور ربات را در لیست مجاز اضافه کنید
 4. **API Key** و **API Pass** را کپی کنید
 
-سپس از پنل ادمین ربات → **سرورهای ویرچولایزور** → اضافه کردن سرور
+سپس از پنل ادمین ربات → **🖥 سرورهای ویرچولایزور** → اضافه کردن سرور
 
 ---
 
 ## ساختار پروژه
 
 ```
-bot/
-├── handlers/        # Telegram message/callback handlers
-├── keyboards/       # Inline/reply keyboards
-├── providers/       # Virtualizor API client
-├── services/        # Business logic (billing, server lifecycle)
-├── tasks/           # Celery background tasks
-├── database/        # SQLAlchemy models + session
-└── middlewares/     # Auth, session injection, throttling
+/opt/abrpardaz/
+├── bot/
+│   ├── handlers/        # هندلرهای تلگرام
+│   ├── keyboards/       # کیبوردهای inline/reply
+│   ├── providers/       # کلاینت Virtualizor API
+│   ├── services/        # منطق کسب‌وکار (بیلینگ، سرور)
+│   ├── tasks/           # وظایف Celery (بیلینگ، آمار، ترافیک)
+│   ├── database/        # مدل‌های SQLAlchemy
+│   └── middlewares/     # احراز هویت، session، throttling
+├── alembic/             # مایگریشن‌های دیتابیس
+├── install.sh           # اسکریپت نصب خودکار
+├── .env.example         # نمونه فایل تنظیمات
+└── PROJECT_STATUS.md    # وضعیت کامل پروژه
 ```
 
-برای جزئیات کامل → [`PROJECT_STATUS.md`](PROJECT_STATUS.md)
+برای جزئیات کامل تمام فیچرها و مدل‌ها → [PROJECT_STATUS.md](PROJECT_STATUS.md)
 
 ---
 
 ## پنل ادمین
 
-دستورات دسترسی:
-- `/start` → دکمه **پنل ادمین** (برای کاربران در `ADMIN_IDS`)
+دسترسی: `/start` ← دکمه **⚙️ پنل ادمین** (فقط برای `ADMIN_IDS`)
 
-بخش‌های پنل:
 | بخش | کاربرد |
 |-----|---------|
-| 👥 کاربران | مدیریت کاربران، ban/credit/پیام |
-| 📦 محصولات | CRUD پلن‌ها + ریز-محصولات |
-| 🖥 سرورهای ویرچولایزور | افزودن/ویرایش/حذف پنل‌ها |
-| 📊 آمار | امروز / ماهانه / بازه دلخواه |
-| 📢 پیام همگانی | broadcast با فیلتر + forward واقعی |
-| ⚙️ تنظیمات | متن خوش‌آمد، استیکر، پشتیبانی، قوانین |
+| 👥 کاربران | لیست، جستجو، ban/unban، شارژ/برداشت کیف پول، KYC دستی |
+| 📦 محصولات | CRUD پلن‌ها + auto-fetch مشخصات از Virtualizor |
+| 📎 ریز-محصولات | ترافیک اضافه و IP اضافه به ازای هر پلن |
+| 🖥 سرورهای ویرچولایزور | افزودن پنل، تست اتصال، KYC سختگیرانه |
+| 📊 آمار | امروز / ماهانه / بازه تاریخ دلخواه |
+| 📢 پیام همگانی | broadcast با فیلتر + forward واقعی + rate limit |
+| ⚙️ تنظیمات | متن خوش‌آمد، استیکر، پشتیبانی، قوانین، حالت تعمیر |
 | 🔒 قفل کانال | مدیریت عضویت اجباری |
-| 💰 مالی | شارژ گروهی + تنظیم قیمت |
-| 🏷 کدهای تخفیف | ایجاد/ویرایش/حذف |
+| 💰 مالی | شارژ گروهی کاربران + تنظیم قیمت گروهی |
+| 🏷 کدهای تخفیف | ایجاد، ویرایش، حذف، اختصاص به کاربر |
 
 ---
 
 ## لایسنس
 
-MIT
+MIT — [SadraHimself](https://github.com/SadraHimself)

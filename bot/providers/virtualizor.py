@@ -84,8 +84,11 @@ class VirtualizorProvider(BaseProvider):
                             preview = raw[:150].replace("\n", " ")
                             last_error = f"پاسخ JSON نیست: {preview}"
                             continue
-                        if data.get("error"):
-                            raise RuntimeError(f"Virtualizor: {data['error']}")
+                        error = data.get("error") or data.get("errors")
+                        if not error and data.get("fatal_error_text"):
+                            error = f"{data.get('fatal_error_heading', 'Fatal Error')}: {data['fatal_error_text']}"
+                        if error:
+                            raise RuntimeError(f"Virtualizor: {error}")
                         return data
                 except aiohttp.ClientError as e:
                     last_error = str(e)
@@ -123,9 +126,24 @@ class VirtualizorProvider(BaseProvider):
             "osid": params.os_id,
             "bandwidth": params.extra.get("bandwidth", 1000),
             "ram": params.extra.get("ram", 1024),
-            "space": params.extra.get("disk", 20),
             "cores": params.extra.get("cpu", 1),
+            # virt is REQUIRED by Virtualizor API
+            "virt": params.extra.get("virt_type", "kvm"),
+            # uid: Virtualizor user who owns the VPS (1 = admin)
+            "uid": params.extra.get("virtualizor_uid", 1),
+            # auto-assign 1 IP from node pool (required by API)
+            "num_ips": 1,
         }
+
+        # space must be array format: space[0][size]=X&space[0][st_uuid]=Y
+        # When st_uuid is provided, use proper format; otherwise omit and let plan handle it
+        st_uuid = params.extra.get("st_uuid")
+        if st_uuid:
+            payload["space[0][size]"] = params.extra.get("disk", 20)
+            payload["space[0][st_uuid]"] = st_uuid
+        else:
+            # Fallback: send as plain int — plan (plid) should define storage
+            payload["space"] = params.extra.get("disk", 20)
 
         plan_id_str = str(params.plan_id).strip()
         if plan_id_str.isdigit() and int(plan_id_str) > 0:
@@ -137,32 +155,32 @@ class VirtualizorProvider(BaseProvider):
 
         data = await self._request("addvs", payload)
 
-        # Extract vpsid — Virtualizor has several response formats
-        addvs_raw = data.get("addvs")
-        vpsid = None
-        taskid = None
+        # Response format per docs: vs_info.vpsid (not addvs.vpsid)
+        vs_info = data.get("vs_info") or {}
+        vpsid = vs_info.get("vpsid") if isinstance(vs_info, dict) else None
+        taskid = data.get("taskid")
 
-        if isinstance(addvs_raw, dict):
-            vpsid = addvs_raw.get("vpsid")
-            taskid = addvs_raw.get("taskid")
-        elif isinstance(addvs_raw, (int, float)) and addvs_raw:
-            vpsid = int(addvs_raw)
-
+        # Fallbacks for older Virtualizor versions
         if not vpsid:
             vpsid = data.get("vpsid")
-        if not taskid:
-            taskid = data.get("taskid")
+        if not vpsid:
+            addvs_raw = data.get("addvs")
+            if isinstance(addvs_raw, dict):
+                vpsid = addvs_raw.get("vpsid")
+                taskid = taskid or addvs_raw.get("taskid")
+            elif isinstance(addvs_raw, (int, float)) and addvs_raw:
+                vpsid = int(addvs_raw)
 
-        # Async creation — poll task until vpsid appears (max 90 sec)
+        # Async creation: poll act=tasks until vpsid appears (max 90 sec)
         if not vpsid and taskid:
             for _ in range(18):
                 await _asyncio.sleep(5)
                 try:
-                    t_data = await self._request("listtasks", {"taskid": taskid})
+                    t_data = await self._request("tasks", {"actid": taskid})
                     tasks = t_data.get("tasks", {})
                     for task in tasks.values():
-                        tid_vps = (task.get("data") or {}).get("vpsid") or task.get("vpsid")
-                        if tid_vps:
+                        tid_vps = task.get("vpsid")
+                        if tid_vps and str(tid_vps) != "0":
                             vpsid = tid_vps
                             break
                     if vpsid:
@@ -218,6 +236,21 @@ class VirtualizorProvider(BaseProvider):
         stats = data.get("vstats", {})
         used_bytes = float(stats.get("tx_bytes", 0)) + float(stats.get("rx_bytes", 0))
         return used_bytes / (1024 ** 3)
+
+    async def list_storages(self) -> list[dict]:
+        data = await self._request("liststorages")
+        storage_raw = data.get("storage", {})
+        result = []
+        for stid, st in storage_raw.items():
+            result.append({
+                "stid": str(stid),
+                "st_uuid": st.get("st_uuid", ""),
+                "name": st.get("name", ""),
+                "free_gb": float(st.get("free", 0)),
+                "total_gb": float(st.get("size", 0)),
+                "type": st.get("type", ""),
+            })
+        return result
 
     async def list_plans(self, location: Optional[str] = None) -> list[PlanInfo]:
         data = await self._request("listplans")

@@ -12,6 +12,7 @@ from bot.database.models import (
     SuspendReason, User,
 )
 from bot.providers import CreateServerParams, get_provider
+from bot.providers.virtualizor import VirtualizorProvider
 
 
 class ServerService:
@@ -31,6 +32,32 @@ class ServerService:
             raise RuntimeError(f"Provider account {account_id} not found or inactive")
         return account
 
+    async def _ensure_virt_uid(self, user: User, account: ProviderAccount) -> Optional[int]:
+        """Get or create a Virtualizor user account for this bot user. Returns uid."""
+        user_extra = user.extra_data or {}
+        virt_uids = user_extra.get("virt_uids", {})
+        existing = virt_uids.get(str(account.id))
+        if existing:
+            return int(existing)
+
+        if not user.email:
+            return None
+
+        prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
+        try:
+            uid = await prov.create_user(user.email, user.email)
+        except Exception:
+            # User may already exist — find by email
+            uid = await prov.find_user_by_email(user.email)
+            if not uid:
+                return None
+
+        virt_uids[str(account.id)] = uid
+        user_extra["virt_uids"] = virt_uids
+        user.extra_data = user_extra
+        await self.session.flush()
+        return uid
+
     async def create_server(
         self,
         user: User,
@@ -44,24 +71,31 @@ class ServerService:
         provider = get_provider(account)
 
         custom_name = hostname or f"tc-{user.telegram_id}-{int(datetime.now().timestamp())}"
-        # Merge: account defaults → plan overrides → call-site overrides
         provider_extra = account.extra_config or {}
         plan_extra = plan.extra_data or {}
+
+        merged_extra: dict = {
+            "ram": plan.ram,
+            "disk": plan.disk,
+            "cpu": plan.cpu,
+            "bandwidth": plan.bandwidth,
+            **provider_extra,
+            **plan_extra,
+            **(extra or {}),
+        }
+
+        # Auto-create per-user Virtualizor account and inject uid
+        virt_uid = await self._ensure_virt_uid(user, account)
+        if virt_uid:
+            merged_extra["virtualizor_uid"] = virt_uid
+
         params = CreateServerParams(
             name=custom_name,
             plan_id=plan.provider_plan_id or "",
             os_id=os_id,
             location=plan.location or "",
             hostname=custom_name,
-            extra={
-                "ram": plan.ram,
-                "disk": plan.disk,
-                "cpu": plan.cpu,
-                "bandwidth": plan.bandwidth,
-                **provider_extra,
-                **plan_extra,
-                **(extra or {}),
-            },
+            extra=merged_extra,
         )
 
         info = await provider.create_server(params)

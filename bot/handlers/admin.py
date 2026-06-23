@@ -50,6 +50,7 @@ class ProviderFSM(StatesGroup):
     add_key = State()
     add_pass = State()
     edit_value = State()
+    setup_storage = State()   # pick st_uuid for VPS creation
 
 
 class PlanFSM(StatesGroup):
@@ -199,6 +200,9 @@ async def cb_prov_detail(cb: CallbackQuery, session: AsyncSession):
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
     masked = "*" * 8
+    extra = account.extra_config or {}
+    st_uuid_line = f"💾 Storage UUID: <code>{extra['st_uuid']}</code>\n" if extra.get("st_uuid") else "💾 Storage UUID: <i>تنظیم نشده</i>\n"
+    virt_line = f"🖥 Virt Type: <code>{extra.get('virt_type', 'kvm (پیش‌فرض)')}</code>\n"
     await cb.message.edit_text(
         f"🖥 <b>{account.name}</b>\n\n"
         f"🌐 URL: <code>{account.api_endpoint}</code>\n"
@@ -206,6 +210,7 @@ async def cb_prov_detail(cb: CallbackQuery, session: AsyncSession):
         f"🔒 API Pass: <code>{masked}</code>\n"
         f"✅ وضعیت: {'فعال' if account.is_active else 'غیرفعال'}\n"
         f"🔒 Strict KYC: {'روشن' if account.strict_kyc else 'خاموش'}\n"
+        + st_uuid_line + virt_line +
         f"🆔 ID: {account.id}",
         parse_mode="HTML",
         reply_markup=provider_detail_kb(provider_id, account.is_active, account.strict_kyc),
@@ -296,6 +301,61 @@ async def cb_prov_test(cb: CallbackQuery, session: AsyncSession):
         await test_msg.edit_text(f"⏱ <b>تایم‌اوت</b>\n🌐 {account.api_endpoint}", parse_mode="HTML")
     except Exception as e:
         await test_msg.edit_text(f"❌ <b>خطا:</b> {e}", parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("admin:prov_storage:"))
+async def cb_prov_storage_setup(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
+    """List available storages from Virtualizor so admin can pick one."""
+    provider_id = int(cb.data.split(":")[2])
+    account = await session.get(ProviderAccount, provider_id)
+    if not account:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    await cb.answer()
+    fetch_msg = await cb.message.answer("⏳ در حال خواندن لیست استوریج از Virtualizor...")
+    try:
+        prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
+        storages = await asyncio.wait_for(prov.list_storages(), timeout=15)
+        if not storages:
+            await fetch_msg.edit_text("⚠️ هیچ استوریجی در Virtualizor یافت نشد.")
+            return
+        lines = ["💾 <b>استوریج‌های موجود:</b>\n"]
+        for s in storages:
+            lines.append(
+                f"📁 <b>{s['name']}</b>\n"
+                f"   UUID: <code>{s['st_uuid']}</code>\n"
+                f"   نوع: {s['type']} | آزاد: {s['free_gb']:.0f}GB از {s['total_gb']:.0f}GB\n"
+            )
+        current = (account.extra_config or {}).get("st_uuid", "تنظیم نشده")
+        lines.append(f"\n⚙️ UUID فعلی: <code>{current}</code>")
+        lines.append("\n\n🔹 UUID مورد نظر را کپی و ارسال کنید:")
+        await fetch_msg.edit_text("\n".join(lines), parse_mode="HTML", reply_markup=cancel_admin_kb())
+        await state.update_data(setup_storage_provider_id=provider_id)
+        await state.set_state(ProviderFSM.setup_storage)
+    except asyncio.TimeoutError:
+        await fetch_msg.edit_text("⏱ تایم‌اوت در اتصال به Virtualizor.")
+    except Exception as e:
+        await fetch_msg.edit_text(f"❌ خطا: {e}")
+
+
+@router.message(ProviderFSM.setup_storage)
+async def prov_storage_save(message: Message, state: FSMContext, session: AsyncSession):
+    st_uuid = message.text.strip()
+    data = await state.get_data()
+    await state.clear()
+    account = await session.get(ProviderAccount, data["setup_storage_provider_id"])
+    if not account:
+        await message.answer("سرور یافت نشد.")
+        return
+    extra = dict(account.extra_config or {})
+    extra["st_uuid"] = st_uuid
+    account.extra_config = extra
+    await session.flush()
+    await message.answer(
+        f"✅ Storage UUID ذخیره شد:\n<code>{st_uuid}</code>",
+        parse_mode="HTML",
+        reply_markup=provider_detail_kb(data["setup_storage_provider_id"], account.is_active, account.strict_kyc),
+    )
 
 
 @router.callback_query(F.data.startswith("admin:prov_del:"))

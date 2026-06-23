@@ -46,11 +46,17 @@ class ServerService:
         custom_name = hostname or f"tc-{user.telegram_id}-{int(datetime.now().timestamp())}"
         params = CreateServerParams(
             name=custom_name,
-            plan_id=plan.provider_plan_id or plan.name,
+            plan_id=plan.provider_plan_id or "",
             os_id=os_id,
             location=plan.location or "",
             hostname=custom_name,
-            extra=extra or {},
+            extra={
+                "ram": plan.ram,
+                "disk": plan.disk,
+                "cpu": plan.cpu,
+                "bandwidth": plan.bandwidth,
+                **(extra or {}),
+            },
         )
 
         info = await provider.create_server(params)

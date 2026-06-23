@@ -193,13 +193,11 @@ async def prov_add_pass(message: Message, state: FSMContext, session: AsyncSessi
 
 async def _render_provider_detail(message, account, provider_id: int):
     """Shared helper — renders provider detail message without touching cb.answer()."""
-    uid = (account.extra_config or {}).get("virtualizor_uid", "—")
     await message.edit_text(
         f"🖥 <b>{account.name}</b>\n\n"
         f"🌐 URL: <code>{account.api_endpoint}</code>\n"
         f"🔑 API Key: <code>{account.api_key}</code>\n"
         f"🔒 API Pass: <code>{'*' * 8}</code>\n"
-        f"👤 Virt User ID: <code>{uid}</code>\n"
         f"✅ وضعیت: {'فعال' if account.is_active else 'غیرفعال'}\n"
         f"🔒 Strict KYC: {'روشن' if account.strict_kyc else 'خاموش'}\n"
         f"🆔 ID: {account.id}",
@@ -252,21 +250,11 @@ async def cb_prov_edit_start(cb: CallbackQuery, state: FSMContext):
     labels = {
         "name": "نام سرور", "url": "آدرس پنل",
         "api_key": "API Key", "api_pass": "API Pass",
-        "uid": "Virtualizor User ID",
     }
-    hints = {
-        "uid": (
-            "شناسه کاربر Virtualizor که VPS‌ها زیر آن ساخته می‌شوند.\n\n"
-            "در پنل Virtualizor:\n"
-            "Users → لیست کاربران → ستون ID\n\n"
-            "⚠️ باید یک کاربر معمولی (نه admin) باشد."
-        ),
-    }
-    hint = hints.get(field, "")
     await state.update_data(edit_provider_id=provider_id, edit_field=field)
     await state.set_state(ProviderFSM.edit_value)
     await cb.message.edit_text(
-        f"✏️ <b>ویرایش {labels.get(field, field)}</b>\n\n{hint}\nمقدار جدید:".strip(),
+        f"✏️ <b>ویرایش {labels.get(field, field)}</b>\n\nمقدار جدید:",
         parse_mode="HTML", reply_markup=cancel_admin_kb(),
     )
     await cb.answer()
@@ -289,10 +277,6 @@ async def prov_edit_value(message: Message, state: FSMContext, session: AsyncSes
         account.api_key = value
     elif field == "api_pass":
         account.api_secret = value
-    elif field == "uid":
-        cfg = dict(account.extra_config or {})
-        cfg["virtualizor_uid"] = int(value)
-        account.extra_config = cfg
     await session.flush()
     await message.answer("✅ تغییر ذخیره شد.", reply_markup=provider_detail_kb(data["edit_provider_id"], account.is_active, account.strict_kyc))
 
@@ -309,18 +293,24 @@ async def cb_prov_test(cb: CallbackQuery, session: AsyncSession):
     try:
         prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
         plans = await asyncio.wait_for(prov.list_plans(), timeout=15)
-        # Try to list Virtualizor users to help admin find the correct uid
-        users_info = ""
+        # Fetch nodes and IPs for diagnostics
+        extra_info = ""
         try:
-            users = await asyncio.wait_for(prov.list_users(), timeout=10)
-            if users:
-                lines = [f"  uid={u['uid']} — {u['email'] or u['username']}" for u in users[:8]]
-                users_info = "\n\n👥 <b>کاربران Virtualizor:</b>\n" + "\n".join(lines)
-                users_info += "\n\n⬆️ User ID را کپی و از دکمه 👤 User ID تنظیم کنید."
+            nodes = await asyncio.wait_for(prov.list_nodes(), timeout=8)
+            if nodes:
+                node_lines = [f"  serid={n['serid']} — {n['name'] or n['ip']} {'✅' if n['online'] else '❌'}" for n in nodes[:5]]
+                extra_info += "\n\n🖧 <b>نودها:</b>\n" + "\n".join(node_lines)
+        except Exception:
+            pass
+        try:
+            storages = await asyncio.wait_for(prov.list_storages(), timeout=8)
+            if storages:
+                st_lines = [f"  {s['name']} ({s['free_gb']:.0f}GB آزاد) {'★' if s['is_primary'] else ''}" for s in storages[:3]]
+                extra_info += "\n\n💾 <b>استوریج‌ها:</b>\n" + "\n".join(st_lines)
         except Exception:
             pass
         await test_msg.edit_text(
-            f"✅ <b>اتصال موفق!</b>\n🖥 {account.name}\n📦 {len(plans)} پلن{users_info}",
+            f"✅ <b>اتصال موفق!</b>\n🖥 {account.name}\n📦 {len(plans)} پلن{extra_info}",
             parse_mode="HTML",
         )
     except asyncio.TimeoutError:
@@ -346,12 +336,17 @@ async def cb_prov_del_confirm(cb: CallbackQuery, session: AsyncSession):
 
 @router.callback_query(F.data.startswith("admin:prov_del_do:"))
 async def cb_prov_del_do(cb: CallbackQuery, session: AsyncSession):
+    from sqlalchemy import delete as sql_delete
     provider_id = int(cb.data.split(":")[2])
     account = await session.get(ProviderAccount, provider_id)
     if account:
+        # Delete associated plans first (cascade not set on FK)
+        await session.execute(
+            sql_delete(ServerPlan).where(ServerPlan.provider_account_id == provider_id)
+        )
         await session.delete(account)
         await session.flush()
-    await cb.message.edit_text("✅ سرور حذف شد.", reply_markup=back_to_admin_kb("admin:providers"))
+    await cb.message.edit_text("✅ سرور و محصولات مربوطه حذف شدند.", reply_markup=back_to_admin_kb("admin:providers"))
     await cb.answer()
 
 

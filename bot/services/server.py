@@ -44,6 +44,9 @@ class ServerService:
         provider = get_provider(account)
 
         custom_name = hostname or f"tc-{user.telegram_id}-{int(datetime.now().timestamp())}"
+        # Merge: account defaults → plan overrides → call-site overrides
+        provider_extra = account.extra_config or {}
+        plan_extra = plan.extra_data or {}
         params = CreateServerParams(
             name=custom_name,
             plan_id=plan.provider_plan_id or "",
@@ -55,6 +58,8 @@ class ServerService:
                 "disk": plan.disk,
                 "cpu": plan.cpu,
                 "bandwidth": plan.bandwidth,
+                **provider_extra,
+                **plan_extra,
                 **(extra or {}),
             },
         )

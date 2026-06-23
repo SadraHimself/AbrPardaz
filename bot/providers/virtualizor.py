@@ -18,6 +18,19 @@ def _make_api_pass(api_key: str, api_pass: str) -> tuple[str, str]:
     return random_key, auth_pass
 
 
+def _encode_form(params: dict) -> str:
+    """Build application/x-www-form-urlencoded string keeping [ ] unencoded.
+    PHP parses space[0][size]=20 as $_POST['space'][0]['size'] = '20'.
+    Standard urllib.parse.urlencode encodes brackets → PHP sees literal key instead of array."""
+    from urllib.parse import quote
+    parts = []
+    for k, v in params.items():
+        ek = quote(str(k), safe="[]")
+        ev = quote(str(v), safe="")
+        parts.append(f"{ek}={ev}")
+    return "&".join(parts)
+
+
 class VirtualizorProvider(BaseProvider):
     """
     Virtualizor API v2 — KVM مجازی‌ساز
@@ -35,19 +48,24 @@ class VirtualizorProvider(BaseProvider):
     async def _request(self, act: str, params: Optional[dict] = None) -> dict:
         import json as _json
         random_key, auth_pass = _make_api_pass(self.api_key, self.api_pass)
-        # Auth + act → URL query string; all other params → POST body
-        url_params = {
+
+        # Routing: act + api in URL query string (Virtualizor may read via $_GET['act']).
+        # Auth + action params: POST body with _encode_form so PHP array notation
+        # (space[0][size]) isn't percent-encoded and $_POST parses it as nested array.
+        url_qs = f"?act={act}&api=json"
+        post_params: dict = {
             "adminapikey": self.api_key,
             "adminapipass": auth_pass,
-            "act": act,
-            "api": "json",
         }
-        post_data = dict(params) if params else {}
+        if params:
+            post_params.update(params)
+        form_body = _encode_form(post_params)
 
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30, connect=5)
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
-        # Try the stored URL first, then auto-retry with http↔https if we get HTML
+        # Try stored URL first, then http↔https fallback if panel returns HTML
         candidates = [self.panel_url]
         if self.panel_url.startswith("http://"):
             candidates.append(self.panel_url.replace("http://", "https://", 1))
@@ -57,10 +75,12 @@ class VirtualizorProvider(BaseProvider):
         last_error = None
         async with aiohttp.ClientSession(connector=connector) as session:
             for base_url in candidates:
-                url = f"{base_url}/index.php"
+                url = f"{base_url}/index.php{url_qs}"
                 try:
-                    async with session.post(url, params=url_params, data=post_data, timeout=timeout, allow_redirects=False) as resp:
-                        # 302 → API credentials rejected or API not enabled
+                    async with session.post(
+                        url, data=form_body, headers=headers,
+                        timeout=timeout, allow_redirects=False,
+                    ) as resp:
                         if resp.status in (301, 302, 303):
                             location = resp.headers.get("Location", "")
                             if "login" in location:
@@ -120,20 +140,23 @@ class VirtualizorProvider(BaseProvider):
     async def create_server(self, params: CreateServerParams) -> ServerInfo:
         import asyncio as _asyncio
 
-        payload = {
+        payload: dict = {
             "hostname": params.name,
             "rootpass": params.extra.get("root_password", "TeleCloud@2024"),
             "osid": params.os_id,
             "bandwidth": params.extra.get("bandwidth", 1000),
             "ram": params.extra.get("ram", 1024),
             "cores": params.extra.get("cpu", 1),
-            # virt is REQUIRED by Virtualizor API
             "virt": params.extra.get("virt_type", "kvm"),
-            # uid: Virtualizor user who owns the VPS (1 = admin)
-            "uid": params.extra.get("virtualizor_uid", 1),
-            # auto-assign 1 IP from node pool (required by API)
             "num_ips": 1,
         }
+
+        # uid: Virtualizor user who owns the VPS. Must be a regular (non-admin) user.
+        # Admin configures this via provider extra_config → virtualizor_uid.
+        # If not set, omit uid entirely and let Virtualizor use its default.
+        uid_val = params.extra.get("virtualizor_uid")
+        if uid_val:
+            payload["uid"] = uid_val
 
         plan_id_str = str(params.plan_id).strip()
         if plan_id_str.isdigit() and int(plan_id_str) > 0:
@@ -189,9 +212,10 @@ class VirtualizorProvider(BaseProvider):
                     pass
 
         if not vpsid:
-            keys = list(data.keys())
+            import json as _json2
+            snippet = _json2.dumps({k: data[k] for k in list(data.keys())[:8]}, ensure_ascii=False)[:300]
             raise RuntimeError(
-                f"Virtualizor did not return vpsid. Response keys: {keys}"
+                f"Virtualizor did not return vpsid. Response: {snippet}"
             )
         return await self.get_server(str(vpsid))
 
@@ -283,6 +307,20 @@ class VirtualizorProvider(BaseProvider):
         data = await self._request("listos")
         os_list = data.get("ostemplates", {})
         return [{"id": oid, "name": tmpl.get("name", "")} for oid, tmpl in os_list.items()]
+
+    async def list_users(self) -> list[dict]:
+        """List Virtualizor users — admin needs this to find the correct virtualizor_uid."""
+        data = await self._request("listusers")
+        users_raw = data.get("users", {})
+        result = []
+        for uid, u in (users_raw.items() if isinstance(users_raw, dict) else []):
+            result.append({
+                "uid": str(uid),
+                "email": u.get("email", ""),
+                "username": u.get("username", u.get("email", "")),
+                "type": u.get("type", ""),
+            })
+        return result
 
     async def edit_server(self, server_id: str, ram: Optional[int] = None,
                           cpu: Optional[int] = None, disk: Optional[int] = None) -> bool:

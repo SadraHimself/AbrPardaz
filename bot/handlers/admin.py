@@ -296,19 +296,37 @@ async def cb_prov_test(cb: CallbackQuery, session: AsyncSession):
         # Fetch nodes and IPs for diagnostics
         extra_info = ""
         try:
-            nodes = await asyncio.wait_for(prov.list_nodes(), timeout=8)
+            nodes = await asyncio.wait_for(prov.list_nodes(), timeout=10)
             if nodes:
-                node_lines = [f"  serid={n['serid']} — {n['name'] or n['ip']} {'✅' if n['online'] else '❌'}" for n in nodes[:5]]
-                extra_info += "\n\n🖧 <b>نودها:</b>\n" + "\n".join(node_lines)
-        except Exception:
-            pass
+                node_lines = []
+                for n in nodes[:5]:
+                    status_icon = "✅" if n["online"] else "❌"
+                    line = f"  {status_icon} <b>{n['name'] or 'بدون نام'}</b> | IP: <code>{n['ip']}</code>"
+                    if n.get("os"):
+                        line += f"\n     OS: <code>{n['os']}</code>"
+                    if n.get("cpu"):
+                        line += f"\n     CPU: <code>{str(n['cpu'])[:50]}</code>"
+                    if n.get("cpu_load"):
+                        line += f"  Load: <code>{n['cpu_load']}</code>"
+                    if n.get("ram_total_mb"):
+                        used = n.get("ram_used_mb", 0)
+                        total = n["ram_total_mb"]
+                        line += f"\n     RAM: <code>{used:.0f}/{total:.0f} MB</code>"
+                    node_lines.append(line)
+                extra_info += "\n\n🖧 <b>سرورهای Virtualizor:</b>\n" + "\n".join(node_lines)
+            else:
+                extra_info += "\n\n🖧 <b>سرورها:</b> هیچ سروری یافت نشد"
+        except Exception as e:
+            extra_info += f"\n\n🖧 <b>سرورها — خطا:</b> <code>{e}</code>"
         try:
             storages = await asyncio.wait_for(prov.list_storages(), timeout=8)
             if storages:
                 st_lines = [f"  {s['name']} ({s['free_gb']:.0f}GB آزاد) {'★' if s['is_primary'] else ''}" for s in storages[:3]]
                 extra_info += "\n\n💾 <b>استوریج‌ها:</b>\n" + "\n".join(st_lines)
-        except Exception:
-            pass
+            else:
+                extra_info += "\n\n💾 <b>استوریج‌ها:</b> یافت نشد"
+        except Exception as e:
+            extra_info += f"\n\n💾 <b>استوریج‌ها — خطا:</b> <code>{e}</code>"
         await test_msg.edit_text(
             f"✅ <b>اتصال موفق!</b>\n🖥 {account.name}\n📦 {len(plans)} پلن{extra_info}",
             parse_mode="HTML",

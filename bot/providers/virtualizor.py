@@ -115,6 +115,8 @@ class VirtualizorProvider(BaseProvider):
     # ── BaseProvider implementation ───────────────────────────────────────────
 
     async def create_server(self, params: CreateServerParams) -> ServerInfo:
+        import asyncio as _asyncio
+
         payload = {
             "hostname": params.name,
             "rootpass": params.extra.get("root_password", "TeleCloud@2024"),
@@ -124,12 +126,10 @@ class VirtualizorProvider(BaseProvider):
             "space": params.extra.get("disk", 20),
             "cores": params.extra.get("cpu", 1),
         }
-        # Only send plid if it's a valid numeric plan ID
+
         plan_id_str = str(params.plan_id).strip()
         if plan_id_str.isdigit() and int(plan_id_str) > 0:
             payload["plid"] = int(plan_id_str)
-        else:
-            payload["plid"] = 0
 
         node_id = params.extra.get("node_id")
         if node_id:
@@ -137,18 +137,44 @@ class VirtualizorProvider(BaseProvider):
 
         data = await self._request("addvs", payload)
 
-        # Handle different Virtualizor response formats
+        # Extract vpsid — Virtualizor has several response formats
         addvs_raw = data.get("addvs")
         vpsid = None
+        taskid = None
+
         if isinstance(addvs_raw, dict):
             vpsid = addvs_raw.get("vpsid")
+            taskid = addvs_raw.get("taskid")
         elif isinstance(addvs_raw, (int, float)) and addvs_raw:
             vpsid = int(addvs_raw)
-        if not vpsid:
-            vpsid = data.get("vpsid")
 
         if not vpsid:
-            raise RuntimeError("Virtualizor did not return vpsid after create")
+            vpsid = data.get("vpsid")
+        if not taskid:
+            taskid = data.get("taskid")
+
+        # Async creation — poll task until vpsid appears (max 90 sec)
+        if not vpsid and taskid:
+            for _ in range(18):
+                await _asyncio.sleep(5)
+                try:
+                    t_data = await self._request("listtasks", {"taskid": taskid})
+                    tasks = t_data.get("tasks", {})
+                    for task in tasks.values():
+                        tid_vps = (task.get("data") or {}).get("vpsid") or task.get("vpsid")
+                        if tid_vps:
+                            vpsid = tid_vps
+                            break
+                    if vpsid:
+                        break
+                except Exception:
+                    pass
+
+        if not vpsid:
+            keys = list(data.keys())
+            raise RuntimeError(
+                f"Virtualizor did not return vpsid. Response keys: {keys}"
+            )
         return await self.get_server(str(vpsid))
 
     async def delete_server(self, server_id: str) -> bool:

@@ -85,6 +85,12 @@ class User(Base):
     # Terms acceptance
     terms_accepted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
+    # Contact info (used to create Virtualizor user accounts)
+    email: Mapped[Optional[str]] = mapped_column(String(255))
+
+    # Per-provider state: {"virt_uids": {"<provider_account_id>": <uid>}}
+    extra_data: Mapped[Optional[dict]] = mapped_column(JSON)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), onupdate=func.now())
 

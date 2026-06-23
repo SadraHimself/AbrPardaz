@@ -192,6 +192,31 @@ async def prov_add_pass(message: Message, state: FSMContext, session: AsyncSessi
     )
 
 
+async def _render_provider_detail(message, account, provider_id: int):
+    """Shared helper — renders provider detail message without touching cb.answer()."""
+    masked = "*" * 8
+    extra = account.extra_config or {}
+    st_line = (
+        f"💾 Storage UUID: <code>{extra['st_uuid']}</code>\n"
+        if extra.get("st_uuid")
+        else "💾 Storage UUID: <i>auto (از primary Virtualizor)</i>\n"
+    )
+    virt = extra.get("virt_type", "kvm")
+    await message.edit_text(
+        f"🖥 <b>{account.name}</b>\n\n"
+        f"🌐 URL: <code>{account.api_endpoint}</code>\n"
+        f"🔑 API Key: <code>{account.api_key}</code>\n"
+        f"🔒 API Pass: <code>{'*' * 8}</code>\n"
+        f"✅ وضعیت: {'فعال' if account.is_active else 'غیرفعال'}\n"
+        f"🔒 Strict KYC: {'روشن' if account.strict_kyc else 'خاموش'}\n"
+        f"{st_line}"
+        f"🖥 Virt: <code>{virt}</code>\n"
+        f"🆔 ID: {account.id}",
+        parse_mode="HTML",
+        reply_markup=provider_detail_kb(provider_id, account.is_active, account.strict_kyc),
+    )
+
+
 @router.callback_query(F.data.startswith("admin:prov:"))
 async def cb_prov_detail(cb: CallbackQuery, session: AsyncSession):
     provider_id = int(cb.data.split(":")[2])
@@ -199,27 +224,8 @@ async def cb_prov_detail(cb: CallbackQuery, session: AsyncSession):
     if not account:
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
-    masked = "*" * 8
-    extra = account.extra_config or {}
-    st_uuid_line = f"💾 Storage UUID: <code>{extra['st_uuid']}</code>\n" if extra.get("st_uuid") else "💾 Storage UUID: <i>تنظیم نشده</i>\n"
-    virt_line = f"🖥 Virt Type: <code>{extra.get('virt_type', 'kvm (پیش‌فرض)')}</code>\n"
-    await cb.message.edit_text(
-        f"🖥 <b>{account.name}</b>\n\n"
-        f"🌐 URL: <code>{account.api_endpoint}</code>\n"
-        f"🔑 API Key: <code>{account.api_key}</code>\n"
-        f"🔒 API Pass: <code>{masked}</code>\n"
-        f"✅ وضعیت: {'فعال' if account.is_active else 'غیرفعال'}\n"
-        f"🔒 Strict KYC: {'روشن' if account.strict_kyc else 'خاموش'}\n"
-        + st_uuid_line + virt_line
-        + f"🆔 ID: {account.id}",
-        parse_mode="HTML",
-        reply_markup=provider_detail_kb(provider_id, account.is_active, account.strict_kyc),
-    )
-    # cb may already be answered if called internally from toggle/kyc handlers
-    try:
-        await cb.answer()
-    except Exception:
-        pass
+    await _render_provider_detail(cb.message, account, provider_id)
+    await cb.answer()
 
 
 @router.callback_query(F.data.startswith("admin:prov_toggle:"))
@@ -232,8 +238,7 @@ async def cb_prov_toggle(cb: CallbackQuery, session: AsyncSession):
     account.is_active = not account.is_active
     await session.flush()
     await cb.answer(f"{'✅ فعال' if account.is_active else '❌ غیرفعال'} شد.")
-    cb.data = f"admin:prov:{provider_id}"
-    await cb_prov_detail(cb, session)
+    await _render_provider_detail(cb.message, account, provider_id)
 
 
 @router.callback_query(F.data.startswith("admin:prov_kyc:"))
@@ -246,8 +251,7 @@ async def cb_prov_kyc_toggle(cb: CallbackQuery, session: AsyncSession):
     account.strict_kyc = not account.strict_kyc
     await session.flush()
     await cb.answer(f"Strict KYC {'روشن' if account.strict_kyc else 'خاموش'} شد.")
-    cb.data = f"admin:prov:{provider_id}"
-    await cb_prov_detail(cb, session)
+    await _render_provider_detail(cb.message, account, provider_id)
 
 
 @router.callback_query(F.data.startswith("admin:prov_edit:"))

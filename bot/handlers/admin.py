@@ -193,11 +193,13 @@ async def prov_add_pass(message: Message, state: FSMContext, session: AsyncSessi
 
 async def _render_provider_detail(message, account, provider_id: int):
     """Shared helper — renders provider detail message without touching cb.answer()."""
+    uid = (account.extra_config or {}).get("virtualizor_uid", "—")
     await message.edit_text(
         f"🖥 <b>{account.name}</b>\n\n"
         f"🌐 URL: <code>{account.api_endpoint}</code>\n"
         f"🔑 API Key: <code>{account.api_key}</code>\n"
         f"🔒 API Pass: <code>{'*' * 8}</code>\n"
+        f"👤 Virt User ID: <code>{uid}</code>\n"
         f"✅ وضعیت: {'فعال' if account.is_active else 'غیرفعال'}\n"
         f"🔒 Strict KYC: {'روشن' if account.strict_kyc else 'خاموش'}\n"
         f"🆔 ID: {account.id}",
@@ -247,11 +249,24 @@ async def cb_prov_kyc_toggle(cb: CallbackQuery, session: AsyncSession):
 async def cb_prov_edit_start(cb: CallbackQuery, state: FSMContext):
     parts = cb.data.split(":")
     provider_id, field = int(parts[2]), parts[3]
-    labels = {"name": "نام سرور", "url": "آدرس پنل", "api_key": "API Key", "api_pass": "API Pass"}
+    labels = {
+        "name": "نام سرور", "url": "آدرس پنل",
+        "api_key": "API Key", "api_pass": "API Pass",
+        "uid": "Virtualizor User ID",
+    }
+    hints = {
+        "uid": (
+            "شناسه کاربر Virtualizor که VPS‌ها زیر آن ساخته می‌شوند.\n\n"
+            "در پنل Virtualizor:\n"
+            "Users → لیست کاربران → ستون ID\n\n"
+            "⚠️ باید یک کاربر معمولی (نه admin) باشد."
+        ),
+    }
+    hint = hints.get(field, "")
     await state.update_data(edit_provider_id=provider_id, edit_field=field)
     await state.set_state(ProviderFSM.edit_value)
     await cb.message.edit_text(
-        f"✏️ <b>ویرایش {labels.get(field, field)}</b>\n\nمقدار جدید:",
+        f"✏️ <b>ویرایش {labels.get(field, field)}</b>\n\n{hint}\nمقدار جدید:".strip(),
         parse_mode="HTML", reply_markup=cancel_admin_kb(),
     )
     await cb.answer()
@@ -274,6 +289,10 @@ async def prov_edit_value(message: Message, state: FSMContext, session: AsyncSes
         account.api_key = value
     elif field == "api_pass":
         account.api_secret = value
+    elif field == "uid":
+        cfg = dict(account.extra_config or {})
+        cfg["virtualizor_uid"] = int(value)
+        account.extra_config = cfg
     await session.flush()
     await message.answer("✅ تغییر ذخیره شد.", reply_markup=provider_detail_kb(data["edit_provider_id"], account.is_active, account.strict_kyc))
 
@@ -290,8 +309,18 @@ async def cb_prov_test(cb: CallbackQuery, session: AsyncSession):
     try:
         prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
         plans = await asyncio.wait_for(prov.list_plans(), timeout=15)
+        # Try to list Virtualizor users to help admin find the correct uid
+        users_info = ""
+        try:
+            users = await asyncio.wait_for(prov.list_users(), timeout=10)
+            if users:
+                lines = [f"  uid={u['uid']} — {u['email'] or u['username']}" for u in users[:8]]
+                users_info = "\n\n👥 <b>کاربران Virtualizor:</b>\n" + "\n".join(lines)
+                users_info += "\n\n⬆️ User ID را کپی و از دکمه 👤 User ID تنظیم کنید."
+        except Exception:
+            pass
         await test_msg.edit_text(
-            f"✅ <b>اتصال موفق!</b>\n🖥 {account.name}\n📦 {len(plans)} پلن",
+            f"✅ <b>اتصال موفق!</b>\n🖥 {account.name}\n📦 {len(plans)} پلن{users_info}",
             parse_mode="HTML",
         )
     except asyncio.TimeoutError:

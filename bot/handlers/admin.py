@@ -210,12 +210,16 @@ async def cb_prov_detail(cb: CallbackQuery, session: AsyncSession):
         f"🔒 API Pass: <code>{masked}</code>\n"
         f"✅ وضعیت: {'فعال' if account.is_active else 'غیرفعال'}\n"
         f"🔒 Strict KYC: {'روشن' if account.strict_kyc else 'خاموش'}\n"
-        + st_uuid_line + virt_line +
-        f"🆔 ID: {account.id}",
+        + st_uuid_line + virt_line
+        + f"🆔 ID: {account.id}",
         parse_mode="HTML",
         reply_markup=provider_detail_kb(provider_id, account.is_active, account.strict_kyc),
     )
-    await cb.answer()
+    # cb may already be answered if called internally from toggle/kyc handlers
+    try:
+        await cb.answer()
+    except Exception:
+        pass
 
 
 @router.callback_query(F.data.startswith("admin:prov_toggle:"))

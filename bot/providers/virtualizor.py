@@ -135,19 +135,19 @@ class VirtualizorProvider(BaseProvider):
             "num_ips": 1,
         }
 
-        # space must be array format: space[0][size]=X&space[0][st_uuid]=Y
-        # When st_uuid is provided, use proper format; otherwise omit and let plan handle it
-        st_uuid = params.extra.get("st_uuid")
-        if st_uuid:
-            payload["space[0][size]"] = params.extra.get("disk", 20)
-            payload["space[0][st_uuid]"] = st_uuid
-        else:
-            # Fallback: send as plain int — plan (plid) should define storage
-            payload["space"] = params.extra.get("disk", 20)
-
         plan_id_str = str(params.plan_id).strip()
         if plan_id_str.isdigit() and int(plan_id_str) > 0:
             payload["plid"] = int(plan_id_str)
+
+        # Storage: explicit override > primary storage from Virtualizor > size-only fallback
+        st_uuid = params.extra.get("st_uuid") or await self.get_primary_storage_uuid()
+        disk_gb = params.extra.get("disk", 20)
+        if st_uuid:
+            payload["space[0][size]"] = disk_gb
+            payload["space[0][st_uuid]"] = st_uuid
+        else:
+            # Virtualizor should use its own default; send just size
+            payload["space[0][size]"] = disk_gb
 
         node_id = params.extra.get("node_id")
         if node_id:
@@ -238,7 +238,7 @@ class VirtualizorProvider(BaseProvider):
         return used_bytes / (1024 ** 3)
 
     async def list_storages(self) -> list[dict]:
-        data = await self._request("liststorages")
+        data = await self._request("storage")
         storage_raw = data.get("storage", {})
         result = []
         for stid, st in storage_raw.items():
@@ -249,8 +249,20 @@ class VirtualizorProvider(BaseProvider):
                 "free_gb": float(st.get("free", 0)),
                 "total_gb": float(st.get("size", 0)),
                 "type": st.get("type", ""),
+                "is_primary": str(st.get("primary_storage", "0")) == "1",
             })
         return result
+
+    async def get_primary_storage_uuid(self) -> Optional[str]:
+        """Return st_uuid of the primary/default storage, or None on failure."""
+        try:
+            storages = await self.list_storages()
+            primary = next((s for s in storages if s["is_primary"]), None)
+            if not primary and storages:
+                primary = storages[0]  # fallback to first
+            return primary["st_uuid"] if primary else None
+        except Exception:
+            return None
 
     async def list_plans(self, location: Optional[str] = None) -> list[PlanInfo]:
         data = await self._request("listplans")

@@ -49,23 +49,22 @@ class VirtualizorProvider(BaseProvider):
         import json as _json
         random_key, auth_pass = _make_api_pass(self.api_key, self.api_pass)
 
-        # Routing: act + api in URL query string (Virtualizor may read via $_GET['act']).
-        # Auth + action params: POST body with _encode_form so PHP array notation
-        # (space[0][size]) isn't percent-encoded and $_POST parses it as nested array.
-        url_qs = f"?act={act}&api=json"
-        post_params: dict = {
+        # Auth + routing → URL query string (Virtualizor reads $_GET for adminapikey/pass).
+        # Action params → POST body; _encode_form keeps brackets unencoded so PHP
+        # parses space[0][size]=20 as $_POST['space'][0]['size'], not a literal key.
+        url_params = {
             "adminapikey": self.api_key,
             "adminapipass": auth_pass,
+            "act": act,
+            "api": "json",
         }
-        if params:
-            post_params.update(params)
+        post_params = dict(params) if params else {}
         form_body = _encode_form(post_params)
 
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30, connect=5)
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
-        # Try stored URL first, then http↔https fallback if panel returns HTML
         candidates = [self.panel_url]
         if self.panel_url.startswith("http://"):
             candidates.append(self.panel_url.replace("http://", "https://", 1))
@@ -75,10 +74,10 @@ class VirtualizorProvider(BaseProvider):
         last_error = None
         async with aiohttp.ClientSession(connector=connector) as session:
             for base_url in candidates:
-                url = f"{base_url}/index.php{url_qs}"
+                url = f"{base_url}/index.php"
                 try:
                     async with session.post(
-                        url, data=form_body, headers=headers,
+                        url, params=url_params, data=form_body, headers=headers,
                         timeout=timeout, allow_redirects=False,
                     ) as resp:
                         if resp.status in (301, 302, 303):
@@ -309,7 +308,7 @@ class VirtualizorProvider(BaseProvider):
         return [{"id": oid, "name": tmpl.get("name", "")} for oid, tmpl in os_list.items()]
 
     async def list_users(self) -> list[dict]:
-        """List Virtualizor users — admin needs this to find the correct virtualizor_uid."""
+        """List Virtualizor users."""
         data = await self._request("listusers")
         users_raw = data.get("users", {})
         result = []
@@ -321,6 +320,37 @@ class VirtualizorProvider(BaseProvider):
                 "type": u.get("type", ""),
             })
         return result
+
+    async def create_user(self, email: str, password: str) -> int:
+        """Create a Virtualizor user account. Returns the new user's uid."""
+        username = email.split("@")[0]
+        data = await self._request("adduser", {
+            "email": email,
+            "fname": username,
+            "lname": "User",
+            "pass": password,
+            "type": "0",
+        })
+        # Response varies by Virtualizor version
+        uid = (
+            data.get("uid")
+            or (data.get("adduser") or {}).get("uid")
+            or (data.get("title") or {}).get("uid")
+        )
+        if not uid:
+            raise RuntimeError(f"Virtualizor adduser failed: {list(data.keys())}")
+        return int(uid)
+
+    async def find_user_by_email(self, email: str) -> Optional[int]:
+        """Find a Virtualizor user by email. Returns uid or None."""
+        try:
+            users = await self.list_users()
+            for u in users:
+                if u.get("email", "").lower() == email.lower():
+                    return int(u["uid"])
+        except Exception:
+            pass
+        return None
 
     async def edit_server(self, server_id: str, ram: Optional[int] = None,
                           cpu: Optional[int] = None, disk: Optional[int] = None) -> bool:

@@ -286,18 +286,27 @@ class VirtualizorProvider(BaseProvider):
         return used_bytes / (1024 ** 3)
 
     async def list_nodes(self) -> list[dict]:
-        """Return available nodes/servers with their serid."""
+        """Return available nodes/servers with hardware details."""
         data = await self._request("servers")
         raw = data.get("servs") or data.get("servers") or {}
         if not isinstance(raw, dict):
             return []
         result = []
         for sid, s in raw.items():
+            ram_total = float(s.get("ram", 0) or 0)
+            ram_used = float(s.get("ram_used", 0) or 0)
             result.append({
                 "serid": int(sid),
                 "name": s.get("server_name", ""),
                 "ip": s.get("ip", ""),
                 "online": str(s.get("status", "1")) == "1",
+                "os": s.get("os", "") or s.get("kernel", ""),
+                "cpu": s.get("cpu", "") or s.get("cpu_model", ""),
+                "cpu_load": s.get("cpu_load", "") or s.get("load", ""),
+                "ram_total_mb": ram_total,
+                "ram_used_mb": ram_used,
+                "hdd": s.get("hdd", "") or s.get("disks", ""),
+                "virt_type": s.get("virt", "") or s.get("virt_type", ""),
             })
         return result
 

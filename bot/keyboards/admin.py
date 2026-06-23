@@ -41,7 +41,6 @@ def provider_detail_kb(provider_id: int, is_active: bool = True, strict_kyc: boo
     builder.button(text="✏️ API Key", callback_data=f"admin:prov_edit:{provider_id}:api_key")
     builder.button(text="✏️ API Pass", callback_data=f"admin:prov_edit:{provider_id}:api_pass")
     builder.button(text="🔌 تست اتصال", callback_data=f"admin:prov_test:{provider_id}")
-    builder.button(text="💾 تنظیم Storage", callback_data=f"admin:prov_storage:{provider_id}")
     kyc_text = "🔒 KYC: روشن" if strict_kyc else "🔓 KYC: خاموش"
     builder.button(text=kyc_text, callback_data=f"admin:prov_kyc:{provider_id}")
     toggle_text = "🔴 غیرفعال" if is_active else "🟢 فعال"

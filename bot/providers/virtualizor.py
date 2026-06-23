@@ -139,6 +139,25 @@ class VirtualizorProvider(BaseProvider):
     async def create_server(self, params: CreateServerParams) -> ServerInfo:
         import asyncio as _asyncio
 
+        # ── node_select: required — must specify which server/node to create VPS on
+        node_id = params.extra.get("node_id") or params.extra.get("serid")
+        if not node_id:
+            node_id = await self._get_default_node()
+
+        # ── storage: required — must have st_uuid
+        st_uuid = params.extra.get("st_uuid") or await self.get_primary_storage_uuid()
+        disk_gb = params.extra.get("disk", 20)
+
+        # ── IPs: fetch one free IP from the node's pool
+        ip_to_assign = None
+        if node_id is not None:
+            try:
+                free_ips = await self.list_ips(int(node_id))
+                if free_ips:
+                    ip_to_assign = free_ips[0]
+            except Exception:
+                pass
+
         payload: dict = {
             "hostname": params.name,
             "rootpass": params.extra.get("root_password", "TeleCloud@2024"),
@@ -147,33 +166,39 @@ class VirtualizorProvider(BaseProvider):
             "ram": params.extra.get("ram", 1024),
             "cores": params.extra.get("cpu", 1),
             "virt": params.extra.get("virt_type", "kvm"),
-            "num_ips": 1,
         }
 
-        # uid: Virtualizor user who owns the VPS. Must be a regular (non-admin) user.
-        # Admin configures this via provider extra_config → virtualizor_uid.
-        # If not set, omit uid entirely and let Virtualizor use its default.
+        # node_select is required by Virtualizor API
+        if node_id is not None:
+            payload["node_select"] = int(node_id)
+
+        # user: uid=0 + email/pass → Virtualizor creates user inline (PHP SDK approach)
         uid_val = params.extra.get("virtualizor_uid")
+        user_email = params.extra.get("user_email")
         if uid_val:
             payload["uid"] = uid_val
+        elif user_email:
+            payload["uid"] = 0
+            payload["user_email"] = user_email
+            payload["user_pass"] = params.extra.get("user_pass", user_email)
 
+        # plan ID
         plan_id_str = str(params.plan_id).strip()
         if plan_id_str.isdigit() and int(plan_id_str) > 0:
             payload["plid"] = int(plan_id_str)
 
-        # Storage: explicit override > primary storage from Virtualizor > size-only fallback
-        st_uuid = params.extra.get("st_uuid") or await self.get_primary_storage_uuid()
-        disk_gb = params.extra.get("disk", 20)
+        # IPs: use specific IP if available, else ask for 1 from pool
+        if ip_to_assign:
+            payload["ips[0]"] = ip_to_assign
+        else:
+            payload["num_ips"] = 1
+
+        # disk space
         if st_uuid:
             payload["space[0][size]"] = disk_gb
             payload["space[0][st_uuid]"] = st_uuid
         else:
-            # Virtualizor should use its own default; send just size
             payload["space[0][size]"] = disk_gb
-
-        node_id = params.extra.get("node_id")
-        if node_id:
-            payload["node_select"] = node_id
 
         data = await self._request("addvs", payload)
 
@@ -260,6 +285,45 @@ class VirtualizorProvider(BaseProvider):
         used_bytes = float(stats.get("tx_bytes", 0)) + float(stats.get("rx_bytes", 0))
         return used_bytes / (1024 ** 3)
 
+    async def list_nodes(self) -> list[dict]:
+        """Return available nodes/servers with their serid."""
+        data = await self._request("servers")
+        raw = data.get("servs") or data.get("servers") or {}
+        if not isinstance(raw, dict):
+            return []
+        result = []
+        for sid, s in raw.items():
+            result.append({
+                "serid": int(sid),
+                "name": s.get("server_name", ""),
+                "ip": s.get("ip", ""),
+                "online": str(s.get("status", "1")) == "1",
+            })
+        return result
+
+    async def _get_default_node(self) -> Optional[int]:
+        """Return serid of first online node."""
+        try:
+            nodes = await self.list_nodes()
+            online = [n for n in nodes if n["online"]]
+            if online:
+                return online[0]["serid"]
+            if nodes:
+                return nodes[0]["serid"]
+        except Exception:
+            pass
+        return None
+
+    async def list_ips(self, serid: int = 0) -> list[str]:
+        """Return available (unassigned) IPs for a node."""
+        data = await self._request("ips", {"serid": serid})
+        ips_raw = data.get("ips") or data.get("freeips") or {}
+        if isinstance(ips_raw, dict):
+            return [ip.get("ip", k) for k, ip in ips_raw.items() if not ip.get("vpsid")]
+        if isinstance(ips_raw, list):
+            return [i if isinstance(i, str) else i.get("ip", "") for i in ips_raw]
+        return []
+
     async def list_storages(self) -> list[dict]:
         data = await self._request("storage")
         storage_raw = data.get("storage", {})
@@ -289,7 +353,9 @@ class VirtualizorProvider(BaseProvider):
 
     async def list_plans(self, location: Optional[str] = None) -> list[PlanInfo]:
         data = await self._request("listplans")
-        plans_raw = data.get("plans", {})
+        plans_raw = data.get("plans") or data.get("plansdata") or {}
+        if not isinstance(plans_raw, dict):
+            plans_raw = {}
         plans = []
         for pid, plan in plans_raw.items():
             plans.append(PlanInfo(

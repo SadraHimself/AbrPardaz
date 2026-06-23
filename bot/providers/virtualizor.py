@@ -35,17 +35,17 @@ class VirtualizorProvider(BaseProvider):
     async def _request(self, act: str, params: Optional[dict] = None) -> dict:
         import json as _json
         random_key, auth_pass = _make_api_pass(self.api_key, self.api_pass)
-        base_params = {
+        # Auth + act → URL query string; all other params → POST body
+        url_params = {
             "adminapikey": self.api_key,
             "adminapipass": auth_pass,
             "act": act,
             "api": "json",
         }
-        if params:
-            base_params.update(params)
+        post_data = dict(params) if params else {}
 
         connector = aiohttp.TCPConnector(ssl=False)
-        timeout = aiohttp.ClientTimeout(total=12, connect=5)
+        timeout = aiohttp.ClientTimeout(total=30, connect=5)
 
         # Try the stored URL first, then auto-retry with http↔https if we get HTML
         candidates = [self.panel_url]
@@ -59,7 +59,7 @@ class VirtualizorProvider(BaseProvider):
             for base_url in candidates:
                 url = f"{base_url}/index.php"
                 try:
-                    async with session.get(url, params=base_params, timeout=timeout, allow_redirects=False) as resp:
+                    async with session.post(url, params=url_params, data=post_data, timeout=timeout, allow_redirects=False) as resp:
                         # 302 → API credentials rejected or API not enabled
                         if resp.status in (301, 302, 303):
                             location = resp.headers.get("Location", "")

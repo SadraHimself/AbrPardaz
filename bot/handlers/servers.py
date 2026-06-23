@@ -35,6 +35,7 @@ class BuyServerStates(StatesGroup):
     entering_hostname = State()
     selecting_os = State()
     entering_discount = State()
+    entering_email = State()
     confirming = State()
 
 
@@ -497,10 +498,39 @@ async def _ask_discount(cb: CallbackQuery, state: FSMContext):
     )
 
 
+async def _ask_email_or_confirm(msg, state: FSMContext, session, user: User, from_message=False):
+    """If user has no email, collect it; otherwise go straight to confirmation."""
+    if user.email:
+        await _show_confirm(msg, state, session, from_message=from_message)
+    else:
+        await state.set_state(BuyServerStates.entering_email)
+        text = (
+            "📧 <b>ایمیل شما</b>\n\n"
+            "برای ساخت سرور، ایمیل خود را وارد کنید.\n"
+            "این ایمیل برای ورود به پنل مدیریت سرور (Virtualizor) استفاده می‌شود."
+        )
+        if from_message:
+            await msg.answer(text, parse_mode="HTML")
+        else:
+            await msg.edit_text(text, parse_mode="HTML")
+
+
+@router.message(BuyServerStates.entering_email)
+async def msg_enter_email(message: Message, user: User, state: FSMContext, session: AsyncSession):
+    import re
+    email = message.text.strip().lower()
+    if not re.match(r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$', email):
+        await message.answer("❌ ایمیل نامعتبر است. لطفاً یک ایمیل معتبر وارد کنید:")
+        return
+    user.email = email
+    await session.flush()
+    await _show_confirm(message, state, session, from_message=True)
+
+
 @router.callback_query(BuyServerStates.entering_discount, F.data == "buydisc:skip")
-async def cb_discount_skip(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
+async def cb_discount_skip(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
     await state.update_data(discount_id=None, discount_percent=0)
-    await _show_confirm(cb.message, state, session, user_balance_tg_id=None)
+    await _ask_email_or_confirm(cb.message, state, session, user)
     await cb.answer()
 
 
@@ -510,7 +540,7 @@ async def msg_discount_code(message: Message, user: User, state: FSMContext, ses
 
     if raw in ("/SKIP", "SKIP"):
         await state.update_data(discount_id=None, discount_percent=0)
-        await _show_confirm(message, state, session, from_message=True)
+        await _ask_email_or_confirm(message, state, session, user, from_message=True)
         return
 
     now = datetime.now(timezone.utc)
@@ -534,7 +564,7 @@ async def msg_discount_code(message: Message, user: User, state: FSMContext, ses
 
     await state.update_data(discount_id=code.id, discount_percent=code.discount_percent)
     await message.answer(f"✅ کد تخفیف <b>{code.code}</b> — {code.discount_percent:.0f}% اعمال شد!", parse_mode="HTML")
-    await _show_confirm(message, state, session, from_message=True)
+    await _ask_email_or_confirm(message, state, session, user, from_message=True)
 
 
 async def _show_confirm(msg, state: FSMContext, session, from_message=False, user_balance_tg_id=None):

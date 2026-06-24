@@ -105,21 +105,37 @@ class VirtualizorProvider(BaseProvider):
 
         raise RuntimeError(last_error or "اتصال به Virtualizor ناموفق بود")
 
-    @staticmethod
-    def _running_flag(vs: dict) -> str:
+    # Power-state vocabularies — Virtualizor reports the running state as either a
+    # number (1/0/2) OR a string ("online"/"offline"/...). The old code only matched
+    # the literal "1", so a string like "online" was read as "0" → a running VM showed
+    # as offline/red. These sets make the check value-format agnostic.
+    _ON_WORDS = {"1", "online", "running", "on", "up", "active", "started", "poweron", "power on"}
+    _OFF_WORDS = {"0", "2", "offline", "off", "down", "stopped", "shutoff", "shut off",
+                  "halted", "poweroff", "power off", "suspended", "disabled"}
+
+    @classmethod
+    def _running_flag(cls, vs: dict) -> str:
         """Resolve the live power state to "1" (running) / "0" (off) / "" (unknown).
 
-        Different Virtualizor versions expose the running state under different
-        keys. Prefer `machine_status`, then `vps_status`, then fall back to the
-        generic `status` field — this is why a running VM could read as "off"
-        before (only `machine_status` was checked, and this panel may not set it)."""
-        for key in ("machine_status", "vps_status"):
-            v = vs.get(key)
-            if v is not None and str(v) != "":
-                return "1" if str(v) == "1" else "0"
-        v = vs.get("status")
-        if v is not None and str(v) != "":
-            return "1" if str(v) == "1" else "0"
+        Checks every key Virtualizor might use for power state, accepting both
+        numeric and string forms."""
+        for key in ("vps_status", "machine_status", "vm_status", "power_status", "status"):
+            if key not in vs:
+                continue
+            raw = vs.get(key)
+            if raw is None:
+                continue
+            s = str(raw).strip().lower()
+            if not s:
+                continue
+            if s in cls._ON_WORDS:
+                return "1"
+            if s in cls._OFF_WORDS:
+                return "0"
+            try:
+                return "1" if int(float(s)) == 1 else "0"
+            except (ValueError, TypeError):
+                continue
         return ""
 
     @classmethod
@@ -185,16 +201,6 @@ class VirtualizorProvider(BaseProvider):
         if not str(os_id_val).strip().isdigit():
             os_id_val = params.extra.get("osid", os_id_val)
 
-        # Virtualizor VNC password rules: alphanumeric only ("No Non-Alphanumeric
-        # characters are allowed") AND max 8 chars (VNC protocol limit — longer values
-        # fail with "VNC password length too long than supported"). Sanitize any provided
-        # value to alphanumeric and cap at 8; otherwise generate a random 8-char one.
-        import secrets as _secrets
-        import string as _string
-        vnc_pass = "".join(c for c in str(params.extra.get("vnc_pass") or "") if c.isalnum())[:8]
-        if not vnc_pass:
-            vnc_pass = "".join(_secrets.choice(_string.ascii_letters + _string.digits) for _ in range(8))
-
         payload: dict = {
             # Submit trigger: the documented field is `addvps=1` ("If set the vps will
             # be created" — official Create VPS docs). Without it, act=addvs only loads
@@ -218,8 +224,7 @@ class VirtualizorProvider(BaseProvider):
             "network_speed": params.extra.get("network_speed", 0),
             "num_ips6": 0,
             "num_ips6_subnet": 0,
-            "vnc": 1,
-            "vncpass": vnc_pass,  # alphanumeric only — Virtualizor rejects special chars
+            "vnc": 0,  # VNC disabled — the bot no longer exposes a VNC console
         }
 
         if node_id is not None:
@@ -364,7 +369,22 @@ class VirtualizorProvider(BaseProvider):
         vs_list = data.get("vs", {}) or {}
         if not vs_list:
             raise RuntimeError(f"Server {server_id} not found")
-        vs = vs_list.get(str(server_id)) or next(iter(vs_list.values()))
+        vs = dict(vs_list.get(str(server_id)) or next(iter(vs_list.values())))
+
+        # Some Virtualizor versions return the live power state in a parallel map
+        # keyed by vpsid (e.g. {"status": {"123": {"status": "online"}}}) instead of
+        # inside the vps object. Merge it in so _running_flag can see it.
+        for skey in ("status", "vs_status", "vpses_status", "vps_status"):
+            smap = data.get(skey)
+            if not isinstance(smap, dict):
+                continue
+            sval = smap.get(str(server_id)) or smap.get(str(vs.get("vpsid", "")))
+            if isinstance(sval, dict):
+                vs.update({k: v for k, v in sval.items()
+                           if k in ("status", "vps_status", "vm_status", "power_status")})
+            elif sval is not None and "vps_status" not in vs:
+                vs["vps_status"] = sval
+
         return self._parse_vs(vs)
 
     async def start_server(self, server_id: str) -> bool:
@@ -398,10 +418,15 @@ class VirtualizorProvider(BaseProvider):
         return float(vs.get("used_bandwidth", 0) or 0)
 
     async def rebuild_server(self, server_id: str, os_id: str, rootpass: str = "") -> bool:
-        # vpsid in URL query; editvps=1 submit trigger + conf=1 for rebuild confirmation
-        payload: dict = {"editvps": 1, "newos": os_id, "conf": "1"}
+        # The OS reinstall lives on the Manage VPS page (act=managevps), but its submit
+        # trigger is `reos=1`, NOT `editvps=1`. The old code used `editvps=1 + newos`,
+        # which only EDITS settings (the recorded OS / root password) without ever
+        # reinstalling the disk — that is the "rebuild just changed the password" bug.
+        # `reos=1` is the actual "Reinstall OS" trigger. vpsid goes in the URL query.
+        payload: dict = {"reos": 1, "newos": os_id}
         if rootpass:
-            payload["rootpass"] = rootpass
+            payload["newpass"] = rootpass
+            payload["conf"] = rootpass          # confirm-password field must equal newpass
         data = await self._request("managevps", payload, query={"vpsid": server_id})
         done_val = data.get("done")
         return bool(done_val) if not isinstance(done_val, dict) else bool(done_val.get("done"))
@@ -638,31 +663,3 @@ class VirtualizorProvider(BaseProvider):
         done_val = data.get("done")
         return bool(done_val) if not isinstance(done_val, dict) else bool(done_val.get("done"))
 
-    async def get_vnc(self, server_id: str) -> dict:
-        # VNC Info API (admin): act=vnc with novnc=<VPSID> in the POST body.
-        # The response is a FLAT object — {"port":"5951","ip":"x.x.x.x",
-        # "password":"....","novnc":1} — where `novnc` is just a flag (1), NOT a
-        # nested dict. Reading data["novnc"] therefore returned the integer 1 and
-        # the screen came back empty; read the fields off the top level instead.
-        data = await self._request("vnc", {"novnc": server_id}, query={"vpsid": server_id})
-        src = data.get("vnc") if isinstance(data.get("vnc"), dict) else data
-        return {
-            "host": src.get("ip") or src.get("host") or "",
-            "port": src.get("port") or src.get("vncport") or "",
-            "password": (
-                src.get("password") or src.get("passwd")
-                or src.get("vnc_passwd") or src.get("vncpass") or ""
-            ),
-            # If the panel ever hands back a ready-made link/token, use it directly.
-            "url": src.get("url") or data.get("url") or "",
-            "token": src.get("token") or data.get("token") or "",
-        }
-
-    async def set_vnc_password(self, server_id: str, vnc_pass: str) -> bool:
-        """Change the VNC password. Virtualizor rule: alphanumeric only, max 8 chars."""
-        vnc_pass = "".join(c for c in str(vnc_pass) if c.isalnum())[:8]
-        data = await self._request(
-            "managevps", {"editvps": 1, "vnc": 1, "vncpass": vnc_pass}, query={"vpsid": server_id}
-        )
-        done_val = data.get("done")
-        return bool(done_val) if not isinstance(done_val, dict) else bool(done_val.get("done"))

@@ -106,10 +106,28 @@ class VirtualizorProvider(BaseProvider):
         raise RuntimeError(last_error or "اتصال به Virtualizor ناموفق بود")
 
     @staticmethod
-    def _vs_status(vs: dict) -> str:
+    def _running_flag(vs: dict) -> str:
+        """Resolve the live power state to "1" (running) / "0" (off) / "" (unknown).
+
+        Different Virtualizor versions expose the running state under different
+        keys. Prefer `machine_status`, then `vps_status`, then fall back to the
+        generic `status` field — this is why a running VM could read as "off"
+        before (only `machine_status` was checked, and this panel may not set it)."""
+        for key in ("machine_status", "vps_status"):
+            v = vs.get(key)
+            if v is not None and str(v) != "":
+                return "1" if str(v) == "1" else "0"
+        v = vs.get("status")
+        if v is not None and str(v) != "":
+            return "1" if str(v) == "1" else "0"
+        return ""
+
+    @classmethod
+    def _vs_status(cls, vs: dict) -> str:
         if str(vs.get("suspended", "0")) == "1":
             return "suspended"
-        if str(vs.get("machine_status", "0")) == "1":
+        running = cls._running_flag(vs)
+        if running == "1":
             return "active"
         if str(vs.get("locked", "0")) == "1":
             return "building"
@@ -132,7 +150,8 @@ class VirtualizorProvider(BaseProvider):
                 "vpsid": vs.get("vpsid"),
                 "node": vs.get("server_name"),
                 "serid": vs.get("serid"),
-                "machine_status": str(vs.get("machine_status", "1")),
+                "machine_status": (self._running_flag(vs) or "1"),
+                "locked": str(vs.get("locked", "0")),
             },
         )
 
@@ -547,27 +566,70 @@ class VirtualizorProvider(BaseProvider):
         return bool(done_val) if not isinstance(done_val, dict) else bool(done_val.get("done"))
 
     async def change_ip(self, server_id: str) -> str:
-        """Pick a random free IP from the pool and assign it via managevps."""
+        """Assign a new free IP, restricted to the SAME IP pool / subnet the VPS
+        currently uses.
+
+        A Virtualizor node can host several IP pools (e.g. 1.1.1.0/24 AND
+        2.2.2.0/24), but a plan is only permitted to draw from its own pool. The
+        VPS's current IP was assigned from that allowed pool at creation, so we
+        scope the new IP to the same pool id (`ippid`) — falling back to the same
+        /24 subnet — to guarantee we never hand out an IP the plan can't use."""
         import random as _random
-        # Find the node this VPS lives on so we pull IPs from the right pool
+
         try:
             info = await self.get_server(server_id)
             serid = int(info.extra_data.get("serid") or 0)
+            current_ip = info.ip_address
         except Exception:
             serid = 0
+            current_ip = None
 
-        free_ips = await self.list_ips(serid)
-        if not free_ips:
-            raise RuntimeError("هیچ آی‌پی آزادی در pool یافت نشد")
+        # Full IP listing for this node (includes assigned + free, each with its pool id)
+        data = await self._request("ips", query={"serid": serid})
+        ips_raw = data.get("ips") or data.get("freeips") or {}
+        entries = list(ips_raw.values()) if isinstance(ips_raw, dict) else (ips_raw or [])
+        entries = [e for e in entries if isinstance(e, dict)]
 
-        new_ip = _random.choice(free_ips)
+        def _pool(e: dict) -> str:
+            return str(e.get("ippid") or e.get("ippoolid") or e.get("ipp_id") or e.get("pool") or "")
+
+        def _is_free(e: dict) -> bool:
+            return str(e.get("vpsid", "0")) in ("0", "")
+
+        # Identify the pool + subnet of the VPS's current IP = the plan's allowed range.
+        current_pool = ""
+        for e in entries:
+            if current_ip and str(e.get("ip", "")) == str(current_ip):
+                current_pool = _pool(e)
+                break
+        current_subnet = (
+            current_ip.rsplit(".", 1)[0]
+            if current_ip and str(current_ip).count(".") == 3 else None
+        )
+
+        free = [e for e in entries if _is_free(e)]
+
+        # 1) Same IP pool as the current IP (the plan's allowed pool).
+        candidates = [e for e in free if current_pool and _pool(e) == current_pool]
+        # 2) Fall back to the same /24 subnet as the current IP.
+        if not candidates and current_subnet:
+            candidates = [e for e in free if str(e.get("ip", "")).rsplit(".", 1)[0] == current_subnet]
+        # 3) Only when the current IP can't be identified at all, allow any free IP.
+        if not candidates and not current_ip:
+            candidates = free
+
+        ip_values = [e.get("ip") for e in candidates if e.get("ip")]
+        if not ip_values:
+            raise RuntimeError("هیچ آی‌پی آزادی در pool مجاز این پلن یافت نشد")
+
+        new_ip = _random.choice(ip_values)
         # vpsid in URL query; editvps=1 is the submit trigger; ips array in POST body
-        data = await self._request("managevps", {"editvps": 1, "ips[0]": new_ip}, query={"vpsid": server_id})
-        done_val = data.get("done")
+        resp = await self._request("managevps", {"editvps": 1, "ips[0]": new_ip}, query={"vpsid": server_id})
+        done_val = resp.get("done")
         # done can be a nested dict {done: true} or a scalar true/1
         ok = bool(done_val) if not isinstance(done_val, dict) else bool(done_val.get("done"))
         if not ok:
-            raise RuntimeError(f"Virtualizor IP change failed — response keys: {list(data.keys())}")
+            raise RuntimeError(f"Virtualizor IP change failed — response keys: {list(resp.keys())}")
         return new_ip
 
     async def add_traffic(self, server_id: str, gb: int) -> bool:
@@ -577,12 +639,30 @@ class VirtualizorProvider(BaseProvider):
         return bool(done_val) if not isinstance(done_val, dict) else bool(done_val.get("done"))
 
     async def get_vnc(self, server_id: str) -> dict:
-        data = await self._request("vnc", query={"vpsid": server_id})
-        vnc = data.get("novnc", data.get("vnc", {}))
-        if isinstance(vnc, dict):
-            return {
-                "host": vnc.get("host", ""),
-                "port": vnc.get("port", ""),
-                "password": vnc.get("passwd", vnc.get("password", "")),
-            }
-        return {"host": "", "port": str(vnc), "password": ""}
+        # VNC Info API (admin): act=vnc with novnc=<VPSID> in the POST body.
+        # The response is a FLAT object — {"port":"5951","ip":"x.x.x.x",
+        # "password":"....","novnc":1} — where `novnc` is just a flag (1), NOT a
+        # nested dict. Reading data["novnc"] therefore returned the integer 1 and
+        # the screen came back empty; read the fields off the top level instead.
+        data = await self._request("vnc", {"novnc": server_id}, query={"vpsid": server_id})
+        src = data.get("vnc") if isinstance(data.get("vnc"), dict) else data
+        return {
+            "host": src.get("ip") or src.get("host") or "",
+            "port": src.get("port") or src.get("vncport") or "",
+            "password": (
+                src.get("password") or src.get("passwd")
+                or src.get("vnc_passwd") or src.get("vncpass") or ""
+            ),
+            # If the panel ever hands back a ready-made link/token, use it directly.
+            "url": src.get("url") or data.get("url") or "",
+            "token": src.get("token") or data.get("token") or "",
+        }
+
+    async def set_vnc_password(self, server_id: str, vnc_pass: str) -> bool:
+        """Change the VNC password. Virtualizor rule: alphanumeric only, max 8 chars."""
+        vnc_pass = "".join(c for c in str(vnc_pass) if c.isalnum())[:8]
+        data = await self._request(
+            "managevps", {"editvps": 1, "vnc": 1, "vncpass": vnc_pass}, query={"vpsid": server_id}
+        )
+        done_val = data.get("done")
+        return bool(done_val) if not isinstance(done_val, dict) else bool(done_val.get("done"))

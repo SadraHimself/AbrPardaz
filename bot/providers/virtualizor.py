@@ -379,8 +379,8 @@ class VirtualizorProvider(BaseProvider):
         return float(vs.get("used_bandwidth", 0) or 0)
 
     async def rebuild_server(self, server_id: str, os_id: str, rootpass: str = "") -> bool:
-        # vpsid in URL query; action fields in POST body
-        payload: dict = {"newos": os_id, "conf": "1"}
+        # vpsid in URL query; editvps=1 submit trigger + conf=1 for rebuild confirmation
+        payload: dict = {"editvps": 1, "newos": os_id, "conf": "1"}
         if rootpass:
             payload["rootpass"] = rootpass
         data = await self._request("managevps", payload, query={"vpsid": server_id})
@@ -388,8 +388,8 @@ class VirtualizorProvider(BaseProvider):
         return bool(done_val) if not isinstance(done_val, dict) else bool(done_val.get("done"))
 
     async def change_root_password(self, server_id: str, new_password: str) -> bool:
-        # vpsid in URL query; rootpass in POST body
-        data = await self._request("managevps", {"rootpass": new_password}, query={"vpsid": server_id})
+        # vpsid in URL query; editvps=1 submit trigger + rootpass in POST body
+        data = await self._request("managevps", {"editvps": 1, "rootpass": new_password}, query={"vpsid": server_id})
         done_val = data.get("done")
         return bool(done_val) if not isinstance(done_val, dict) else bool(done_val.get("done"))
 
@@ -534,8 +534,8 @@ class VirtualizorProvider(BaseProvider):
 
     async def edit_server(self, server_id: str, ram: Optional[int] = None,
                           cpu: Optional[int] = None, disk: Optional[int] = None) -> bool:
-        # vpsid in URL query; resource fields in POST body (API reference table)
-        payload: dict = {}
+        # vpsid in URL query; editvps=1 is the submit trigger (same pattern as addvps=1 for addvs)
+        payload: dict = {"editvps": 1}
         if ram is not None:
             payload["ram"] = ram
         if cpu is not None:
@@ -543,7 +543,8 @@ class VirtualizorProvider(BaseProvider):
         if disk is not None:
             payload["space"] = disk
         data = await self._request("managevps", payload, query={"vpsid": server_id})
-        return bool(data.get("done"))
+        done_val = data.get("done")
+        return bool(done_val) if not isinstance(done_val, dict) else bool(done_val.get("done"))
 
     async def change_ip(self, server_id: str) -> str:
         """Pick a random free IP from the pool and assign it via managevps."""
@@ -560,8 +561,8 @@ class VirtualizorProvider(BaseProvider):
             raise RuntimeError("هیچ آی‌پی آزادی در pool یافت نشد")
 
         new_ip = _random.choice(free_ips)
-        # vpsid in URL query; ips array in POST body (API reference table)
-        data = await self._request("managevps", {"ips[0]": new_ip}, query={"vpsid": server_id})
+        # vpsid in URL query; editvps=1 is the submit trigger; ips array in POST body
+        data = await self._request("managevps", {"editvps": 1, "ips[0]": new_ip}, query={"vpsid": server_id})
         done_val = data.get("done")
         # done can be a nested dict {done: true} or a scalar true/1
         ok = bool(done_val) if not isinstance(done_val, dict) else bool(done_val.get("done"))
@@ -570,8 +571,8 @@ class VirtualizorProvider(BaseProvider):
         return new_ip
 
     async def add_traffic(self, server_id: str, gb: int) -> bool:
-        # vpsid in URL query; bandwidth in POST body
-        data = await self._request("managevps", {"bandwidth": gb}, query={"vpsid": server_id})
+        # vpsid in URL query; editvps=1 submit trigger + bandwidth in POST body
+        data = await self._request("managevps", {"editvps": 1, "bandwidth": gb}, query={"vpsid": server_id})
         done_val = data.get("done")
         return bool(done_val) if not isinstance(done_val, dict) else bool(done_val.get("done"))
 

@@ -36,7 +36,15 @@ def run_hourly_billing(self):
                     continue
 
                 success = await billing.charge_hourly(server)
-                if not success:
+                if success:
+                    user_obj = await session.get(User, server.user_id)
+                    from bot.tasks.server import notify_hourly_billing
+                    notify_hourly_billing.delay(
+                        server.user_id, server.id,
+                        float(server.price_hourly or 0),
+                        float(user_obj.balance if user_obj else 0),
+                    )
+                else:
                     # کسر موجودی ناموفق → ساسپند
                     await billing.suspend_server_db(server, SuspendReason.LOW_BALANCE)
                     try:
@@ -50,7 +58,6 @@ def run_hourly_billing(self):
                     except Exception:
                         pass
 
-                    # اطلاع به کاربر از طریق Redis pub/sub (ربات pick می‌کند)
                     from bot.tasks.server import notify_user_suspend
                     notify_user_suspend.delay(server.user_id, server.id)
 

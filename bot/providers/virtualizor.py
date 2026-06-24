@@ -153,14 +153,15 @@ class VirtualizorProvider(BaseProvider):
         if not str(os_id_val).strip().isdigit():
             os_id_val = params.extra.get("osid", os_id_val)
 
-        # Virtualizor rejects non-alphanumeric VNC passwords ("No Non-Alphanumeric
-        # characters are allowed for the VNC Password"). Sanitize any provided value to
-        # alphanumeric, and fall back to a random alphanumeric password.
+        # Virtualizor VNC password rules: alphanumeric only ("No Non-Alphanumeric
+        # characters are allowed") AND max 8 chars (VNC protocol limit — longer values
+        # fail with "VNC password length too long than supported"). Sanitize any provided
+        # value to alphanumeric and cap at 8; otherwise generate a random 8-char one.
         import secrets as _secrets
         import string as _string
-        vnc_pass = "".join(c for c in str(params.extra.get("vnc_pass") or "") if c.isalnum())
+        vnc_pass = "".join(c for c in str(params.extra.get("vnc_pass") or "") if c.isalnum())[:8]
         if not vnc_pass:
-            vnc_pass = "".join(_secrets.choice(_string.ascii_letters + _string.digits) for _ in range(12))
+            vnc_pass = "".join(_secrets.choice(_string.ascii_letters + _string.digits) for _ in range(8))
 
         payload: dict = {
             # Submit trigger: the documented field is `addvps=1` ("If set the vps will

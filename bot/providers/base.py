@@ -76,7 +76,7 @@ class BaseProvider(ABC):
         """ریبوت سرور"""
 
     @abstractmethod
-    async def rebuild_server(self, server_id: str, os_id: str) -> bool:
+    async def rebuild_server(self, server_id: str, os_id: str, rootpass: str = "") -> bool:
         """نصب مجدد OS"""
 
     @abstractmethod
@@ -113,3 +113,7 @@ class BaseProvider(ABC):
     async def add_traffic(self, server_id: str, gb: int) -> bool:
         """افزودن ترافیک اضافه"""
         raise NotImplementedError("This provider does not support traffic add-on")
+
+    async def change_root_password(self, server_id: str, new_password: str) -> bool:
+        """تغییر رمز root سرور"""
+        raise NotImplementedError("This provider does not support root password change")

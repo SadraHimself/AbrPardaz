@@ -33,6 +33,11 @@ app.conf.update(
             "task": "bot.tasks.server.sync_all_traffic",
             "schedule": crontab(minute="*/15"),
         },
+        # هر ۵ دقیقه سرورهای در حال ساخت بررسی می‌شوند
+        "sync-building": {
+            "task": "bot.tasks.server.sync_building_servers",
+            "schedule": crontab(minute="*/5"),
+        },
         # هر روز موجودی‌های کم هشدار داده می‌شود
         "low-balance-alert": {
             "task": "bot.tasks.billing.send_low_balance_alerts",

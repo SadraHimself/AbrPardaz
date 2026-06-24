@@ -51,7 +51,6 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
         builder.button(text="🔁 ریبیلد", callback_data=f"srv_action:{sid}:rebuild_menu")
         builder.button(text="🌐 تغییر IP", callback_data=f"srv_changeip:{sid}")
         builder.button(text="🔑 تغییر رمز", callback_data=f"srv_chpass:{sid}")
-        builder.button(text="🖥 VNC", callback_data=f"srv_vnc:{sid}")
         builder.button(text="📊 ترافیک", callback_data=f"srv_traffic:{sid}")
         builder.button(text="➕ ترافیک اضافه", callback_data=f"srv_add_traffic:{sid}")
         builder.button(text="📦 خدمات اضافه", callback_data=f"srv_subproducts:{sid}")

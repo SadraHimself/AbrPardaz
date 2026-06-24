@@ -263,6 +263,12 @@ async def cb_server_rebuild_do(cb: CallbackQuery, user: User, session: AsyncSess
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
     await cb.answer("⏳ ریبیلد شروع می‌شود...")
+    # Remove the confirmation message so its "بله، ریبیلد شود" button can't be
+    # tapped again — otherwise every tap rebuilds the server from scratch.
+    try:
+        await cb.message.delete()
+    except Exception:
+        pass
     try:
         import secrets as _sec
         import string as _str
@@ -282,9 +288,13 @@ async def cb_server_rebuild_do(cb: CallbackQuery, user: User, session: AsyncSess
                 "⚠️ این رمز را در جای امنی ذخیره کنید.\n"
                 "🔔 چند دقیقه منتظر نصب OS بمانید.",
                 parse_mode="HTML",
+                reply_markup=back_kb(f"server:{server_id}"),
             )
         else:
-            await cb.message.answer("❌ ریبیلد ناموفق بود.")
+            await cb.message.answer(
+                "❌ ریبیلد ناموفق بود.",
+                reply_markup=back_kb(f"server:{server_id}"),
+            )
     except NotImplementedError as e:
         await cb.message.answer(f"⚠️ {e}")
     except Exception as e:
@@ -964,6 +974,72 @@ async def cb_mute_hourly(cb: CallbackQuery, user: User, session: AsyncSession):
 
 # ── VNC ───────────────────────────────────────────────────────────────────────
 
+def _build_novnc_url(account: ProviderAccount, vnc_info: dict, vpsid: str) -> str:
+    """Build a browser-openable noVNC URL.
+
+    Per the Virtualizor docs, the noVNC websocket is served on a FIXED panel SSL
+    port (4083 enduser / 4085 admin) — NGINX proxies it — while the per-VM 59XX
+    VNC display port is just a value returned by the VNC Info API. The documented
+    browser URL that carries the VPS identity is the enduser VNC page:
+        https://<host>:4083/index.php?act=vnc&svs=<VPSID>&novnc=<VPSID>
+    Everything is overridable per-provider via extra_config:
+        novnc_url_template / novnc_token_template / novnc_port
+    Placeholders available: {phost} {nport} {euport} {host} {port} {password} {vpsid}."""
+    from urllib.parse import quote
+    cfg = account.extra_config or {}
+    panel_host = account.api_endpoint.split("//")[-1].split("/")[0].split(":")[0]
+    # noVNC websocket port (fixed, NOT per-VM). 4083 = enduser SSL, where the
+    # noVNC launch page lives. Override with extra_config["novnc_port"] if needed.
+    nport = str(cfg.get("novnc_port", "4083"))
+
+    # A ready-made link/token from the panel always wins.
+    url = vnc_info.get("url") or ""
+    if url:
+        if not url.startswith("http"):
+            url = account.api_endpoint.rstrip("/") + "/" + url.lstrip("/")
+        return url
+    if vnc_info.get("token"):
+        token_tpl = cfg.get("novnc_token_template", "https://{phost}:{nport}/novnc/?token={token}")
+        return token_tpl.format(phost=panel_host, nport=nport, token=vnc_info["token"])
+
+    host = vnc_info.get("host") or panel_host           # node IP running the VPS's VNC
+    port = vnc_info.get("port", "")                     # per-VM 59XX display port
+    password = quote(str(vnc_info.get("password") or ""), safe="")
+    template = cfg.get(
+        "novnc_url_template",
+        "https://{phost}:{nport}/index.php?act=vnc&svs={vpsid}&novnc={vpsid}",
+    )
+    return template.format(
+        phost=panel_host, nport=nport, euport=nport,
+        host=host, port=port, password=password, vpsid=vpsid,
+    )
+
+
+def _vnc_view(server: Server, account: ProviderAccount, vnc_info: dict):
+    """Build the (text, keyboard) for the VNC screen — info + open-in-browser button."""
+    host = vnc_info.get("host") or account.api_endpoint.split("//")[-1].split("/")[0].split(":")[0]
+    port = vnc_info.get("port", "")
+    passwd = vnc_info.get("password", "")
+    url = _build_novnc_url(account, vnc_info, str(server.provider_server_id))
+
+    text = (
+        f"🖥 <b>کنسول VNC — {server.name}</b>\n\n"
+        f"🌐 آی‌پی سرور VNC: <code>{host}</code>\n"
+        f"🔌 پورت: <code>{port}</code>\n"
+        f"🔒 رمز VNC: <code>{passwd or '—'}</code>\n\n"
+        "برای اتصال، روی دکمه «باز کردن کنسول» بزنید تا کنسول noVNC در مرورگر باز شود.\n"
+        "🔑 برای تغییر رمز VNC از دکمه زیر استفاده کنید.\n"
+        "⚠️ این اطلاعات را با کسی به اشتراک نگذارید."
+    )
+
+    rows = []
+    if url.startswith("http"):
+        rows.append([InlineKeyboardButton(text="🖥 باز کردن کنسول noVNC", url=url)])
+    rows.append([InlineKeyboardButton(text="🔑 تغییر رمز VNC", callback_data=f"srv_vnc_newpass:{server.id}")])
+    rows.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data=f"server:{server.id}")])
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 @router.callback_query(F.data.startswith("srv_vnc:"))
 async def cb_server_vnc(cb: CallbackQuery, user: User, session: AsyncSession):
     server_id = int(cb.data.split(":")[1])
@@ -971,7 +1047,7 @@ async def cb_server_vnc(cb: CallbackQuery, user: User, session: AsyncSession):
     if not server or server.user_id != user.id:
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
-    if server.status != ServerStatus.ACTIVE:
+    if server.status in (ServerStatus.SUSPENDED, ServerStatus.DELETED):
         await cb.answer("سرور باید فعال باشد.", show_alert=True)
         return
 
@@ -985,22 +1061,52 @@ async def cb_server_vnc(cb: CallbackQuery, user: User, session: AsyncSession):
     try:
         prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
         vnc_info = await prov.get_vnc(server.provider_server_id)
-        host = vnc_info.get("host", account.api_endpoint.split("//")[-1].split(":")[0])
-        port = vnc_info.get("port", "")
-        passwd = vnc_info.get("password", "")
-        await wait.edit_text(
-            f"🖥 <b>VNC — {server.name}</b>\n\n"
-            f"🌐 Host: <code>{host}</code>\n"
-            f"🔌 Port: <code>{port}</code>\n"
-            f"🔒 Password: <code>{passwd}</code>\n\n"
-            "⚠️ این اطلاعات را با کسی به اشتراک نگذارید.\n"
-            "اتصال VNC با نرم‌افزارهایی مثل RealVNC یا TigerVNC امکان‌پذیر است.",
-            parse_mode="HTML",
-            reply_markup=back_kb(f"server:{server_id}"),
-        )
+        text, kb = _vnc_view(server, account, vnc_info)
+        await wait.edit_text(text, parse_mode="HTML", reply_markup=kb)
     except Exception as e:
         await wait.edit_text(
             f"❌ <b>خطا در دریافت VNC:</b> {e}",
+            parse_mode="HTML",
+            reply_markup=back_kb(f"server:{server_id}"),
+        )
+
+
+@router.callback_query(F.data.startswith("srv_vnc_newpass:"))
+async def cb_server_vnc_newpass(cb: CallbackQuery, user: User, session: AsyncSession):
+    server_id = int(cb.data.split(":")[1])
+    server = await session.get(Server, server_id)
+    if not server or server.user_id != user.id:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    account = await session.get(ProviderAccount, server.provider_account_id) if server.provider_account_id else None
+    if not account:
+        await cb.answer("اطلاعات پروایدر یافت نشد.", show_alert=True)
+        return
+
+    import secrets as _secrets
+    import string as _string
+    # Virtualizor VNC rule: alphanumeric only, max 8 chars.
+    new_pass = "".join(_secrets.choice(_string.ascii_letters + _string.digits) for _ in range(8))
+
+    await cb.answer("⏳ در حال تغییر رمز VNC...")
+    try:
+        prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
+        ok = await prov.set_vnc_password(server.provider_server_id, new_pass)
+        vnc_info = await prov.get_vnc(server.provider_server_id)
+        if not vnc_info.get("password"):
+            vnc_info["password"] = new_pass
+        text, kb = _vnc_view(server, account, vnc_info)
+        if ok:
+            prefix = (
+                "✅ رمز VNC تغییر کرد.\n"
+                "♻️ برای اعمال رمز جدید، سرور را یک‌بار خاموش و روشن کنید.\n\n"
+            )
+        else:
+            prefix = "⚠️ تغییر رمز VNC ممکن است اعمال نشده باشد.\n\n"
+        await cb.message.edit_text(prefix + text, parse_mode="HTML", reply_markup=kb)
+    except Exception as e:
+        await cb.message.edit_text(
+            f"❌ <b>خطا در تغییر رمز VNC:</b> {e}",
             parse_mode="HTML",
             reply_markup=back_kb(f"server:{server_id}"),
         )

@@ -148,10 +148,19 @@ class VirtualizorProvider(BaseProvider):
             except Exception:
                 pass
 
+        # os_id from FSM; fall back to plan/provider extra_data if FSM value is non-numeric
+        os_id_val = params.os_id
+        if not str(os_id_val).strip().isdigit():
+            os_id_val = params.extra.get("osid", os_id_val)
+
         payload: dict = {
+            # Submit trigger: without addvs=1 the API only loads the "Add Virtual
+            # Server" form (returns ips/ostemplates/plans) instead of provisioning.
+            # Same pattern as adduser=1 in create_user().
+            "addvs": 1,
             "hostname": params.name,
             "rootpass": params.extra.get("root_password", "TeleCloud@2024"),
-            "osid": params.os_id,
+            "osid": os_id_val,
             "bandwidth": params.extra.get("bandwidth", 1000),
             "ram": params.extra.get("ram", 1024),
             "cores": params.extra.get("cpu", 1),
@@ -186,6 +195,22 @@ class VirtualizorProvider(BaseProvider):
             payload["space[0][size]"] = disk_gb
 
         data = await self._request("addvs", payload)
+
+        # Virtualizor returns the "Add Virtual Server" form (with ips/ostemplates data)
+        # when required params are missing or invalid — detect and fail loudly.
+        if data.get("title") == "Add Virtual Server" and not data.get("vs_info") and not data.get("vpsid"):
+            missing = []
+            if not payload.get("osid"):
+                missing.append("osid (OS template ID)")
+            if not payload.get("node_select"):
+                missing.append("node_select (serid)")
+            hint = f" — احتمالاً ناقص: {', '.join(missing)}" if missing else ""
+            raise RuntimeError(
+                f"Virtualizor ساخت VPS رو رد کرد{hint}\n"
+                f"پارامترهای ارسالی: osid={payload.get('osid')!r}, "
+                f"node_select={payload.get('node_select')!r}, "
+                f"uid={payload.get('uid')!r}"
+            )
 
         vs_info = data.get("vs_info") or {}
         vpsid = vs_info.get("vpsid") if isinstance(vs_info, dict) else None

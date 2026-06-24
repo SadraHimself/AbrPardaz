@@ -13,7 +13,7 @@ logger = logging.getLogger("abrpardaz.virtualizor")
 # TEMPORARY DEBUG: log the full raw Virtualizor response for these actions so we can
 # see the exact field names/values for VPS status and rebuild. Remove this set (and
 # the logger.warning calls in _request) once the status/rebuild bugs are pinned down.
-_DEBUG_RAW_ACTS = {"vs", "managevps", "addvs"}
+_DEBUG_RAW_ACTS = {"vs", "managevps", "addvs", "rebuild"}
 
 
 def _redact(d: Optional[dict]) -> dict:
@@ -406,21 +406,41 @@ class VirtualizorProvider(BaseProvider):
             raise RuntimeError(f"Server {server_id} not found")
         vs = dict(vs_list.get(str(server_id)) or next(iter(vs_list.values())))
 
-        # Some Virtualizor versions return the live power state in a parallel map
-        # keyed by vpsid (e.g. {"status": {"123": {"status": "online"}}}) instead of
-        # inside the vps object. Merge it in so _running_flag can see it.
-        for skey in ("status", "vs_status", "vpses_status", "vps_status"):
-            smap = data.get(skey)
-            if not isinstance(smap, dict):
-                continue
-            sval = smap.get(str(server_id)) or smap.get(str(vs.get("vpsid", "")))
-            if isinstance(sval, dict):
-                vs.update({k: v for k, v in sval.items()
-                           if k in ("status", "vps_status", "vm_status", "power_status")})
-            elif sval is not None and "vps_status" not in vs:
-                vs["vps_status"] = sval
+        # The plain listvs `machine_status` is stale/uncomputed (it read "0" for a VM
+        # that was actually online). The LIVE power state comes from a separate call,
+        # `act=vs&vs_status=<vpsid>` → {"<vpsid>":{"status":N}} where N: 1=on, 0=off,
+        # 2=suspended. Overlay it so _parse_vs reports the real state.
+        live = await self._get_live_status(server_id)
+        if live is not None:
+            vs["machine_status"] = "1" if live == 1 else "0"
+            if live == 2:
+                vs["suspended"] = "1"
 
         return self._parse_vs(vs)
+
+    async def _get_live_status(self, server_id: str) -> Optional[int]:
+        """Live power state via act=vs&vs_status=<vpsid>. Returns 1=on/0=off/2=suspended,
+        or None if it couldn't be determined."""
+        try:
+            data = await self._request("vs", query={"vs_status": server_id})
+        except Exception:
+            return None
+        # The status map may sit at the top level keyed by vpsid, or under "status"/"vs_status".
+        for container in (data.get("status"), data.get("vs_status"), data):
+            if not isinstance(container, dict):
+                continue
+            entry = container.get(str(server_id))
+            if isinstance(entry, dict) and entry.get("status") is not None:
+                try:
+                    return int(entry["status"])
+                except (ValueError, TypeError):
+                    continue
+            if isinstance(entry, (int, str)) and str(entry).strip() not in ("", "None"):
+                try:
+                    return int(entry)
+                except (ValueError, TypeError):
+                    continue
+        return None
 
     async def start_server(self, server_id: str) -> bool:
         data = await self._request("vs", query={"action": "start", "vpsid": server_id})
@@ -453,16 +473,16 @@ class VirtualizorProvider(BaseProvider):
         return float(vs.get("used_bandwidth", 0) or 0)
 
     async def rebuild_server(self, server_id: str, os_id: str, rootpass: str = "") -> bool:
-        # The OS reinstall lives on the Manage VPS page (act=managevps), but its submit
-        # trigger is `reos=1`, NOT `editvps=1`. The old code used `editvps=1 + newos`,
-        # which only EDITS settings (the recorded OS / root password) without ever
-        # reinstalling the disk — that is the "rebuild just changed the password" bug.
-        # `reos=1` is the actual "Reinstall OS" trigger. vpsid goes in the URL query.
-        payload: dict = {"reos": 1, "newos": os_id}
+        # Rebuild is its OWN admin action `act=rebuild` (confirmed via the official docs).
+        # The earlier `managevps + editvps=1/reos=1 + newos` only loaded/edited the Manage
+        # VPS page (so just the password changed, no reinstall). Correct params:
+        #   act=rebuild, vpsid (query), osid (NOT newos!), newpass, conf, reos=1 (trigger).
+        # Success → {"title":"Rebuild Virtual Server","done":1,...}.
+        payload: dict = {"reos": 1, "osid": os_id}
         if rootpass:
             payload["newpass"] = rootpass
             payload["conf"] = rootpass          # confirm-password field must equal newpass
-        data = await self._request("managevps", payload, query={"vpsid": server_id})
+        data = await self._request("rebuild", payload, query={"vpsid": server_id})
         done_val = data.get("done")
         return bool(done_val) if not isinstance(done_val, dict) else bool(done_val.get("done"))
 

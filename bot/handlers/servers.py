@@ -15,7 +15,7 @@ from bot.database.models import (
     BillingType, DiscountCode, ProviderAccount, ProviderType,
     Server, ServerPlan, ServerStatus, SubProduct, SubProductType, SuspendReason, User,
 )
-from bot.keyboards.main import back_kb, cancel_kb, main_menu_kb
+from bot.keyboards.main import back_kb, cancel_kb
 from bot.keyboards.server import (
     add_traffic_kb, server_actions_kb, server_delete_confirm_kb,
     server_list_kb, subproducts_buy_kb,
@@ -111,10 +111,10 @@ async def cb_server_detail(cb: CallbackQuery, user: User, session: AsyncSession)
 
     await cb.message.edit_text(
         f"🖥 <b>{server.name}</b>\n\n"
-        f"🌐 IP: <code>{server.ip_address or 'در حال تخصیص'}</code>\n"
+        f"🌐 آدرس IPv4: <code>{server.ip_address or 'در حال تخصیص'}</code>\n"
         f"📍 موقعیت: {server.location or 'نامشخص'}\n"
         f"⚡ وضعیت: {status_label}\n\n"
-        f"💾 RAM: {server.ram} MB | CPU: {server.cpu} | Disk: {server.disk} GB"
+        f"💾 مقدار RAM: {server.ram} MB | پردازنده: {server.cpu} | دیسک: {server.disk} GB"
         f"{traffic_text}\n"
         f"💳 {billing_label} — {price:,.0f} {price_unit}\n"
         f"🕐 ساخته شده: {server.created_at.strftime('%Y/%m/%d')}",
@@ -463,8 +463,7 @@ async def cb_select_plan(cb: CallbackQuery, state: FSMContext, session: AsyncSes
     if has_hourly and has_monthly:
         await state.set_state(BuyServerStates.selecting_billing)
         await cb.message.edit_text(
-            f"📦 <b>{plan.display_name or plan.name}</b>\n\nنوع بیلینگ را انتخاب کنید:",
-            parse_mode="HTML",
+            f"نوع بیلینگ را انتخاب کنید:\nپلن: {plan.display_name or plan.name}",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [
                     InlineKeyboardButton(text=f"⏱ ساعتی — {plan.price_hourly:,.0f} T/ساعت", callback_data="buybilling:hourly"),
@@ -496,9 +495,8 @@ async def cb_select_billing(cb: CallbackQuery, state: FSMContext):
 async def _ask_hostname(cb: CallbackQuery, state: FSMContext):
     await state.set_state(BuyServerStates.entering_hostname)
     await cb.message.edit_text(
-        "🖥 <b>نام هاست (Hostname)</b>\n\n"
-        "یک hostname برای سرور خود وارد کنید.\n"
-        "<i>مثال: my-server یا webserver1</i>\n\n"
+        "🖥 <b>نام سرور</b>\n\n"
+        "یک اسم برای سرور خود انتخاب کنید.\n\n"
         "⚠️ فقط حروف کوچک، اعداد و خط تیره مجاز است.\n"
         "یا دکمه زیر را بزنید تا سیستم خودکار انتخاب کند:",
         parse_mode="HTML",
@@ -510,29 +508,28 @@ async def _ask_hostname(cb: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(BuyServerStates.entering_hostname, F.data == "buyhost:auto")
-async def cb_hostname_auto(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
+async def cb_hostname_auto(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
     await state.update_data(hostname=None)
-    await _ask_os(cb, state, session)
+    await _ask_os(cb, state, session, user)
     await cb.answer()
 
 
 @router.message(BuyServerStates.entering_hostname)
-async def msg_hostname(message: Message, state: FSMContext, session: AsyncSession):
+async def msg_hostname(message: Message, user: User, state: FSMContext, session: AsyncSession):
     import re
     raw = message.text.strip().lower()
     if not re.match(r'^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?$', raw):
         await message.answer(
-            "❌ hostname نامعتبر است.\n"
+            "❌ اسم سرور نامعتبر است.\n"
             "فقط حروف کوچک (a-z)، اعداد و خط تیره (-) مجاز است.\n"
             "باید با حرف یا عدد شروع و تموم بشه:"
         )
         return
     await state.update_data(hostname=raw)
-    # Use a fake cb-like object to reuse _ask_os
-    await _ask_os_message(message, state, session)
+    await _ask_os_message(message, state, session, user)
 
 
-async def _ask_os(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
+async def _ask_os(cb: CallbackQuery, state: FSMContext, session: AsyncSession, user: User):
     data = await state.get_data()
     account = await session.get(ProviderAccount, data.get("provider_account_id")) if data.get("provider_account_id") else None
 
@@ -546,7 +543,6 @@ async def _ask_os(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
             pass
 
     if not os_list:
-        # OS template list unavailable — use osid from plan extra_data if set, else fail at creation
         plan_id = data.get("plan_id")
         plan_osid = None
         if plan_id:
@@ -556,7 +552,11 @@ async def _ask_os(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
             if _plan and (_plan.extra_data or {}).get("osid"):
                 plan_osid = str(_plan.extra_data["osid"])
         await state.update_data(os_id=plan_osid or "", os_name="پیش‌فرض")
-        await _ask_discount(cb, state)
+        if data.get("billing") == "hourly":
+            await state.update_data(discount_id=None, discount_percent=0)
+            await _ask_email_or_confirm(cb.message, state, session, user)
+        else:
+            await _ask_discount(cb, state)
         return
 
     await state.update_data(os_options=[(o["id"], o["name"]) for o in os_list[:20]])
@@ -569,13 +569,12 @@ async def _ask_os(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
     builder.adjust(2)
 
     await cb.message.edit_text(
-        "🖥 <b>انتخاب سیستم‌عامل</b>\n\nیک OS برای سرور انتخاب کنید:",
-        parse_mode="HTML",
+        "🖥 یک OS برای سرور انتخاب کنید",
         reply_markup=builder.as_markup(),
     )
 
 
-async def _ask_os_message(message: Message, state: FSMContext, session: AsyncSession):
+async def _ask_os_message(message: Message, state: FSMContext, session: AsyncSession, user: User):
     data = await state.get_data()
     account = await session.get(ProviderAccount, data.get("provider_account_id")) if data.get("provider_account_id") else None
 
@@ -598,16 +597,20 @@ async def _ask_os_message(message: Message, state: FSMContext, session: AsyncSes
             if _plan and (_plan.extra_data or {}).get("osid"):
                 plan_osid = str(_plan.extra_data["osid"])
         await state.update_data(os_id=plan_osid or "", os_name="پیش‌فرض")
-        await state.set_state(BuyServerStates.entering_discount)
-        await message.answer(
-            "🏷 <b>کد تخفیف</b>\n\n"
-            "اگر کد تخفیف دارید وارد کنید یا دکمه زیر:",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="⏭ بدون کد تخفیف", callback_data="buydisc:skip")],
-                [InlineKeyboardButton(text="❌ انصراف", callback_data="cancel")],
-            ]),
-        )
+        if data.get("billing") == "hourly":
+            await state.update_data(discount_id=None, discount_percent=0)
+            await _ask_email_or_confirm(message, state, session, user, from_message=True)
+        else:
+            await state.set_state(BuyServerStates.entering_discount)
+            await message.answer(
+                "🏷 <b>کد تخفیف</b>\n\n"
+                "اگر کد تخفیف دارید وارد کنید یا دکمه زیر:",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="⏭ بدون کد تخفیف", callback_data="buydisc:skip")],
+                    [InlineKeyboardButton(text="❌ انصراف", callback_data="cancel")],
+                ]),
+            )
         return
 
     await state.set_state(BuyServerStates.selecting_os)
@@ -618,21 +621,23 @@ async def _ask_os_message(message: Message, state: FSMContext, session: AsyncSes
     builder.adjust(2)
 
     await message.answer(
-        "🖥 <b>انتخاب سیستم‌عامل</b>\n\nیک OS برای سرور انتخاب کنید:",
-        parse_mode="HTML",
+        "🖥 یک OS برای سرور انتخاب کنید",
         reply_markup=builder.as_markup(),
     )
 
 
 @router.callback_query(BuyServerStates.selecting_os, F.data.startswith("buyos:"))
-async def cb_select_os(cb: CallbackQuery, state: FSMContext):
+async def cb_select_os(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
     os_id = cb.data[len("buyos:"):]
-    # Find the OS name from stored options
     data = await state.get_data()
     os_options = data.get("os_options", [])
     os_name = next((name for oid, name in os_options if str(oid) == str(os_id)), os_id)
     await state.update_data(os_id=os_id, os_name=os_name)
-    await _ask_discount(cb, state)
+    if data.get("billing") == "hourly":
+        await state.update_data(discount_id=None, discount_percent=0)
+        await _ask_email_or_confirm(cb.message, state, session, user)
+    else:
+        await _ask_discount(cb, state)
     await cb.answer()
 
 
@@ -745,15 +750,15 @@ async def _show_confirm(msg, state: FSMContext, session, from_message=False, use
         ]
     ])
 
-    hostname_line = f"🖥 Hostname: {data['hostname']}\n" if data.get("hostname") else ""
-    os_line = f"💿 OS: {data.get('os_name', 'Ubuntu 22.04')}\n" if data.get("os_name") else ""
+    hostname_line = f"🖥 نام سرور: {data['hostname']}\n" if data.get("hostname") else ""
+    os_line = f"💿 سیستم‌عامل: {data.get('os_name', '')}\n" if data.get("os_name") else ""
 
     text = (
         f"✅ <b>تأیید سفارش</b>\n\n"
         f"📦 {plan.display_name or plan.name}\n"
         f"📁 {plan.category or ''}\n"
-        f"💾 RAM: {plan.ram} MB | CPU: {plan.cpu} | Disk: {plan.disk} GB\n"
-        f"🌐 Bandwidth: {plan.bandwidth} GB\n"
+        f"💾 رم: {plan.ram} MB | پردازنده: {plan.cpu} | دیسک: {plan.disk} GB\n"
+        f"🌐 ترافیک: {plan.bandwidth} GB\n"
         f"📍 {plan.location or 'نامشخص'}\n"
         f"{hostname_line}"
         f"{os_line}\n"
@@ -825,24 +830,14 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
         delivery = (
             f"✅ <b>سرور {server.name} آماده است!</b>\n\n"
             f"📦 پلن: {plan_name}\n"
-            f"🌐 IPv4: <code>{server.ip_address or 'در حال تخصیص...'}</code>\n"
-            f"🔑 رمز root: <code>{root_password}</code>\n"
-        )
-        delivery += (
-            "\n⚠️ این اطلاعات را در جای امنی ذخیره کنید.\n"
+            f"🌐 آدرس IPv4: <code>{server.ip_address or 'در حال تخصیص...'}</code>\n"
+            f"🔑 پسورد: <code>{root_password}</code>\n"
+            f"\n⚠️ این اطلاعات را در جای امنی ذخیره کنید.\n"
             "🔔 سیستم‌عامل در حال نصب است — چند دقیقه منتظر بمانید."
         )
-
-        from bot.config import settings as _s
-        is_admin = user.is_admin or user.telegram_id in _s.admin_ids
-        await cb.message.answer(delivery, parse_mode="HTML", reply_markup=main_menu_kb(is_admin=is_admin))
+        await cb.message.edit_text(delivery, parse_mode="HTML")
     except Exception as e:
-        from bot.config import settings as _s
-        is_admin = user.is_admin or user.telegram_id in _s.admin_ids
-        await cb.message.answer(
-            f"❌ خطا در ساخت سرور: {e}\nبا پشتیبانی تماس بگیرید.",
-            reply_markup=main_menu_kb(is_admin=is_admin),
-        )
+        await cb.message.edit_text(f"❌ خطا در ساخت سرور: {e}\nبا پشتیبانی تماس بگیرید.")
 
 
 # ── Change IP ─────────────────────────────────────────────────────────────────

@@ -78,6 +78,16 @@ class ServerService:
 
         info = await provider.create_server(params)
 
+        # Persist the Virtualizor uid (created inline via uid=0 + user_email) so the
+        # user's next purchase reuses the same account instead of spawning a new one.
+        new_uid = (info.extra_data or {}).get("uid")
+        if new_uid and not stored_uid:
+            ud = dict(user.extra_data or {})
+            virt_uids = dict(ud.get("virt_uids") or {})
+            virt_uids[str(account.id)] = str(new_uid)
+            ud["virt_uids"] = virt_uids
+            user.extra_data = ud  # reassign so SQLAlchemy flags the JSON column dirty
+
         server = Server(
             user_id=user.id,
             provider_type=plan.provider_type,

@@ -42,6 +42,8 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
         pass  # no actions
 
     else:
+        builder.button(text="▶️ روشن کردن", callback_data=f"srv_action:{sid}:start")
+        builder.button(text="🔁 ریبیلد", callback_data=f"srv_action:{sid}:rebuild_menu")
         builder.button(text="🔄 بررسی وضعیت", callback_data=f"srv_refresh:{sid}")
 
     builder.button(text="🔙 بازگشت به لیست", callback_data="my_servers")

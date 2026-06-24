@@ -27,11 +27,6 @@ class Settings(BaseSettings):
     SHAHKAR_SERVICE_ID: str = ""
     SHAHKAR_PASSWORD: str = ""
 
-    # ── Virtualizor ───────────────────────────────────────────────────────────────
-    VIRTUALIZOR_PANEL_URL: str = ""
-    VIRTUALIZOR_API_KEY: str = ""
-    VIRTUALIZOR_API_PASS: str = ""
-
     # ── Billing ───────────────────────────────────────────────────────────────────
     MIN_BALANCE_THRESHOLD: float = 0.0
     TRAFFIC_GRACE_SECONDS: int = 300

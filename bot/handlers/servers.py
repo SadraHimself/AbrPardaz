@@ -410,8 +410,16 @@ async def _ask_os(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
             pass
 
     if not os_list:
-        # No templates available — skip to discount
-        await state.update_data(os_id="ubuntu-22.04", os_name="Ubuntu 22.04")
+        # OS template list unavailable — use osid from plan extra_data if set, else fail at creation
+        plan_id = data.get("plan_id")
+        plan_osid = None
+        if plan_id:
+            from sqlalchemy import select as _select
+            from bot.database.models import ServerPlan as _ServerPlan
+            _plan = await session.get(_ServerPlan, plan_id)
+            if _plan and (_plan.extra_data or {}).get("osid"):
+                plan_osid = str(_plan.extra_data["osid"])
+        await state.update_data(os_id=plan_osid or "", os_name="پیش‌فرض")
         await _ask_discount(cb, state)
         return
 
@@ -445,7 +453,15 @@ async def _ask_os_message(message: Message, state: FSMContext, session: AsyncSes
             pass
 
     if not os_list:
-        await state.update_data(os_id="ubuntu-22.04", os_name="Ubuntu 22.04")
+        plan_id = data.get("plan_id")
+        plan_osid = None
+        if plan_id:
+            from sqlalchemy import select as _select
+            from bot.database.models import ServerPlan as _ServerPlan
+            _plan = await session.get(_ServerPlan, plan_id)
+            if _plan and (_plan.extra_data or {}).get("osid"):
+                plan_osid = str(_plan.extra_data["osid"])
+        await state.update_data(os_id=plan_osid or "", os_name="پیش‌فرض")
         await state.set_state(BuyServerStates.entering_discount)
         await message.answer(
             "🏷 <b>کد تخفیف</b>\n\n"
@@ -653,7 +669,8 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
         server = await svc.create_server(
             user=user, plan=plan, os_id=os_id,
             billing_type=billing_type,
-            extra={"root_password": f"TC@{user.telegram_id}!", "hostname": hostname},
+            hostname=hostname,  # use the hostname the user chose (was ignored before)
+            extra={"root_password": f"TC@{user.telegram_id}!"},
         )
         billing = BillingService(session)
         await billing.debit(user.id, final_price or 0, server_id=server.id,

@@ -167,6 +167,17 @@ class VirtualizorProvider(BaseProvider):
             "ram": params.extra.get("ram", 1024),
             "cores": params.extra.get("cpu", 1),
             "virt": params.extra.get("virt_type", "kvm"),
+            # Fields the official Create VPS example always sends. Omitting them makes
+            # Virtualizor silently re-render the add form (no error, no vs_info) instead
+            # of provisioning, especially for KVM.
+            "swapram": params.extra.get("swapram", 0),
+            "cpu": params.extra.get("cpu_units", 1000),
+            "cpu_percent": params.extra.get("cpu_percent", 100),
+            "network_speed": params.extra.get("network_speed", 0),
+            "num_ips6": 0,
+            "num_ips6_subnet": 0,
+            "vnc": 1,
+            "vncpass": params.extra.get("vnc_pass") or params.extra.get("root_password", "TeleCloud@2024"),
         }
 
         if node_id is not None:
@@ -201,35 +212,23 @@ class VirtualizorProvider(BaseProvider):
 
         data = await self._request("addvs", payload)
 
-        # Virtualizor returns the "Add Virtual Server" form (with ips/ostemplates data)
-        # when required params are missing or invalid — detect and fail loudly.
-        if data.get("title") == "Add Virtual Server" and not data.get("vs_info") and not data.get("vpsid"):
-            import json as _jdbg
-            missing = []
-            # osid="0"/empty is invalid; serid/node_select=0 is the master node and IS valid.
-            if not str(payload.get("osid") or "").strip() or str(payload.get("osid")) == "0":
-                missing.append("osid (OS template ID)")
-            if payload.get("node_select") is None and payload.get("serid") is None:
-                missing.append("node_select (serid)")
-            hint = f" — احتمالاً ناقص: {', '.join(missing)}" if missing else ""
-            # Surface whatever Virtualizor actually returned so the real cause is visible.
-            raw_keys = {k: data[k] for k in list(data.keys()) if k not in ("ips", "ostemplates", "plans", "storage")}
-            snippet = _jdbg.dumps(raw_keys, ensure_ascii=False)[:400]
-            raise RuntimeError(
-                f"Virtualizor ساخت VPS رو رد کرد{hint}\n"
-                f"پارامترهای ارسالی: osid={payload.get('osid')!r}, "
-                f"serid={payload.get('serid')!r}, "
-                f"node_select={payload.get('node_select')!r}, "
-                f"uid={payload.get('uid')!r}\n"
-                f"پاسخ Virtualizor: {snippet}"
-            )
-
+        # NOTE: data["title"] == "Add Virtual Server" appears on BOTH success and failure
+        # (it is just the page title — confirmed against the official docs, where a
+        # successful response is {"title":"Add Virtual Server","error":[],"vs_info":{...}}).
+        # So title is NOT a failure signal. A real failure has a non-empty `error`, which
+        # _request() already raises on. Success is detected by finding a vpsid below.
         vs_info = data.get("vs_info") or {}
         vpsid = vs_info.get("vpsid") if isinstance(vs_info, dict) else None
         taskid = data.get("taskid")
 
         if not vpsid:
             vpsid = data.get("vpsid")
+        if not vpsid:
+            # Some versions return the new id (or a task id) inside `done`.
+            done_raw = data.get("done")
+            if isinstance(done_raw, dict):
+                vpsid = done_raw.get("vpsid")
+                taskid = taskid or done_raw.get("taskid")
         if not vpsid:
             addvs_raw = data.get("addvs")
             if isinstance(addvs_raw, dict):
@@ -256,10 +255,24 @@ class VirtualizorProvider(BaseProvider):
 
         if not vpsid:
             import json as _json2
-            snippet = _json2.dumps(
-                {k: data[k] for k in list(data.keys())[:8]}, ensure_ascii=False
-            )[:300]
-            raise RuntimeError(f"Virtualizor did not return vpsid. Response: {snippet}")
+            # Strip the bulky add-form payload so the meaningful keys (done, error,
+            # vs_info, taskid, ...) are actually visible instead of being truncated away.
+            _form_noise = {
+                "ips", "ips6", "ips6_subnet", "ips_int", "ostemplates", "oslist",
+                "plans", "storage", "servers", "globals", "mediagroups", "mediadetails",
+                "vpsgroups", "iso", "isos", "scripts", "groups", "users",
+            }
+            meaningful = {k: v for k, v in data.items() if k not in _form_noise}
+            snippet = _json2.dumps(meaningful, ensure_ascii=False)[:600]
+            raise RuntimeError(
+                "Virtualizor VPS ساخته نشد (فرم دوباره برگشت، بدون vs_info).\n"
+                f"پارامترهای ارسالی: osid={payload.get('osid')!r}, "
+                f"serid={payload.get('serid')!r}, ram={payload.get('ram')!r}, "
+                f"cores={payload.get('cores')!r}, uid={payload.get('uid')!r}, "
+                f"ip={payload.get('ips[0]') or ('num_ips=' + str(payload.get('num_ips')))!r}, "
+                f"st_uuid={payload.get('space[0][st_uuid]')!r}\n"
+                f"پاسخ Virtualizor: {snippet}"
+            )
 
         return await self.get_server(str(vpsid))
 

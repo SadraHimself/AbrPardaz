@@ -193,6 +193,9 @@ async def prov_add_pass(message: Message, state: FSMContext, session: AsyncSessi
 
 async def _render_provider_detail(message, account, provider_id: int):
     """Shared helper — renders provider detail message without touching cb.answer()."""
+    extra = account.extra_config or {}
+    change_ip_fee = float(extra.get("change_ip_fee", 0) or 0)
+    fee_text = f"{change_ip_fee:,.0f} تومان" if change_ip_fee else "رایگان"
     await message.edit_text(
         f"🖥 <b>{account.name}</b>\n\n"
         f"🌐 URL: <code>{account.api_endpoint}</code>\n"
@@ -200,9 +203,10 @@ async def _render_provider_detail(message, account, provider_id: int):
         f"🔒 API Pass: <code>{'*' * 8}</code>\n"
         f"✅ وضعیت: {'فعال' if account.is_active else 'غیرفعال'}\n"
         f"🔒 Strict KYC: {'روشن' if account.strict_kyc else 'خاموش'}\n"
+        f"💰 هزینه تغییر IP: {fee_text}\n"
         f"🆔 ID: {account.id}",
         parse_mode="HTML",
-        reply_markup=provider_detail_kb(provider_id, account.is_active, account.strict_kyc),
+        reply_markup=provider_detail_kb(provider_id, account.is_active, account.strict_kyc, change_ip_fee),
     )
 
 
@@ -250,6 +254,7 @@ async def cb_prov_edit_start(cb: CallbackQuery, state: FSMContext):
     labels = {
         "name": "نام سرور", "url": "آدرس پنل",
         "api_key": "API Key", "api_pass": "API Pass",
+        "change_ip_fee": "هزینه تغییر IP (تومان، 0 = رایگان)",
     }
     await state.update_data(edit_provider_id=provider_id, edit_field=field)
     await state.set_state(ProviderFSM.edit_value)
@@ -277,8 +282,18 @@ async def prov_edit_value(message: Message, state: FSMContext, session: AsyncSes
         account.api_key = value
     elif field == "api_pass":
         account.api_secret = value
+    elif field == "change_ip_fee":
+        extra = dict(account.extra_config or {})
+        try:
+            extra["change_ip_fee"] = float(value)
+        except ValueError:
+            await message.answer("❌ مقدار باید عدد باشد.")
+            return
+        account.extra_config = extra
     await session.flush()
-    await message.answer("✅ تغییر ذخیره شد.", reply_markup=provider_detail_kb(data["edit_provider_id"], account.is_active, account.strict_kyc))
+    extra = account.extra_config or {}
+    change_ip_fee = float(extra.get("change_ip_fee", 0) or 0)
+    await message.answer("✅ تغییر ذخیره شد.", reply_markup=provider_detail_kb(data["edit_provider_id"], account.is_active, account.strict_kyc, change_ip_fee))
 
 
 @router.callback_query(F.data.startswith("admin:prov_test:"))

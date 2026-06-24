@@ -234,11 +234,21 @@ class VirtualizorProvider(BaseProvider):
         if not vpsid:
             vpsid = data.get("vpsid")
         if not vpsid:
-            # Some versions return the new id (or a task id) inside `done`.
+            # This Virtualizor version returns the new vpsid directly in `done` as a
+            # numeric string (e.g. "201"), with the config echoed under `newvs` — there
+            # is no `vs_info`. Older/other versions put it in a `done` dict. Handle both.
             done_raw = data.get("done")
             if isinstance(done_raw, dict):
                 vpsid = done_raw.get("vpsid")
                 taskid = taskid or done_raw.get("taskid")
+            elif isinstance(done_raw, (int, float)) and done_raw:
+                vpsid = int(done_raw)
+            elif isinstance(done_raw, str) and done_raw.strip().isdigit() and int(done_raw) > 0:
+                vpsid = int(done_raw)
+        if not vpsid:
+            newvs = data.get("newvs")
+            if isinstance(newvs, dict):
+                vpsid = newvs.get("vpsid") or newvs.get("vps_id")
         if not vpsid:
             addvs_raw = data.get("addvs")
             if isinstance(addvs_raw, dict):
@@ -284,7 +294,34 @@ class VirtualizorProvider(BaseProvider):
                 f"پاسخ Virtualizor: {snippet}"
             )
 
-        return await self.get_server(str(vpsid))
+        # Capture the Virtualizor uid this create used/created so the caller can persist
+        # it and reuse the same account next time (uid=0 inline-creation makes a NEW user
+        # otherwise). newvs.uid is the freshly created user; else fall back to a real uid
+        # we sent.
+        newvs = data.get("newvs") if isinstance(data.get("newvs"), dict) else {}
+        sent_uid = payload.get("uid")
+        created_uid = newvs.get("uid") or (sent_uid if str(sent_uid or "0") not in ("0", "") else None)
+
+        # The VPS exists now but is locked/offline while its OS-install task runs, so a
+        # full lookup may not be queryable yet. Don't fail the whole creation over that —
+        # return what we already know so the server (and its vpsid) is recorded. Status
+        # sync later moves it BUILDING → ACTIVE once the build finishes.
+        try:
+            info = await self.get_server(str(vpsid))
+            if created_uid and not info.extra_data.get("uid"):
+                info.extra_data["uid"] = created_uid
+            return info
+        except Exception:
+            return ServerInfo(
+                provider_server_id=str(vpsid),
+                name=params.name,
+                status="building",
+                ip_address=ip_to_assign,
+                ram=int(payload.get("ram", 0) or 0),
+                cpu=int(payload.get("cores", 0) or 0),
+                disk=int(disk_gb or 0),
+                extra_data={"vpsid": str(vpsid), "uid": created_uid},
+            )
 
     async def get_server(self, server_id: str) -> ServerInfo:
         data = await self._request("vs", query={"vpsid": server_id})

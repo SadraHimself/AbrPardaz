@@ -124,7 +124,11 @@ class VirtualizorProvider(BaseProvider):
             disk=int(vs.get("space", 0) or 0),
             bandwidth=int(vs.get("bandwidth", 0) or 0),
             os_name=vs.get("os_name"),
-            extra_data={"vpsid": vs.get("vpsid"), "node": vs.get("server_name")},
+            extra_data={
+                "vpsid": vs.get("vpsid"),
+                "node": vs.get("server_name"),
+                "serid": vs.get("serid"),
+            },
         )
 
     # ── BaseProvider implementation ───────────────────────────────────────────
@@ -516,10 +520,29 @@ class VirtualizorProvider(BaseProvider):
         data = await self._request("managevps", payload)
         return bool(data.get("done"))
 
-    async def change_ip(self, server_id: str) -> Optional[str]:
-        # TODO: confirm exact param against live docs
-        data = await self._request("managevps", {"vpsid": server_id, "change_ip": 1})
-        return data.get("newip")
+    async def change_ip(self, server_id: str) -> str:
+        """Pick a random free IP from the pool and assign it via managevps."""
+        import random as _random
+        # Find the node this VPS lives on so we pull IPs from the right pool
+        try:
+            info = await self.get_server(server_id)
+            serid = int(info.extra_data.get("serid") or 0)
+        except Exception:
+            serid = 0
+
+        free_ips = await self.list_ips(serid)
+        if not free_ips:
+            raise RuntimeError("هیچ آی‌پی آزادی در pool یافت نشد")
+
+        new_ip = _random.choice(free_ips)
+        # managevps with ips array assigns the IP(s) to the VPS
+        data = await self._request("managevps", {
+            "vpsid": server_id,
+            "ips[0]": new_ip,
+        })
+        if not data.get("done"):
+            raise RuntimeError(f"Virtualizor IP change failed: {list(data.keys())}")
+        return new_ip
 
     async def add_traffic(self, server_id: str, gb: int) -> bool:
         data = await self._request("managevps", {"vpsid": server_id, "bandwidth": gb})

@@ -117,6 +117,86 @@ def notify_user_traffic_exceeded(user_id: int, server_id: int):
     _run(_do())
 
 
+@app.task(name="bot.tasks.server.notify_hourly_billing")
+def notify_hourly_billing(user_id: int, server_id: int, amount: float, new_balance: float):
+    async def _do():
+        from bot.database.session import AsyncSessionFactory
+        from bot.database.models import User, Server
+        from aiogram import Bot
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        from bot.config import settings
+
+        async with AsyncSessionFactory() as session:
+            user = await session.get(User, user_id)
+            server = await session.get(Server, server_id)
+            if not user or not server:
+                return
+            extra = server.extra_data or {}
+            if not extra.get("hourly_notify", True):
+                return
+            bot = Bot(token=settings.BOT_TOKEN)
+            try:
+                kb = InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(
+                        text="🔕 خاموش کردن اطلاع‌رسانی",
+                        callback_data=f"srv_mute_hourly:{server_id}",
+                    )
+                ]])
+                await bot.send_message(
+                    user.telegram_id,
+                    f"⏱ <b>بیلینگ ساعتی</b>\n\n"
+                    f"🖥 سرور: {server.name}\n"
+                    f"💸 کسر شد: {amount:,.0f} تومان\n"
+                    f"💰 موجودی جدید: {new_balance:,.0f} تومان",
+                    parse_mode="HTML",
+                    reply_markup=kb,
+                )
+            finally:
+                await bot.session.close()
+
+    _run(_do())
+
+
+@app.task(name="bot.tasks.server.sync_building_servers")
+def sync_building_servers():
+    """هر ۵ دقیقه سرورهای در حال ساخت را چک و وضعیت را آپدیت می‌کند."""
+    async def _do():
+        from bot.database.session import AsyncSessionFactory
+        from bot.database.models import Server, ServerStatus, ProviderAccount
+        from bot.providers import get_provider
+        from sqlalchemy import select
+
+        async with AsyncSessionFactory() as session:
+            result = await session.execute(
+                select(Server).where(Server.status == ServerStatus.BUILDING)
+            )
+            servers = list(result.scalars().all())
+
+            for server in servers:
+                if not server.provider_account_id or not server.provider_server_id:
+                    continue
+                try:
+                    account = await session.get(ProviderAccount, server.provider_account_id)
+                    if not account:
+                        continue
+                    provider = get_provider(account)
+                    info = await provider.get_server(server.provider_server_id)
+                    if info.status in ("active", "off"):
+                        server.status = ServerStatus.ACTIVE
+                        if info.ip_address and not server.ip_address:
+                            server.ip_address = info.ip_address
+                        if info.ram and not server.ram:
+                            server.ram = info.ram
+                        if info.cpu and not server.cpu:
+                            server.cpu = info.cpu
+                except Exception:
+                    pass
+
+            await session.commit()
+
+    _run(_do())
+
+
 @app.task(name="bot.tasks.server.notify_traffic_warning")
 def notify_traffic_warning(user_id: int, server_id: int, percent: int):
     async def _do():

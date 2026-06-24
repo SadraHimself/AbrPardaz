@@ -159,16 +159,19 @@ def notify_hourly_billing(user_id: int, server_id: int, amount: float, new_balan
 
 @app.task(name="bot.tasks.server.sync_building_servers")
 def sync_building_servers():
-    """هر ۵ دقیقه سرورهای در حال ساخت را چک و وضعیت را آپدیت می‌کند."""
+    """هر ۵ دقیقه سرورهای در حال ساخت/ریبیلد را چک و وضعیت را آپدیت می‌کند."""
     async def _do():
         from bot.database.session import AsyncSessionFactory
-        from bot.database.models import Server, ServerStatus, ProviderAccount
-        from bot.providers import get_provider
+        from bot.database.models import Server, ServerStatus
+        from bot.services.server import ServerService
         from sqlalchemy import select
 
         async with AsyncSessionFactory() as session:
+            svc = ServerService(session)
             result = await session.execute(
-                select(Server).where(Server.status == ServerStatus.BUILDING)
+                select(Server).where(
+                    Server.status.in_([ServerStatus.BUILDING, ServerStatus.REBUILDING])
+                )
             )
             servers = list(result.scalars().all())
 
@@ -176,19 +179,7 @@ def sync_building_servers():
                 if not server.provider_account_id or not server.provider_server_id:
                     continue
                 try:
-                    account = await session.get(ProviderAccount, server.provider_account_id)
-                    if not account:
-                        continue
-                    provider = get_provider(account)
-                    info = await provider.get_server(server.provider_server_id)
-                    if info.status in ("active", "off"):
-                        server.status = ServerStatus.ACTIVE
-                        if info.ip_address and not server.ip_address:
-                            server.ip_address = info.ip_address
-                        if info.ram and not server.ram:
-                            server.ram = info.ram
-                        if info.cpu and not server.cpu:
-                            server.cpu = info.cpu
+                    await svc.sync_server_status(server)
                 except Exception:
                     pass
 

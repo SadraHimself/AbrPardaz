@@ -6,10 +6,26 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 
+def status_dot(server: Server) -> str:
+    """Keyboard dot kept in exact sync with the real machine state:
+    online → 🟢 , offline / suspended → 🔴 , pending (locked/building) → ⚪."""
+    if server.status == ServerStatus.SUSPENDED:
+        return "🔴"
+    if server.status in (
+        ServerStatus.PENDING, ServerStatus.BUILDING,
+        ServerStatus.REBUILDING, ServerStatus.REBOOTING,
+    ):
+        return "⚪"
+    if server.status == ServerStatus.ACTIVE:
+        # ACTIVE covers both running and powered-off; machine_status decides.
+        return "🟢" if str((server.extra_data or {}).get("machine_status", "1")) == "1" else "🔴"
+    return "🔴"  # deleted / unknown
+
+
 def server_list_kb(servers: list[Server]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for s in servers:
-        icon = "🟢" if s.status == ServerStatus.ACTIVE else "🔴" if s.status == ServerStatus.SUSPENDED else "⚪"
+        icon = status_dot(s)
         builder.button(text=f"{icon} {s.name} ({s.ip_address or 'بدون IP'})",
                        callback_data=f"server:{s.id}")
     builder.button(text="🛒 خرید سرور جدید", callback_data="buy_server")

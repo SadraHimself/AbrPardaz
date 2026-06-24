@@ -191,6 +191,14 @@ class ServerService:
                     ok = True  # VPS already gone from provider — clean up DB record
                 else:
                     raise
+            if not ok:
+                # Provider returned false without raising — verify VPS actually still exists.
+                # If get_server also fails, the VPS is already gone → safe to clean up DB.
+                try:
+                    await provider.get_server(sid)
+                    # VPS still exists → genuine delete failure, keep ok=False
+                except RuntimeError:
+                    ok = True  # VPS not found by provider either → force clean DB
             if ok:
                 server.status = ServerStatus.DELETED
                 await self.session.flush()

@@ -337,6 +337,59 @@ async def cb_prov_test(cb: CallbackQuery, session: AsyncSession):
         await test_msg.edit_text(f"❌ <b>خطا:</b> {e}", parse_mode="HTML")
 
 
+@router.callback_query(F.data.startswith("admin:prov_monitor:"))
+async def cb_prov_monitor(cb: CallbackQuery, session: AsyncSession):
+    provider_id = int(cb.data.split(":")[2])
+    account = await session.get(ProviderAccount, provider_id)
+    if not account:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    await cb.answer()
+    mon_msg = await cb.message.answer("⏳ در حال خواندن اطلاعات سرور...")
+    prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
+    try:
+        nodes = await asyncio.wait_for(prov.list_nodes(), timeout=15)
+        if not nodes:
+            await mon_msg.edit_text("⚠️ هیچ سروری یافت نشد.\n\nاحتمالاً API key دسترسی <code>act=servers</code> ندارد.\nVirtualizor → Configuration → Admin API → ویرایش کلید → فعال کردن همه دسترسی‌ها", parse_mode="HTML")
+            return
+        lines = []
+        for n in nodes:
+            status = "🟢 آنلاین" if n["online"] else "🔴 آفلاین"
+            block = (
+                f"━━━━━━━━━━━━━━━━\n"
+                f"🖥 <b>{n['name'] or 'بدون نام'}</b>  {status}\n"
+                f"🌐 IP: <code>{n['ip']}</code>\n"
+            )
+            if n.get("os"):
+                block += f"🐧 OS: <code>{n['os']}</code>\n"
+            if n.get("cpu"):
+                block += f"⚡ CPU: <code>{str(n['cpu'])[:60]}</code>\n"
+            if n.get("cpu_load"):
+                block += f"📈 Load: <code>{n['cpu_load']}</code>\n"
+            if n.get("ram_total_mb"):
+                used = n.get("ram_used_mb", 0)
+                total = n["ram_total_mb"]
+                pct = (used / total * 100) if total else 0
+                block += f"🧠 RAM: <code>{used:.0f} / {total:.0f} MB  ({pct:.0f}%)</code>\n"
+            if n.get("hdd"):
+                block += f"💾 HDD: <code>{str(n['hdd'])[:60]}</code>\n"
+            if n.get("virt_type"):
+                block += f"🔧 Virt: <code>{n['virt_type']}</code>\n"
+            block += f"🆔 serid: <code>{n['serid']}</code>"
+            lines.append(block)
+        text = f"📊 <b>مانیتور — {account.name}</b>\n\n" + "\n\n".join(lines)
+        await mon_msg.edit_text(text, parse_mode="HTML")
+    except asyncio.TimeoutError:
+        await mon_msg.edit_text("⏱ تایم‌اوت هنگام خواندن اطلاعات سرور.")
+    except Exception as e:
+        await mon_msg.edit_text(
+            f"❌ <b>خطا:</b> <code>{e}</code>\n\n"
+            "اگر خطا «access privileges» است:\n"
+            "Virtualizor → Configuration → Admin API → ویرایش کلید → فعال کردن همه دسترسی‌ها",
+            parse_mode="HTML",
+        )
+
+
 @router.callback_query(F.data.startswith("admin:prov_del:"))
 async def cb_prov_del_confirm(cb: CallbackQuery, session: AsyncSession):
     provider_id = int(cb.data.split(":")[2])
@@ -486,26 +539,93 @@ async def plan_add_display_name(message: Message, state: FSMContext, session: As
 
 
 @router.callback_query(PlanFSM.add_provider, F.data.startswith("admin:plan_prov:"))
-async def plan_add_provider(cb: CallbackQuery, state: FSMContext):
+async def plan_add_provider(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
     provider_id = int(cb.data.split(":")[2])
     await state.update_data(provider_account_id=provider_id)
+
+    account = await session.get(ProviderAccount, provider_id)
+    if account:
+        fetch_msg = await cb.message.edit_text("⏳ در حال خواندن پلن‌های Virtualizor...")
+        try:
+            prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
+            virt_plans = await asyncio.wait_for(prov.list_plans(), timeout=15)
+            if virt_plans:
+                await state.set_state(PlanFSM.add_plan_id)
+                from aiogram.utils.keyboard import InlineKeyboardBuilder as _IKB
+                builder = _IKB()
+                for p in virt_plans[:25]:
+                    ram_label = f"{p.ram // 1024}GB" if p.ram >= 1024 else f"{p.ram}MB"
+                    label = f"{p.name} | {ram_label}/{p.cpu}C/{p.disk}G"
+                    builder.button(text=label, callback_data=f"admin:vplan:{p.provider_plan_id}")
+                builder.button(text="❌ انصراف", callback_data="admin_panel")
+                builder.adjust(1)
+                await fetch_msg.edit_text(
+                    "مرحله ۵ — انتخاب پلن از Virtualizor:\n"
+                    "<i>یکی از پلن‌های زیر را انتخاب کنید:</i>",
+                    parse_mode="HTML",
+                    reply_markup=builder.as_markup(),
+                )
+                await cb.answer()
+                return
+            else:
+                await fetch_msg.edit_text("⚠️ هیچ پلنی در Virtualizor یافت نشد. ابتدا پلن بسازید.")
+                await cb.answer()
+                return
+        except Exception as e:
+            await fetch_msg.edit_text(
+                f"⚠️ خطا در اتصال به Virtualizor: {e}\n\nPlan ID را دستی وارد کنید:",
+                parse_mode="HTML",
+                reply_markup=cancel_admin_kb(),
+            )
+            await state.set_state(PlanFSM.add_plan_id)
+            await cb.answer()
+            return
+
     await state.set_state(PlanFSM.add_plan_id)
     await cb.message.edit_text(
-        "مرحله ۵ — Plan ID در ویرچولایزور (اختیاری):\n"
-        "<i>اگر وارد کنید، مشخصات رم/CPU/دیسک/ترافیک خودکار خوانده می‌شود.</i>\n"
-        "<i>اگر ندارید /skip بزنید.</i>",
-        parse_mode="HTML", reply_markup=skip_or_cancel_kb(),
+        "مرحله ۵ — Plan ID در ویرچولایزور:\n<i>شناسه پلن را وارد کنید.</i>",
+        parse_mode="HTML", reply_markup=cancel_admin_kb(),
     )
     await cb.answer()
 
 
-@router.callback_query(PlanFSM.add_plan_id, F.data == "admin:skip")
-async def plan_add_plan_id_skip(cb: CallbackQuery, state: FSMContext):
-    await state.update_data(provider_plan_id=None)
-    await state.set_state(PlanFSM.add_ram)
+@router.callback_query(PlanFSM.add_plan_id, F.data.startswith("admin:vplan:"))
+async def plan_select_virt_plan(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
+    plan_id_str = cb.data.split(":", 2)[2]
+    data = await state.get_data()
+    account = await session.get(ProviderAccount, data["provider_account_id"])
+    if not account:
+        await cb.answer("پروایدر یافت نشد.", show_alert=True)
+        return
+
+    try:
+        prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
+        virt_plans = await asyncio.wait_for(prov.list_plans(), timeout=15)
+        matched = next((p for p in virt_plans if str(p.provider_plan_id) == plan_id_str), None)
+    except Exception as e:
+        await cb.answer(f"خطا: {e}", show_alert=True)
+        return
+
+    if not matched:
+        await cb.answer("پلن یافت نشد.", show_alert=True)
+        return
+
+    await state.update_data(
+        provider_plan_id=plan_id_str,
+        ram=matched.ram, cpu=matched.cpu, disk=matched.disk,
+        bandwidth=matched.bandwidth, autofetch=True,
+    )
+    await state.set_state(PlanFSM.confirm_autofetch)
+    ram_label = f"{matched.ram // 1024}GB" if matched.ram >= 1024 else f"{matched.ram}MB"
     await cb.message.edit_text(
-        "مرحله ۶ — RAM (مگابایت):\n<i>مثال: 1024</i>",
-        parse_mode="HTML", reply_markup=cancel_admin_kb(),
+        f"✅ <b>پلن انتخاب شد:</b> {matched.name}\n\n"
+        f"💾 RAM: {ram_label} ({matched.ram} MB)\n"
+        f"⚡ CPU: {matched.cpu} هسته\n"
+        f"💿 Disk: {matched.disk} GB\n"
+        f"🌐 Bandwidth: {matched.bandwidth} GB\n\n"
+        "آیا این مشخصات درست است؟",
+        parse_mode="HTML",
+        reply_markup=confirm_kb("admin:plan_autofetch_ok", "admin:plan_autofetch_no"),
     )
     await cb.answer()
 
@@ -513,37 +633,25 @@ async def plan_add_plan_id_skip(cb: CallbackQuery, state: FSMContext):
 @router.message(PlanFSM.add_plan_id)
 async def plan_add_plan_id(message: Message, state: FSMContext, session: AsyncSession):
     plan_id_str = message.text.strip()
-    if plan_id_str.lower() in ("/skip", "skip"):
-        await state.update_data(provider_plan_id=None)
-        await state.set_state(PlanFSM.add_ram)
-        await message.answer("مرحله ۶ — RAM (مگابایت):", reply_markup=cancel_admin_kb())
-        return
-
     await state.update_data(provider_plan_id=plan_id_str)
 
-    # Try to auto-fetch specs from Virtualizor
     data = await state.get_data()
     account = await session.get(ProviderAccount, data["provider_account_id"])
     if account:
         fetch_msg = await message.answer("⏳ در حال خواندن مشخصات از Virtualizor...")
         try:
             prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
-            plans = await asyncio.wait_for(prov.list_plans(), timeout=15)
-            matched = next((p for p in plans if str(p.provider_plan_id) == plan_id_str), None)
+            virt_plans = await asyncio.wait_for(prov.list_plans(), timeout=15)
+            matched = next((p for p in virt_plans if str(p.provider_plan_id) == plan_id_str), None)
             if matched:
                 await state.update_data(
-                    ram=matched.ram,
-                    cpu=matched.cpu,
-                    disk=matched.disk,
-                    bandwidth=matched.bandwidth,
-                    autofetch=True,
+                    ram=matched.ram, cpu=matched.cpu, disk=matched.disk,
+                    bandwidth=matched.bandwidth, autofetch=True,
                 )
                 await fetch_msg.edit_text(
                     f"✅ <b>مشخصات خودکار خوانده شد:</b>\n\n"
-                    f"💾 RAM: {matched.ram} MB\n"
-                    f"⚡ CPU: {matched.cpu} هسته\n"
-                    f"💿 Disk: {matched.disk} GB\n"
-                    f"🌐 Bandwidth: {matched.bandwidth} GB\n\n"
+                    f"💾 RAM: {matched.ram} MB\n⚡ CPU: {matched.cpu} هسته\n"
+                    f"💿 Disk: {matched.disk} GB\n🌐 Bandwidth: {matched.bandwidth} GB\n\n"
                     "آیا این مشخصات درست است؟",
                     parse_mode="HTML",
                     reply_markup=confirm_kb("admin:plan_autofetch_ok", "admin:plan_autofetch_no"),
@@ -551,15 +659,14 @@ async def plan_add_plan_id(message: Message, state: FSMContext, session: AsyncSe
                 await state.set_state(PlanFSM.confirm_autofetch)
                 return
             else:
-                available = ", ".join(str(p.provider_plan_id) for p in plans[:15])
+                available = ", ".join(str(p.provider_plan_id) for p in virt_plans[:15])
                 await fetch_msg.edit_text(
-                    f"⚠️ Plan ID <code>{plan_id_str}</code> در لیست پلن‌ها یافت نشد.\n\n"
-                    f"📋 IDهای موجود در Virtualizor: <code>{available or 'هیچ پلنی نیست'}</code>\n\n"
-                    "مشخصات را دستی وارد کنید:",
+                    f"⚠️ Plan ID <code>{plan_id_str}</code> یافت نشد.\n"
+                    f"IDهای موجود: <code>{available or 'هیچ'}</code>",
                     parse_mode="HTML",
                 )
         except Exception as e:
-            await fetch_msg.edit_text(f"⚠️ خطا در خواندن: {e}\nمشخصات دستی:")
+            await fetch_msg.edit_text(f"⚠️ خطا: {e}")
 
     await state.set_state(PlanFSM.add_ram)
     await message.answer("مرحله ۶ — RAM (مگابایت):", reply_markup=cancel_admin_kb())

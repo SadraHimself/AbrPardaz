@@ -109,7 +109,11 @@ class VirtualizorProvider(BaseProvider):
     def _vs_status(vs: dict) -> str:
         if str(vs.get("suspended", "0")) == "1":
             return "suspended"
-        return "active" if str(vs.get("machine_status", "0")) == "1" else "off"
+        if str(vs.get("machine_status", "0")) == "1":
+            return "active"
+        if str(vs.get("locked", "0")) == "1":
+            return "building"
+        return "off"
 
     def _parse_vs(self, vs: dict) -> ServerInfo:
         ips = vs.get("ips") or {}
@@ -128,6 +132,7 @@ class VirtualizorProvider(BaseProvider):
                 "vpsid": vs.get("vpsid"),
                 "node": vs.get("server_name"),
                 "serid": vs.get("serid"),
+                "machine_status": str(vs.get("machine_status", "1")),
             },
         )
 
@@ -143,8 +148,12 @@ class VirtualizorProvider(BaseProvider):
         st_uuid = params.extra.get("st_uuid") or await self.get_primary_storage_uuid()
         disk_gb = params.extra.get("disk", 20)
 
+        # Only fetch a free IP when there's no plan — plans have their own IP pool
+        # and Virtualizor assigns from it automatically via num_ips.
+        _plan_id_early = str(params.plan_id).strip()
+        _has_plan_early = _plan_id_early.isdigit() and int(_plan_id_early) > 0
         ip_to_assign = None
-        if node_id is not None:
+        if node_id is not None and not _has_plan_early:
             try:
                 free_ips = await self.list_ips(int(node_id))
                 if free_ips:
@@ -210,10 +219,14 @@ class VirtualizorProvider(BaseProvider):
             payload["user_pass"] = params.extra.get("user_pass", user_email)
 
         plan_id_str = str(params.plan_id).strip()
-        if plan_id_str.isdigit() and int(plan_id_str) > 0:
+        has_plan = plan_id_str.isdigit() and int(plan_id_str) > 0
+        if has_plan:
             payload["plid"] = int(plan_id_str)
-
-        if ip_to_assign:
+            # With a plan assigned, Virtualizor allocates IPs from the plan's own pool.
+            # Manually pre-selecting an IP (ips[0]) bypasses that restriction, so we
+            # use num_ips=1 and let Virtualizor pick.
+            payload["num_ips"] = 1
+        elif ip_to_assign:
             payload["ips[0]"] = ip_to_assign
         else:
             payload["num_ips"] = 1
@@ -365,9 +378,18 @@ class VirtualizorProvider(BaseProvider):
         vs = vs_list.get(str(server_id)) or (next(iter(vs_list.values())) if vs_list else {})
         return float(vs.get("used_bandwidth", 0) or 0)
 
-    async def rebuild_server(self, server_id: str, os_id: str) -> bool:
-        # TODO: confirm exact params against live docs — managevps used as best guess
-        data = await self._request("managevps", {"vpsid": server_id, "newos": os_id, "conf": "1"})
+    async def rebuild_server(self, server_id: str, os_id: str, rootpass: str = "") -> bool:
+        payload: dict = {"vpsid": server_id, "newos": os_id, "conf": "1"}
+        if rootpass:
+            payload["rootpass"] = rootpass
+        data = await self._request("managevps", payload)
+        return bool(data.get("done"))
+
+    async def change_root_password(self, server_id: str, new_password: str) -> bool:
+        data = await self._request("managevps", {
+            "vpsid": server_id,
+            "rootpass": new_password,
+        })
         return bool(data.get("done"))
 
     async def list_nodes(self) -> list[dict]:

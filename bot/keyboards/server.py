@@ -1,7 +1,7 @@
 """Server management keyboards."""
 from __future__ import annotations
 
-from bot.database.models import Server, ServerStatus
+from bot.database.models import BillingType, Server, ServerStatus
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -22,21 +22,25 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     sid = server.id
 
+    is_hourly = server.billing_type == BillingType.HOURLY
+
     if server.status == ServerStatus.ACTIVE:
-        builder.button(text="🔄 ریبوت", callback_data=f"srv_action:{sid}:restart")
+        builder.button(text="🔄 ریبوت", callback_data=f"srv_action:{sid}:restart_confirm")
         builder.button(text="⏹ خاموش", callback_data=f"srv_action:{sid}:stop")
         builder.button(text="🔁 ریبیلد", callback_data=f"srv_action:{sid}:rebuild_menu")
-        builder.button(text="🌐 تغییر IP", callback_data=f"srv_action:{sid}:change_ip")
+        builder.button(text="🌐 تغییر IP", callback_data=f"srv_changeip:{sid}")
         builder.button(text="🖥 VNC", callback_data=f"srv_vnc:{sid}")
         builder.button(text="📊 ترافیک", callback_data=f"srv_traffic:{sid}")
         builder.button(text="➕ ترافیک اضافه", callback_data=f"srv_add_traffic:{sid}")
         builder.button(text="📦 خدمات اضافه", callback_data=f"srv_subproducts:{sid}")
         builder.button(text="⚙️ ویرایش سخت‌افزار", callback_data=f"srv_edit:{sid}")
-        builder.button(text="🗑 حذف سرور", callback_data=f"srv_action:{sid}:delete_confirm")
+        if is_hourly:
+            builder.button(text="🗑 حذف سرور", callback_data=f"srv_action:{sid}:delete_confirm")
 
     elif server.status == ServerStatus.SUSPENDED:
         builder.button(text="▶️ فعال‌سازی", callback_data=f"srv_action:{sid}:unsuspend")
-        builder.button(text="🗑 حذف سرور", callback_data=f"srv_action:{sid}:delete_confirm")
+        if is_hourly:
+            builder.button(text="🗑 حذف سرور", callback_data=f"srv_action:{sid}:delete_confirm")
 
     elif server.status == ServerStatus.DELETED:
         pass  # no actions
@@ -45,6 +49,8 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
         builder.button(text="▶️ روشن کردن", callback_data=f"srv_action:{sid}:start")
         builder.button(text="🔁 ریبیلد", callback_data=f"srv_action:{sid}:rebuild_menu")
         builder.button(text="🔄 بررسی وضعیت", callback_data=f"srv_refresh:{sid}")
+        if is_hourly:
+            builder.button(text="🗑 حذف سرور", callback_data=f"srv_action:{sid}:delete_confirm")
 
     builder.button(text="🔙 بازگشت به لیست", callback_data="my_servers")
     builder.adjust(2)

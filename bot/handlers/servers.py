@@ -210,6 +210,14 @@ async def cb_server_action(cb: CallbackQuery, user: User, session: AsyncSession)
               "suspend": "ساسپند", "unsuspend": "رفع ساسپند"}
     await cb.answer(f"⏳ {labels.get(action, action)}...")
 
+    # restart & delete arrive from a confirmation dialog — remove it so its
+    # "✅ بله" button can't be tapped again to re-run the action.
+    if action in ("restart", "delete"):
+        try:
+            await cb.message.delete()
+        except Exception:
+            pass
+
     try:
         svc = ServerService(session)
         kwargs = {}
@@ -899,6 +907,11 @@ async def cb_change_ip_do(cb: CallbackQuery, user: User, session: AsyncSession):
             return
 
     await cb.answer("⏳ در حال تغییر IP...")
+    # Remove the confirmation dialog so its "✅ تأیید" button can't be re-tapped.
+    try:
+        await cb.message.delete()
+    except Exception:
+        pass
     wait = await cb.message.answer("⏳ در حال تغییر IP...")
     try:
         prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
@@ -1066,6 +1079,11 @@ async def cb_change_password_do(cb: CallbackQuery, user: User, session: AsyncSes
     new_password = "".join(_secrets.choice(_alphabet) for _ in range(16))
 
     await cb.answer("⏳ در حال تغییر رمز...")
+    # Remove the confirmation dialog so its "✅ بله" button can't be re-tapped.
+    try:
+        await cb.message.delete()
+    except Exception:
+        pass
     wait = await cb.message.answer("⏳ در حال تغییر رمز root...")
     try:
         svc = ServerService(session)

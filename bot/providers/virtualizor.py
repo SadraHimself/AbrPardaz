@@ -154,9 +154,11 @@ class VirtualizorProvider(BaseProvider):
             os_id_val = params.extra.get("osid", os_id_val)
 
         payload: dict = {
-            # Submit trigger: without addvs=1 the API only loads the "Add Virtual
-            # Server" form (returns ips/ostemplates/plans) instead of provisioning.
-            # Same pattern as adduser=1 in create_user().
+            # Submit trigger: the documented field is `addvps=1` ("If set the vps will
+            # be created" — official Create VPS docs). Without it, act=addvs only loads
+            # the "Add Virtual Server" form (returns ips/ostemplates/plans) instead of
+            # provisioning. `addvs=1` kept too as a harmless cross-version fallback.
+            "addvps": 1,
             "addvs": 1,
             "hostname": params.name,
             "rootpass": params.extra.get("root_password", "TeleCloud@2024"),
@@ -168,6 +170,9 @@ class VirtualizorProvider(BaseProvider):
         }
 
         if node_id is not None:
+            # serid is what the official Create VPS example sets (serid=0 = master node,
+            # which is valid). node_select is also accepted; send both for compatibility.
+            payload["serid"] = int(node_id)
             payload["node_select"] = int(node_id)
 
         uid_val = params.extra.get("virtualizor_uid")
@@ -199,17 +204,24 @@ class VirtualizorProvider(BaseProvider):
         # Virtualizor returns the "Add Virtual Server" form (with ips/ostemplates data)
         # when required params are missing or invalid — detect and fail loudly.
         if data.get("title") == "Add Virtual Server" and not data.get("vs_info") and not data.get("vpsid"):
+            import json as _jdbg
             missing = []
-            if not payload.get("osid"):
+            # osid="0"/empty is invalid; serid/node_select=0 is the master node and IS valid.
+            if not str(payload.get("osid") or "").strip() or str(payload.get("osid")) == "0":
                 missing.append("osid (OS template ID)")
-            if not payload.get("node_select"):
+            if payload.get("node_select") is None and payload.get("serid") is None:
                 missing.append("node_select (serid)")
             hint = f" — احتمالاً ناقص: {', '.join(missing)}" if missing else ""
+            # Surface whatever Virtualizor actually returned so the real cause is visible.
+            raw_keys = {k: data[k] for k in list(data.keys()) if k not in ("ips", "ostemplates", "plans", "storage")}
+            snippet = _jdbg.dumps(raw_keys, ensure_ascii=False)[:400]
             raise RuntimeError(
                 f"Virtualizor ساخت VPS رو رد کرد{hint}\n"
                 f"پارامترهای ارسالی: osid={payload.get('osid')!r}, "
+                f"serid={payload.get('serid')!r}, "
                 f"node_select={payload.get('node_select')!r}, "
-                f"uid={payload.get('uid')!r}"
+                f"uid={payload.get('uid')!r}\n"
+                f"پاسخ Virtualizor: {snippet}"
             )
 
         vs_info = data.get("vs_info") or {}

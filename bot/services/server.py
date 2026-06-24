@@ -122,10 +122,30 @@ class ServerService:
         account = await self._get_account(server.provider_account_id)
         provider = get_provider(account)
         info = await provider.get_server(server.provider_server_id)
-        server.ip_address = info.ip_address or server.ip_address
-        server.ipv6_address = info.ipv6_address or server.ipv6_address
-        if info.status == "active" and server.status == ServerStatus.BUILDING:
+        if info.ip_address:
+            server.ip_address = info.ip_address
+        if info.ipv6_address:
+            server.ipv6_address = info.ipv6_address
+
+        # Persist machine_status for real-time display in detail page and keyboard
+        _extra = dict(server.extra_data or {})
+        _extra["machine_status"] = str((info.extra_data or {}).get("machine_status", "1"))
+        server.extra_data = _extra
+
+        virt_status = info.status  # "active" | "suspended" | "building" | "off"
+        if virt_status == "active":
             server.status = ServerStatus.ACTIVE
+        elif virt_status == "suspended":
+            server.status = ServerStatus.SUSPENDED
+        elif virt_status == "building":
+            # locked+offline: keep REBUILDING if already in that state, else BUILDING
+            if server.status != ServerStatus.REBUILDING:
+                server.status = ServerStatus.BUILDING
+        else:  # "off" — powered off but not suspended
+            # Keep ACTIVE so action buttons stay available;
+            # machine_status=0 in extra_data drives "⚫ خاموش" display and start/stop keyboard.
+            server.status = ServerStatus.ACTIVE
+
         await self.session.flush()
         return server
 
@@ -145,7 +165,7 @@ class ServerService:
         if action == "rebuild":
             server.status = ServerStatus.REBUILDING
             await self.session.flush()
-            return await provider.rebuild_server(sid, kwargs["os_id"])
+            return await provider.rebuild_server(sid, kwargs["os_id"], rootpass=kwargs.get("new_password", ""))
         if action == "suspend":
             ok = await provider.suspend_server(sid)
             if ok:
@@ -163,7 +183,14 @@ class ServerService:
                 await self.session.flush()
             return ok
         if action == "delete":
-            ok = await provider.delete_server(sid)
+            try:
+                ok = await provider.delete_server(sid)
+            except RuntimeError as _e:
+                _em = str(_e).lower()
+                if any(w in _em for w in ("not found", "does not exist", "no vps", "invalid vpsid", "no such")):
+                    ok = True  # VPS already gone from provider — clean up DB record
+                else:
+                    raise
             if ok:
                 server.status = ServerStatus.DELETED
                 await self.session.flush()
@@ -192,6 +219,15 @@ class ServerService:
             return ok
         if action == "add_traffic":
             return await provider.add_traffic(sid, kwargs["gb"])
+        if action == "change_password":
+            new_pass = kwargs["password"]
+            ok = await provider.change_root_password(sid, new_pass)
+            if ok:
+                _extra = dict(server.extra_data or {})
+                _extra["root_password"] = new_pass
+                server.extra_data = _extra
+                await self.session.flush()
+            return ok
 
         raise ValueError(f"Unknown action: {action}")
 

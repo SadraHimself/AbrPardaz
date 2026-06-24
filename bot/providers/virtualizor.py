@@ -15,6 +15,10 @@ logger = logging.getLogger("abrpardaz.virtualizor")
 # the logger.warning calls in _request) once the status/rebuild bugs are pinned down.
 _DEBUG_RAW_ACTS = {"vs", "managevps", "addvs", "rebuild"}
 
+# Bump this whenever virtualizor.py changes — it prints in every VIRT_DEBUG line so we
+# can tell at a glance whether the running bot is actually the latest deployed code.
+_BUILD_TAG = "r9-rebuild-vpsid-in-body+changeip-from-managevps"
+
 
 def _redact(d: Optional[dict]) -> dict:
     """Copy a params dict with any password-ish values masked, for safe logging."""
@@ -67,8 +71,8 @@ class VirtualizorProvider(BaseProvider):
         _debug = act in _DEBUG_RAW_ACTS
         if _debug:
             logger.warning(
-                "VIRT_DEBUG ▶ act=%s query=%s body=%s",
-                act, _redact(query), _redact(params),
+                "VIRT_DEBUG[%s] ▶ act=%s query=%s body=%s",
+                _BUILD_TAG, act, _redact(query), _redact(params),
             )
 
         connector = aiohttp.TCPConnector(ssl=False)
@@ -473,12 +477,12 @@ class VirtualizorProvider(BaseProvider):
         return float(vs.get("used_bandwidth", 0) or 0)
 
     async def rebuild_server(self, server_id: str, os_id: str, rootpass: str = "") -> bool:
-        # Rebuild is its OWN admin action `act=rebuild` (confirmed via the official docs).
-        # The earlier `managevps + editvps=1/reos=1 + newos` only loaded/edited the Manage
-        # VPS page (so just the password changed, no reinstall). Correct params:
-        #   act=rebuild, vpsid (query), osid (NOT newos!), newpass, conf, reos=1 (trigger).
+        # Rebuild is its OWN admin action `act=rebuild`. The PHP SDK passes everything
+        # (including vpsid) in the POST body — putting vpsid only in the URL query made
+        # Virtualizor reject it with "Please choose a VPS / invalid VPS ID". So vpsid
+        # goes in the body. Params: vpsid, osid (NOT newos!), newpass, conf, reos=1.
         # Success → {"title":"Rebuild Virtual Server","done":1,...}.
-        payload: dict = {"reos": 1, "osid": os_id}
+        payload: dict = {"vpsid": server_id, "reos": 1, "osid": os_id}
         if rootpass:
             payload["newpass"] = rootpass
             payload["conf"] = rootpass          # confirm-password field must equal newpass
@@ -646,56 +650,40 @@ class VirtualizorProvider(BaseProvider):
         return bool(done_val) if not isinstance(done_val, dict) else bool(done_val.get("done"))
 
     async def change_ip(self, server_id: str) -> str:
-        """Assign a new free IP, restricted to the SAME IP pool / subnet the VPS
-        currently uses.
+        """Assign a new free IP taken ONLY from this VPS's allowed pool.
 
-        A Virtualizor node can host several IP pools (e.g. 1.1.1.0/24 AND
-        2.2.2.0/24), but a plan is only permitted to draw from its own pool. The
-        VPS's current IP was assigned from that allowed pool at creation, so we
-        scope the new IP to the same pool id (`ippid`) — falling back to the same
-        /24 subnet — to guarantee we never hand out an IP the plan can't use."""
+        The right source is the VPS's own Manage page `ips` list — i.e. the IPs shown
+        in that VM's Network section, which Virtualizor has already scoped to the
+        plan's permitted pool(s). The node-wide `act=ips` listing was wrong: it returns
+        IPs from every pool on the node (other subnets the plan can't use), so the new
+        IP could land outside the plan's range (old bug) or filter to nothing (the
+        "No free IP" bug). Sourcing from managevps fixes both."""
         import random as _random
 
-        try:
-            info = await self.get_server(server_id)
-            serid = int(info.extra_data.get("serid") or 0)
-            current_ip = info.ip_address
-        except Exception:
-            serid = 0
-            current_ip = None
-
-        # Full IP listing for this node (includes assigned + free, each with its pool id)
-        data = await self._request("ips", query={"serid": serid})
-        ips_raw = data.get("ips") or data.get("freeips") or {}
+        # Load the Manage VPS page (no editvps) → its `ips` are this VPS's allowed pool.
+        data = await self._request("managevps", {}, query={"vpsid": server_id})
+        ips_raw = data.get("ips") or {}
         entries = list(ips_raw.values()) if isinstance(ips_raw, dict) else (ips_raw or [])
-        entries = [e for e in entries if isinstance(e, dict)]
+        entries = [e for e in entries if isinstance(e, dict) and e.get("ip")]
 
         def _pool(e: dict) -> str:
-            return str(e.get("ippid") or e.get("ippoolid") or e.get("ipp_id") or e.get("pool") or "")
+            return str(e.get("ippid") or e.get("ippoolid") or e.get("ipp_id") or "")
 
-        def _is_free(e: dict) -> bool:
-            return str(e.get("vpsid", "0")) in ("0", "")
-
-        # Identify the pool + subnet of the VPS's current IP = the plan's allowed range.
-        current_pool = ""
-        for e in entries:
-            if current_ip and str(e.get("ip", "")) == str(current_ip):
-                current_pool = _pool(e)
-                break
-        current_subnet = (
-            current_ip.rsplit(".", 1)[0]
-            if current_ip and str(current_ip).count(".") == 3 else None
+        # Current IP = the entry already assigned to this VPS.
+        current = next((e for e in entries if str(e.get("vpsid", "0")) == str(server_id)), None)
+        cur_pool = _pool(current) if current else ""
+        cur_ip = current.get("ip") if current else None
+        cur_subnet = (
+            cur_ip.rsplit(".", 1)[0] if cur_ip and str(cur_ip).count(".") == 3 else None
         )
 
-        free = [e for e in entries if _is_free(e)]
-
-        # 1) Same IP pool as the current IP (the plan's allowed pool).
-        candidates = [e for e in free if current_pool and _pool(e) == current_pool]
-        # 2) Fall back to the same /24 subnet as the current IP.
-        if not candidates and current_subnet:
-            candidates = [e for e in free if str(e.get("ip", "")).rsplit(".", 1)[0] == current_subnet]
-        # 3) Only when the current IP can't be identified at all, allow any free IP.
-        if not candidates and not current_ip:
+        free = [e for e in entries if str(e.get("vpsid", "0")) in ("0", "")]
+        # Every entry here already belongs to the plan's allowed pool; when the pool/
+        # subnet of the current IP is identifiable, prefer staying inside it.
+        candidates = [e for e in free if cur_pool and _pool(e) == cur_pool]
+        if not candidates and cur_subnet:
+            candidates = [e for e in free if str(e.get("ip", "")).rsplit(".", 1)[0] == cur_subnet]
+        if not candidates:
             candidates = free
 
         ip_values = [e.get("ip") for e in candidates if e.get("ip")]

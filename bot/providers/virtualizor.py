@@ -153,6 +153,15 @@ class VirtualizorProvider(BaseProvider):
         if not str(os_id_val).strip().isdigit():
             os_id_val = params.extra.get("osid", os_id_val)
 
+        # Virtualizor rejects non-alphanumeric VNC passwords ("No Non-Alphanumeric
+        # characters are allowed for the VNC Password"). Sanitize any provided value to
+        # alphanumeric, and fall back to a random alphanumeric password.
+        import secrets as _secrets
+        import string as _string
+        vnc_pass = "".join(c for c in str(params.extra.get("vnc_pass") or "") if c.isalnum())
+        if not vnc_pass:
+            vnc_pass = "".join(_secrets.choice(_string.ascii_letters + _string.digits) for _ in range(12))
+
         payload: dict = {
             # Submit trigger: the documented field is `addvps=1` ("If set the vps will
             # be created" — official Create VPS docs). Without it, act=addvs only loads
@@ -161,7 +170,7 @@ class VirtualizorProvider(BaseProvider):
             "addvps": 1,
             "addvs": 1,
             "hostname": params.name,
-            "rootpass": params.extra.get("root_password", "TeleCloud@2024"),
+            "rootpass": params.extra.get("root_password", "AbrPardaz@2024"),
             "osid": os_id_val,
             "bandwidth": params.extra.get("bandwidth", 1000),
             "ram": params.extra.get("ram", 1024),
@@ -177,7 +186,7 @@ class VirtualizorProvider(BaseProvider):
             "num_ips6": 0,
             "num_ips6_subnet": 0,
             "vnc": 1,
-            "vncpass": params.extra.get("vnc_pass") or params.extra.get("root_password", "TeleCloud@2024"),
+            "vncpass": vnc_pass,  # alphanumeric only — Virtualizor rejects special chars
         }
 
         if node_id is not None:

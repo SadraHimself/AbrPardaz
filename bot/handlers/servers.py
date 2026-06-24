@@ -139,11 +139,27 @@ async def cb_server_action(cb: CallbackQuery, user: User, session: AsyncSession)
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
 
+    if action in ("delete_confirm", "delete") and server.billing_type != BillingType.HOURLY:
+        await cb.answer("سرورهای ماهانه قابل حذف توسط کاربر نیستند. با پشتیبانی تماس بگیرید.", show_alert=True)
+        return
+
     if action == "delete_confirm":
         await cb.message.edit_text(
             f"⚠️ آیا سرور <b>{server.name}</b> حذف شود?\nاین عمل قابل بازگشت نیست!",
             parse_mode="HTML",
             reply_markup=server_delete_confirm_kb(server_id),
+        )
+        await cb.answer()
+        return
+
+    if action == "restart_confirm":
+        await cb.message.edit_text(
+            f"🔄 <b>تأیید ریبوت</b>\n\nآیا از ریبوت سرور <b>{server.name}</b> مطمئن هستید?\nسرور چند ثانیه از دسترس خارج می‌شود.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="✅ بله، ریبوت شود", callback_data=f"srv_action:{server_id}:restart"),
+                InlineKeyboardButton(text="❌ انصراف", callback_data=f"server:{server_id}"),
+            ]]),
         )
         await cb.answer()
         return
@@ -203,7 +219,29 @@ async def cb_server_action(cb: CallbackQuery, user: User, session: AsyncSession)
 # ── Rebuild OS ───────────────────────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("srv_rebuild:"))
-async def cb_server_rebuild(cb: CallbackQuery, user: User, session: AsyncSession):
+async def cb_server_rebuild_confirm(cb: CallbackQuery, user: User, session: AsyncSession):
+    parts = cb.data.split(":")
+    server_id, os_id = int(parts[1]), parts[2]
+    server = await session.get(Server, server_id)
+    if not server or server.user_id != user.id:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    await cb.message.edit_text(
+        f"🔁 <b>تأیید ریبیلد</b>\n\n"
+        f"سرور: <b>{server.name}</b>\n\n"
+        "⚠️ <b>ریبیلد تمام اطلاعات دیسک را پاک می‌کند!</b>\n"
+        "این عمل قابل بازگشت نیست. آیا مطمئن هستید؟",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="✅ بله، ریبیلد شود", callback_data=f"srv_rebuild_do:{server_id}:{os_id}"),
+            InlineKeyboardButton(text="❌ انصراف", callback_data=f"server:{server_id}"),
+        ]]),
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("srv_rebuild_do:"))
+async def cb_server_rebuild_do(cb: CallbackQuery, user: User, session: AsyncSession):
     parts = cb.data.split(":")
     server_id, os_id = int(parts[1]), parts[2]
     server = await session.get(Server, server_id)
@@ -774,6 +812,102 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
         await cb.message.answer(
             f"❌ خطا در ساخت سرور: {e}\nبا پشتیبانی تماس بگیرید.",
             reply_markup=main_menu_kb(is_admin=is_admin),
+        )
+
+
+# ── Change IP ─────────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("srv_changeip:"))
+async def cb_change_ip_confirm(cb: CallbackQuery, user: User, session: AsyncSession):
+    server_id = int(cb.data.split(":")[1])
+    server = await session.get(Server, server_id)
+    if not server or server.user_id != user.id:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    if server.status != ServerStatus.ACTIVE:
+        await cb.answer("سرور باید فعال باشد.", show_alert=True)
+        return
+
+    account = await session.get(ProviderAccount, server.provider_account_id) if server.provider_account_id else None
+    fee = float((account.extra_config or {}).get("change_ip_fee", 0) or 0) if account else 0
+
+    if fee > 0 and user.balance < fee:
+        await cb.answer(f"موجودی کافی نیست. هزینه تغییر IP: {fee:,.0f} تومان — موجودی: {user.balance:,.0f} تومان", show_alert=True)
+        return
+
+    fee_text = f"{fee:,.0f} تومان" if fee > 0 else "رایگان"
+    await cb.message.edit_text(
+        f"🌐 <b>تأیید تغییر IP</b>\n\n"
+        f"سرور: <b>{server.name}</b>\n"
+        f"IP فعلی: <code>{server.ip_address or 'نامشخص'}</code>\n"
+        f"هزینه: <b>{fee_text}</b>\n\n"
+        "⚠️ سرور پس از تغییر IP ریبوت خواهد شد.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="✅ تأیید تغییر IP", callback_data=f"srv_changeip_do:{server_id}"),
+            InlineKeyboardButton(text="❌ انصراف", callback_data=f"server:{server_id}"),
+        ]]),
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("srv_changeip_do:"))
+async def cb_change_ip_do(cb: CallbackQuery, user: User, session: AsyncSession):
+    server_id = int(cb.data.split(":")[1])
+    server = await session.get(Server, server_id)
+    if not server or server.user_id != user.id:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    if server.status != ServerStatus.ACTIVE:
+        await cb.answer("سرور باید فعال باشد.", show_alert=True)
+        return
+
+    account = await session.get(ProviderAccount, server.provider_account_id) if server.provider_account_id else None
+    if not account:
+        await cb.answer("اطلاعات پروایدر یافت نشد.", show_alert=True)
+        return
+
+    fee = float((account.extra_config or {}).get("change_ip_fee", 0) or 0)
+
+    billing = BillingService(session)
+    if fee > 0:
+        ok = await billing.debit(user.id, fee, server_id=server_id, description=f"تغییر IP — {server.name}")
+        if not ok:
+            await cb.answer("موجودی کافی نیست.", show_alert=True)
+            return
+
+    await cb.answer("⏳ در حال تغییر IP...")
+    wait = await cb.message.answer("⏳ در حال تغییر IP...")
+    try:
+        prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
+        old_ip = server.ip_address
+        new_ip = await prov.change_ip(server.provider_server_id)
+        server.ip_address = new_ip
+        await session.flush()
+
+        # Restart so the new IP takes effect inside the OS
+        try:
+            await prov.restart_server(server.provider_server_id)
+        except Exception:
+            pass
+
+        fee_text = f"\n💸 هزینه کسر شد: {fee:,.0f} تومان" if fee > 0 else ""
+        await wait.edit_text(
+            f"✅ <b>IP تغییر کرد!</b>\n\n"
+            f"🖥 سرور: {server.name}\n"
+            f"⬅️ IP قدیم: <code>{old_ip or 'نامشخص'}</code>\n"
+            f"➡️ IP جدید: <code>{new_ip}</code>{fee_text}\n\n"
+            "🔄 سرور در حال ریبوت است.",
+            parse_mode="HTML",
+            reply_markup=back_kb(f"server:{server_id}"),
+        )
+    except Exception as e:
+        if fee > 0:
+            await billing.credit(user.id, fee, description=f"برگشت وجه تغییر IP — {server.name}")
+        await wait.edit_text(
+            f"❌ <b>تغییر IP ناموفق بود:</b> {e}\n\nوجه برگشت داده شد.",
+            parse_mode="HTML",
+            reply_markup=back_kb(f"server:{server_id}"),
         )
 
 

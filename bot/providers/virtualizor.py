@@ -1,11 +1,28 @@
 """Virtualizor KVM API client."""
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 import aiohttp
 
 from .base import BaseProvider, CreateServerParams, PlanInfo, ServerInfo
+
+logger = logging.getLogger("abrpardaz.virtualizor")
+
+# TEMPORARY DEBUG: log the full raw Virtualizor response for these actions so we can
+# see the exact field names/values for VPS status and rebuild. Remove this set (and
+# the logger.warning calls in _request) once the status/rebuild bugs are pinned down.
+_DEBUG_RAW_ACTS = {"vs", "managevps", "addvs"}
+
+
+def _redact(d: Optional[dict]) -> dict:
+    """Copy a params dict with any password-ish values masked, for safe logging."""
+    out = {}
+    for k, v in (d or {}).items():
+        kl = str(k).lower()
+        out[k] = "***REDACTED***" if ("pass" in kl or kl == "conf") else v
+    return out
 
 
 def _encode_form(params: dict) -> str:
@@ -46,6 +63,14 @@ class VirtualizorProvider(BaseProvider):
             url_params.update({k: str(v) for k, v in query.items()})
 
         form_body = _encode_form(dict(params) if params else {})
+
+        _debug = act in _DEBUG_RAW_ACTS
+        if _debug:
+            logger.warning(
+                "VIRT_DEBUG ▶ act=%s query=%s body=%s",
+                act, _redact(query), _redact(params),
+            )
+
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30, connect=5)
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
@@ -67,6 +92,11 @@ class VirtualizorProvider(BaseProvider):
                     ) as resp:
                         if resp.status in (301, 302, 303):
                             location = resp.headers.get("Location", "")
+                            if _debug:
+                                logger.warning(
+                                    "VIRT_DEBUG ◀ act=%s url=%s http=%s REDIRECT location=%s",
+                                    act, base_url, resp.status, location,
+                                )
                             if "login" in location:
                                 raise RuntimeError(
                                     "API credentials رد شد — Configuration → Admin API → "
@@ -75,6 +105,11 @@ class VirtualizorProvider(BaseProvider):
                             last_error = f"ریدایرکت {resp.status} به: {location}"
                             continue
                         raw = await resp.text()
+                        if _debug:
+                            logger.warning(
+                                "VIRT_DEBUG ◀ act=%s url=%s http=%s raw=%s",
+                                act, base_url, resp.status, raw[:20000],
+                            )
                         if not raw or not raw.strip():
                             last_error = "پنل پاسخ خالی برگرداند"
                             continue

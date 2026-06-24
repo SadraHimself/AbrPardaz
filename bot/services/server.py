@@ -127,24 +127,29 @@ class ServerService:
         if info.ipv6_address:
             server.ipv6_address = info.ipv6_address
 
-        # Persist machine_status for real-time display in detail page and keyboard
+        # Merge live machine state from Virtualizor so the detail page label and the
+        # keyboard dot reflect the real state (running / off / locked).
         _extra = dict(server.extra_data or {})
-        _extra["machine_status"] = str((info.extra_data or {}).get("machine_status", "1"))
-        server.extra_data = _extra
+        for key in ("machine_status", "locked", "serid", "node", "vpsid"):
+            val = (info.extra_data or {}).get(key)
+            if val is not None:
+                _extra[key] = val
+        server.extra_data = _extra  # reassign so SQLAlchemy flags the JSON column dirty
 
+        # Map live Virtualizor status onto DB status:
+        #   suspended             → SUSPENDED
+        #   locked + offline      → PENDING  (freshly created / rebuilding)
+        #   running / powered-off → ACTIVE   (on/off is shown via machine_status)
         virt_status = info.status  # "active" | "suspended" | "building" | "off"
-        if virt_status == "active":
-            server.status = ServerStatus.ACTIVE
-        elif virt_status == "suspended":
-            server.status = ServerStatus.SUSPENDED
-        elif virt_status == "building":
-            # locked+offline: keep REBUILDING if already in that state, else BUILDING
-            if server.status != ServerStatus.REBUILDING:
-                server.status = ServerStatus.BUILDING
-        else:  # "off" — powered off but not suspended
-            # Keep ACTIVE so action buttons stay available;
-            # machine_status=0 in extra_data drives "⚫ خاموش" display and start/stop keyboard.
-            server.status = ServerStatus.ACTIVE
+        if server.status != ServerStatus.DELETED:
+            if virt_status == "suspended":
+                server.status = ServerStatus.SUSPENDED
+            elif server.status == ServerStatus.SUSPENDED:
+                pass  # keep an admin/billing suspension until explicitly unsuspended
+            elif virt_status == "building":
+                server.status = ServerStatus.PENDING
+            else:  # "active" or "off"
+                server.status = ServerStatus.ACTIVE
 
         await self.session.flush()
         return server

@@ -379,18 +379,19 @@ class VirtualizorProvider(BaseProvider):
         return float(vs.get("used_bandwidth", 0) or 0)
 
     async def rebuild_server(self, server_id: str, os_id: str, rootpass: str = "") -> bool:
-        payload: dict = {"vpsid": server_id, "newos": os_id, "conf": "1"}
+        # vpsid in URL query; action fields in POST body
+        payload: dict = {"newos": os_id, "conf": "1"}
         if rootpass:
             payload["rootpass"] = rootpass
-        data = await self._request("managevps", payload)
-        return bool(data.get("done"))
+        data = await self._request("managevps", payload, query={"vpsid": server_id})
+        done_val = data.get("done")
+        return bool(done_val) if not isinstance(done_val, dict) else bool(done_val.get("done"))
 
     async def change_root_password(self, server_id: str, new_password: str) -> bool:
-        data = await self._request("managevps", {
-            "vpsid": server_id,
-            "rootpass": new_password,
-        })
-        return bool(data.get("done"))
+        # vpsid in URL query; rootpass in POST body
+        data = await self._request("managevps", {"rootpass": new_password}, query={"vpsid": server_id})
+        done_val = data.get("done")
+        return bool(done_val) if not isinstance(done_val, dict) else bool(done_val.get("done"))
 
     async def list_nodes(self) -> list[dict]:
         data = await self._request("servers")
@@ -431,7 +432,8 @@ class VirtualizorProvider(BaseProvider):
         return None
 
     async def list_ips(self, serid: int = 0) -> list[str]:
-        data = await self._request("ips", {"serid": serid})
+        # serid goes in the URL query string per the API reference table
+        data = await self._request("ips", query={"serid": serid})
         ips_raw = data.get("ips") or data.get("freeips") or {}
 
         def _is_free(v: dict) -> bool:
@@ -532,14 +534,15 @@ class VirtualizorProvider(BaseProvider):
 
     async def edit_server(self, server_id: str, ram: Optional[int] = None,
                           cpu: Optional[int] = None, disk: Optional[int] = None) -> bool:
-        payload: dict = {"vpsid": server_id}
+        # vpsid in URL query; resource fields in POST body (API reference table)
+        payload: dict = {}
         if ram is not None:
             payload["ram"] = ram
         if cpu is not None:
             payload["cores"] = cpu
         if disk is not None:
             payload["space"] = disk
-        data = await self._request("managevps", payload)
+        data = await self._request("managevps", payload, query={"vpsid": server_id})
         return bool(data.get("done"))
 
     async def change_ip(self, server_id: str) -> str:
@@ -557,18 +560,20 @@ class VirtualizorProvider(BaseProvider):
             raise RuntimeError("هیچ آی‌پی آزادی در pool یافت نشد")
 
         new_ip = _random.choice(free_ips)
-        # managevps with ips array assigns the IP(s) to the VPS
-        data = await self._request("managevps", {
-            "vpsid": server_id,
-            "ips[0]": new_ip,
-        })
-        if not data.get("done"):
-            raise RuntimeError(f"Virtualizor IP change failed: {list(data.keys())}")
+        # vpsid in URL query; ips array in POST body (API reference table)
+        data = await self._request("managevps", {"ips[0]": new_ip}, query={"vpsid": server_id})
+        done_val = data.get("done")
+        # done can be a nested dict {done: true} or a scalar true/1
+        ok = bool(done_val) if not isinstance(done_val, dict) else bool(done_val.get("done"))
+        if not ok:
+            raise RuntimeError(f"Virtualizor IP change failed — response keys: {list(data.keys())}")
         return new_ip
 
     async def add_traffic(self, server_id: str, gb: int) -> bool:
-        data = await self._request("managevps", {"vpsid": server_id, "bandwidth": gb})
-        return bool(data.get("done"))
+        # vpsid in URL query; bandwidth in POST body
+        data = await self._request("managevps", {"bandwidth": gb}, query={"vpsid": server_id})
+        done_val = data.get("done")
+        return bool(done_val) if not isinstance(done_val, dict) else bool(done_val.get("done"))
 
     async def get_vnc(self, server_id: str) -> dict:
         data = await self._request("vnc", query={"vpsid": server_id})

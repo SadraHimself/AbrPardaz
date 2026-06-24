@@ -1,8 +1,6 @@
 """Virtualizor KVM API client."""
 from __future__ import annotations
 
-import hashlib
-import random
 from typing import Optional
 
 import aiohttp
@@ -10,18 +8,9 @@ import aiohttp
 from .base import BaseProvider, CreateServerParams, PlanInfo, ServerInfo
 
 
-def _make_api_pass(api_key: str, api_pass: str) -> tuple[str, str]:
-    """Virtualizor Admin API auth: random_key + md5(api_pass + random_key), all lowercase"""
-    chars = "abcdefghijklmnopqrstuvwxyz0123456789"
-    random_key = "".join(random.choices(chars, k=8))
-    auth_pass = random_key + hashlib.md5(f"{api_pass}{random_key}".encode()).hexdigest()
-    return random_key, auth_pass
-
-
 def _encode_form(params: dict) -> str:
-    """Build application/x-www-form-urlencoded string keeping [ ] unencoded.
-    PHP parses space[0][size]=20 as $_POST['space'][0]['size'] = '20'.
-    Standard urllib.parse.urlencode encodes brackets → PHP sees literal key instead of array."""
+    """Build application/x-www-form-urlencoded keeping [ ] unencoded so PHP
+    parses space[0][size]=20 as $_POST['space'][0]['size']."""
     from urllib.parse import quote
     parts = []
     for k, v in params.items():
@@ -32,35 +21,31 @@ def _encode_form(params: dict) -> str:
 
 
 class VirtualizorProvider(BaseProvider):
-    """
-    Virtualizor API v2 — KVM مجازی‌ساز
-
-    Docs: https://my.virtualizor.com/docs/api/
-    """
 
     def __init__(self, panel_url: str, api_key: str, api_pass: str):
         self.panel_url = panel_url.rstrip("/")
         self.api_key = api_key
         self.api_pass = api_pass
 
-    # ── Internal helpers ──────────────────────────────────────────────────────
-
-    async def _request(self, act: str, params: Optional[dict] = None) -> dict:
+    async def _request(
+        self,
+        act: str,
+        params: Optional[dict] = None,
+        query: Optional[dict] = None,
+    ) -> dict:
         import json as _json
-        random_key, auth_pass = _make_api_pass(self.api_key, self.api_pass)
 
-        # Auth + routing → URL query string (Virtualizor reads $_GET for adminapikey/pass).
-        # Action params → POST body; _encode_form keeps brackets unencoded so PHP
-        # parses space[0][size]=20 as $_POST['space'][0]['size'], not a literal key.
-        url_params = {
+        # adminapipass = plain password (confirmed live: MD5-hashed form → Access Denied).
+        url_params: dict = {
             "adminapikey": self.api_key,
-            "adminapipass": auth_pass,
+            "adminapipass": self.api_pass,
             "act": act,
             "api": "json",
         }
-        post_params = dict(params) if params else {}
-        form_body = _encode_form(post_params)
+        if query:
+            url_params.update({k: str(v) for k, v in query.items()})
 
+        form_body = _encode_form(dict(params) if params else {})
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30, connect=5)
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
@@ -84,9 +69,8 @@ class VirtualizorProvider(BaseProvider):
                             location = resp.headers.get("Location", "")
                             if "login" in location:
                                 raise RuntimeError(
-                                    "API credentials رد شد — در پنل Virtualizor:\n"
-                                    "Configuration → API → Enable API را فعال کنید\n"
-                                    "و API Key/Pass را مجدداً کپی کنید"
+                                    "API credentials رد شد — Configuration → Admin API → "
+                                    "Enable API را فعال کنید و Key/Pass را مجدداً کپی کنید"
                                 )
                             last_error = f"ریدایرکت {resp.status} به: {location}"
                             continue
@@ -95,14 +79,20 @@ class VirtualizorProvider(BaseProvider):
                             last_error = "پنل پاسخ خالی برگرداند"
                             continue
                         if raw.strip().startswith("<") or "window.location" in raw:
-                            last_error = f"پنل HTML برگرداند — امتحان با: {base_url}"
+                            last_error = f"پنل HTML برگرداند — {base_url}"
                             continue
                         try:
                             data = _json.loads(raw)
                         except _json.JSONDecodeError:
-                            preview = raw[:150].replace("\n", " ")
-                            last_error = f"پاسخ JSON نیست: {preview}"
+                            last_error = f"پاسخ JSON نیست: {raw[:150]}"
                             continue
+                        # Unknown act= values silently return the admin dashboard (HTTP 200, no error key).
+                        # Treat this as a hard error so bad action names fail loudly.
+                        if data.get("title") == "Admin Panel":
+                            raise RuntimeError(
+                                f"Virtualizor: action '{act}' not recognized — "
+                                "returned admin dashboard instead of data"
+                            )
                         error = data.get("error") or data.get("errors")
                         if not error and data.get("fatal_error_text"):
                             error = f"{data.get('fatal_error_heading', 'Fatal Error')}: {data['fatal_error_text']}"
@@ -116,20 +106,23 @@ class VirtualizorProvider(BaseProvider):
         raise RuntimeError(last_error or "اتصال به Virtualizor ناموفق بود")
 
     @staticmethod
-    def _vs_status(raw: str) -> str:
-        mapping = {"1": "active", "0": "off", "2": "suspended"}
-        return mapping.get(str(raw), raw)
+    def _vs_status(vs: dict) -> str:
+        if str(vs.get("suspended", "0")) == "1":
+            return "suspended"
+        return "active" if str(vs.get("machine_status", "0")) == "1" else "off"
 
     def _parse_vs(self, vs: dict) -> ServerInfo:
+        ips = vs.get("ips") or {}
+        first_ip = next(iter(ips.values()), None) if isinstance(ips, dict) else None
         return ServerInfo(
             provider_server_id=str(vs.get("vpsid", "")),
             name=vs.get("hostname", ""),
-            status=self._vs_status(vs.get("status", "0")),
-            ip_address=vs.get("ip", {}).get("0") if isinstance(vs.get("ip"), dict) else vs.get("ip"),
-            ram=int(vs.get("ram", 0)),
-            cpu=int(vs.get("cores", 0)),
-            disk=int(vs.get("space", 0)),
-            bandwidth=int(vs.get("bandwidth", 0)),
+            status=self._vs_status(vs),
+            ip_address=first_ip,
+            ram=int(vs.get("ram", 0) or 0),
+            cpu=int(vs.get("cores", 0) or 0),
+            disk=int(vs.get("space", 0) or 0),
+            bandwidth=int(vs.get("bandwidth", 0) or 0),
             os_name=vs.get("os_name"),
             extra_data={"vpsid": vs.get("vpsid"), "node": vs.get("server_name")},
         )
@@ -139,16 +132,13 @@ class VirtualizorProvider(BaseProvider):
     async def create_server(self, params: CreateServerParams) -> ServerInfo:
         import asyncio as _asyncio
 
-        # ── node_select: required — must specify which server/node to create VPS on
         node_id = params.extra.get("node_id") or params.extra.get("serid")
         if not node_id:
             node_id = await self._get_default_node()
 
-        # ── storage: required — must have st_uuid
         st_uuid = params.extra.get("st_uuid") or await self.get_primary_storage_uuid()
         disk_gb = params.extra.get("disk", 20)
 
-        # ── IPs: fetch one free IP from the node's pool
         ip_to_assign = None
         if node_id is not None:
             try:
@@ -168,11 +158,9 @@ class VirtualizorProvider(BaseProvider):
             "virt": params.extra.get("virt_type", "kvm"),
         }
 
-        # node_select is required by Virtualizor API
         if node_id is not None:
             payload["node_select"] = int(node_id)
 
-        # user: uid=0 + email/pass → Virtualizor creates user inline (PHP SDK approach)
         uid_val = params.extra.get("virtualizor_uid")
         user_email = params.extra.get("user_email")
         if uid_val:
@@ -182,18 +170,15 @@ class VirtualizorProvider(BaseProvider):
             payload["user_email"] = user_email
             payload["user_pass"] = params.extra.get("user_pass", user_email)
 
-        # plan ID
         plan_id_str = str(params.plan_id).strip()
         if plan_id_str.isdigit() and int(plan_id_str) > 0:
             payload["plid"] = int(plan_id_str)
 
-        # IPs: use specific IP if available, else ask for 1 from pool
         if ip_to_assign:
             payload["ips[0]"] = ip_to_assign
         else:
             payload["num_ips"] = 1
 
-        # disk space
         if st_uuid:
             payload["space[0][size]"] = disk_gb
             payload["space[0][st_uuid]"] = st_uuid
@@ -202,12 +187,10 @@ class VirtualizorProvider(BaseProvider):
 
         data = await self._request("addvs", payload)
 
-        # Response format per docs: vs_info.vpsid (not addvs.vpsid)
         vs_info = data.get("vs_info") or {}
         vpsid = vs_info.get("vpsid") if isinstance(vs_info, dict) else None
         taskid = data.get("taskid")
 
-        # Fallbacks for older Virtualizor versions
         if not vpsid:
             vpsid = data.get("vpsid")
         if not vpsid:
@@ -218,7 +201,6 @@ class VirtualizorProvider(BaseProvider):
             elif isinstance(addvs_raw, (int, float)) and addvs_raw:
                 vpsid = int(addvs_raw)
 
-        # Async creation: poll act=tasks until vpsid appears (max 90 sec)
         if not vpsid and taskid:
             for _ in range(18):
                 await _asyncio.sleep(5)
@@ -237,81 +219,83 @@ class VirtualizorProvider(BaseProvider):
 
         if not vpsid:
             import json as _json2
-            snippet = _json2.dumps({k: data[k] for k in list(data.keys())[:8]}, ensure_ascii=False)[:300]
-            raise RuntimeError(
-                f"Virtualizor did not return vpsid. Response: {snippet}"
-            )
+            snippet = _json2.dumps(
+                {k: data[k] for k in list(data.keys())[:8]}, ensure_ascii=False
+            )[:300]
+            raise RuntimeError(f"Virtualizor did not return vpsid. Response: {snippet}")
+
         return await self.get_server(str(vpsid))
 
-    async def delete_server(self, server_id: str) -> bool:
-        data = await self._request("deletevs", {"svs": server_id, "conf": "1"})
-        return bool(data.get("done"))
-
     async def get_server(self, server_id: str) -> ServerInfo:
-        data = await self._request("listvs", {"svs": server_id})
-        vs_list = data.get("vs", {})
+        data = await self._request("vs", query={"vpsid": server_id})
+        vs_list = data.get("vs", {}) or {}
         if not vs_list:
             raise RuntimeError(f"Server {server_id} not found")
-        vs = vs_list.get(server_id) or next(iter(vs_list.values()))
+        vs = vs_list.get(str(server_id)) or next(iter(vs_list.values()))
         return self._parse_vs(vs)
 
     async def start_server(self, server_id: str) -> bool:
-        data = await self._request("startvs", {"svs": server_id})
+        data = await self._request("vs", query={"action": "start", "vpsid": server_id})
         return bool(data.get("done"))
 
     async def stop_server(self, server_id: str) -> bool:
-        data = await self._request("stopvs", {"svs": server_id})
+        data = await self._request("vs", query={"action": "stop", "vpsid": server_id})
         return bool(data.get("done"))
 
     async def restart_server(self, server_id: str) -> bool:
-        data = await self._request("restartvs", {"svs": server_id})
+        data = await self._request("vs", query={"action": "restart", "vpsid": server_id})
         return bool(data.get("done"))
 
-    async def rebuild_server(self, server_id: str, os_id: str) -> bool:
-        data = await self._request("rebuilddisk", {"svs": server_id, "osid": os_id, "conf": "1"})
+    async def delete_server(self, server_id: str) -> bool:
+        data = await self._request("vs", query={"delete": server_id})
         return bool(data.get("done"))
 
     async def suspend_server(self, server_id: str) -> bool:
-        data = await self._request("vs_suspend", {"svs": server_id})
+        data = await self._request("vs", query={"suspend": server_id})
         return bool(data.get("done"))
 
     async def unsuspend_server(self, server_id: str) -> bool:
-        data = await self._request("vs_unsuspend", {"svs": server_id})
+        data = await self._request("vs", query={"unsuspend": server_id})
         return bool(data.get("done"))
 
     async def get_traffic(self, server_id: str) -> float:
-        data = await self._request("vs_stats", {"svs": server_id})
-        stats = data.get("vstats", {})
-        used_bytes = float(stats.get("tx_bytes", 0)) + float(stats.get("rx_bytes", 0))
-        return used_bytes / (1024 ** 3)
+        data = await self._request("vs", query={"vpsid": server_id})
+        vs_list = data.get("vs", {}) or {}
+        vs = vs_list.get(str(server_id)) or (next(iter(vs_list.values())) if vs_list else {})
+        return float(vs.get("used_bandwidth", 0) or 0)
+
+    async def rebuild_server(self, server_id: str, os_id: str) -> bool:
+        # TODO: confirm exact params against live docs — managevps used as best guess
+        data = await self._request("managevps", {"vpsid": server_id, "newos": os_id, "conf": "1"})
+        return bool(data.get("done"))
 
     async def list_nodes(self) -> list[dict]:
-        """Return available nodes/servers with hardware details."""
         data = await self._request("servers")
-        raw = data.get("servs") or data.get("servers") or {}
-        if not isinstance(raw, dict):
-            return []
+        raw = data.get("servs") or data.get("servers") or []
+        if isinstance(raw, dict):
+            items = list(raw.values())
+        elif isinstance(raw, list):
+            items = raw
+        else:
+            items = []
         result = []
-        for sid, s in raw.items():
-            ram_total = float(s.get("ram", 0) or 0)
-            ram_used = float(s.get("ram_used", 0) or 0)
+        for s in items:
             result.append({
-                "serid": int(sid),
+                "serid": int(s.get("serid", 0)),
                 "name": s.get("server_name", ""),
                 "ip": s.get("ip", ""),
                 "online": str(s.get("status", "1")) == "1",
-                "os": s.get("os", "") or s.get("kernel", ""),
+                "os": s.get("os", ""),
                 "cpu": s.get("cpu", "") or s.get("cpu_model", ""),
                 "cpu_load": s.get("cpu_load", "") or s.get("load", ""),
-                "ram_total_mb": ram_total,
-                "ram_used_mb": ram_used,
+                "ram_total_mb": float(s.get("total_ram", s.get("ram", 0)) or 0),
+                "ram_used_mb": float(s.get("ram", 0) or 0),
                 "hdd": s.get("hdd", "") or s.get("disks", ""),
-                "virt_type": s.get("virt", "") or s.get("virt_type", ""),
+                "virt_type": s.get("virt", ""),
             })
         return result
 
     async def _get_default_node(self) -> Optional[int]:
-        """Return serid of first online node."""
         try:
             nodes = await self.list_nodes()
             online = [n for n in nodes if n["online"]]
@@ -324,11 +308,15 @@ class VirtualizorProvider(BaseProvider):
         return None
 
     async def list_ips(self, serid: int = 0) -> list[str]:
-        """Return available (unassigned) IPs for a node."""
         data = await self._request("ips", {"serid": serid})
         ips_raw = data.get("ips") or data.get("freeips") or {}
+
+        def _is_free(v: dict) -> bool:
+            # Free IPs have vpsid="0" (string zero), assigned ones have a real vpsid
+            return str(v.get("vpsid", "0")) in ("0", "")
+
         if isinstance(ips_raw, dict):
-            return [ip.get("ip", k) for k, ip in ips_raw.items() if not ip.get("vpsid")]
+            return [v.get("ip", k) for k, v in ips_raw.items() if isinstance(v, dict) and _is_free(v)]
         if isinstance(ips_raw, list):
             return [i if isinstance(i, str) else i.get("ip", "") for i in ips_raw]
         return []
@@ -350,18 +338,17 @@ class VirtualizorProvider(BaseProvider):
         return result
 
     async def get_primary_storage_uuid(self) -> Optional[str]:
-        """Return st_uuid of the primary/default storage, or None on failure."""
         try:
             storages = await self.list_storages()
             primary = next((s for s in storages if s["is_primary"]), None)
             if not primary and storages:
-                primary = storages[0]  # fallback to first
+                primary = storages[0]
             return primary["st_uuid"] if primary else None
         except Exception:
             return None
 
     async def list_plans(self, location: Optional[str] = None) -> list[PlanInfo]:
-        data = await self._request("listplans")
+        data = await self._request("plans")
         plans_raw = data.get("plans") or data.get("plansdata") or {}
         if not isinstance(plans_raw, dict):
             plans_raw = {}
@@ -370,21 +357,20 @@ class VirtualizorProvider(BaseProvider):
             plans.append(PlanInfo(
                 provider_plan_id=str(pid),
                 name=plan.get("plan_name", ""),
-                ram=int(plan.get("ram", 0)),
-                cpu=int(plan.get("cores", 0)),
-                disk=int(plan.get("space", 0)),
-                bandwidth=int(plan.get("bandwidth", 0)),
+                ram=int(plan.get("ram", 0) or 0),
+                cpu=int(plan.get("cores", 0) or 0),
+                disk=int(plan.get("space", 0) or 0),
+                bandwidth=int(plan.get("bandwidth", 0) or 0),
             ))
         return plans
 
     async def list_os_templates(self) -> list[dict]:
-        data = await self._request("listos")
+        data = await self._request("ostemplates")
         os_list = data.get("ostemplates", {})
         return [{"id": oid, "name": tmpl.get("name", "")} for oid, tmpl in os_list.items()]
 
     async def list_users(self) -> list[dict]:
-        """List Virtualizor users."""
-        data = await self._request("listusers")
+        data = await self._request("users")
         users_raw = data.get("users", {})
         result = []
         for uid, u in (users_raw.items() if isinstance(users_raw, dict) else []):
@@ -397,27 +383,21 @@ class VirtualizorProvider(BaseProvider):
         return result
 
     async def create_user(self, email: str, password: str) -> int:
-        """Create a Virtualizor user account. Returns the new user's uid."""
         username = email.split("@")[0]
         data = await self._request("adduser", {
-            "email": email,
+            "adduser": 1,
+            "priority": 0,
+            "newemail": email,
+            "newpass": password,
             "fname": username,
             "lname": "User",
-            "pass": password,
-            "type": "0",
         })
-        # Response varies by Virtualizor version
-        uid = (
-            data.get("uid")
-            or (data.get("adduser") or {}).get("uid")
-            or (data.get("title") or {}).get("uid")
-        )
+        uid = data.get("done") or data.get("uid") or (data.get("adduser") or {}).get("uid")
         if not uid:
             raise RuntimeError(f"Virtualizor adduser failed: {list(data.keys())}")
         return int(uid)
 
     async def find_user_by_email(self, email: str) -> Optional[int]:
-        """Find a Virtualizor user by email. Returns uid or None."""
         try:
             users = await self.list_users()
             for u in users:
@@ -429,27 +409,27 @@ class VirtualizorProvider(BaseProvider):
 
     async def edit_server(self, server_id: str, ram: Optional[int] = None,
                           cpu: Optional[int] = None, disk: Optional[int] = None) -> bool:
-        payload: dict = {"svs": server_id}
+        payload: dict = {"vpsid": server_id}
         if ram is not None:
             payload["ram"] = ram
         if cpu is not None:
             payload["cores"] = cpu
         if disk is not None:
             payload["space"] = disk
-        data = await self._request("editvs", payload)
+        data = await self._request("managevps", payload)
         return bool(data.get("done"))
 
     async def change_ip(self, server_id: str) -> Optional[str]:
-        data = await self._request("changeip", {"svs": server_id})
+        # TODO: confirm exact param against live docs
+        data = await self._request("managevps", {"vpsid": server_id, "change_ip": 1})
         return data.get("newip")
 
     async def add_traffic(self, server_id: str, gb: int) -> bool:
-        data = await self._request("addvsbw", {"svs": server_id, "bw": gb})
+        data = await self._request("managevps", {"vpsid": server_id, "bandwidth": gb})
         return bool(data.get("done"))
 
     async def get_vnc(self, server_id: str) -> dict:
-        """Return dict with host, port, password for VNC connection."""
-        data = await self._request("vnc", {"svs": server_id})
+        data = await self._request("vnc", query={"vpsid": server_id})
         vnc = data.get("novnc", data.get("vnc", {}))
         if isinstance(vnc, dict):
             return {

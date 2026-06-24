@@ -148,6 +148,33 @@ async def cb_server_action(cb: CallbackQuery, user: User, session: AsyncSession)
         await cb.answer()
         return
 
+    if action == "rebuild_menu":
+        account = await session.get(ProviderAccount, server.provider_account_id) if server.provider_account_id else None
+        if not account:
+            await cb.message.answer("❌ اطلاعات پروایدر یافت نشد.")
+            await cb.answer()
+            return
+        try:
+            import asyncio as _ai
+            prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
+            os_list = await _ai.wait_for(prov.list_os_templates(), timeout=12)
+        except Exception as e:
+            await cb.message.answer(f"❌ خطا در دریافت لیست OS: {e}")
+            await cb.answer()
+            return
+        builder = InlineKeyboardBuilder()
+        for os_item in os_list[:20]:
+            builder.button(text=os_item["name"], callback_data=f"srv_rebuild:{server_id}:{os_item['id']}")
+        builder.button(text="❌ انصراف", callback_data=f"server:{server_id}")
+        builder.adjust(2)
+        await cb.message.edit_text(
+            f"🔁 <b>ریبیلد — {server.name}</b>\n\nسیستم‌عامل جدید را انتخاب کنید:",
+            parse_mode="HTML",
+            reply_markup=builder.as_markup(),
+        )
+        await cb.answer()
+        return
+
     labels = {"start": "روشن", "stop": "خاموش", "restart": "ریبوت",
               "delete": "حذف", "change_ip": "تغییر IP",
               "suspend": "ساسپند", "unsuspend": "رفع ساسپند"}
@@ -167,6 +194,32 @@ async def cb_server_action(cb: CallbackQuery, user: User, session: AsyncSession)
             await cb.message.answer(msg, parse_mode="HTML")
         else:
             await cb.message.answer("❌ عملیات ناموفق بود.")
+    except NotImplementedError as e:
+        await cb.message.answer(f"⚠️ {e}")
+    except Exception as e:
+        await cb.message.answer(f"❌ خطا: {e}")
+
+
+# ── Rebuild OS ───────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("srv_rebuild:"))
+async def cb_server_rebuild(cb: CallbackQuery, user: User, session: AsyncSession):
+    parts = cb.data.split(":")
+    server_id, os_id = int(parts[1]), parts[2]
+    server = await session.get(Server, server_id)
+    if not server or server.user_id != user.id:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    await cb.answer("⏳ ریبیلد شروع می‌شود...")
+    try:
+        svc = ServerService(session)
+        ok = await svc.perform_action(server, "rebuild", os_id=os_id)
+        if ok:
+            server.status = ServerStatus.REBUILDING
+            await session.flush()
+            await cb.message.answer("✅ ریبیلد شروع شد. چند دقیقه صبر کنید.")
+        else:
+            await cb.message.answer("❌ ریبیلد ناموفق بود.")
     except NotImplementedError as e:
         await cb.message.answer(f"⚠️ {e}")
     except Exception as e:
@@ -662,31 +715,59 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
             await session.flush()
 
     hostname = data.get("hostname") or f"srv-{user.telegram_id}"
-    os_id = data.get("os_id") or "ubuntu-22.04"
+    os_id = data.get("os_id") or ""
+    root_password = f"TC@{user.telegram_id}!"
 
     try:
+        import asyncio as _asyncio
         svc = ServerService(session)
         server = await svc.create_server(
             user=user, plan=plan, os_id=os_id,
             billing_type=billing_type,
-            hostname=hostname,  # use the hostname the user chose (was ignored before)
-            extra={"root_password": f"TC@{user.telegram_id}!"},
+            hostname=hostname,
+            extra={"root_password": root_password},
         )
         billing = BillingService(session)
         await billing.debit(user.id, final_price or 0, server_id=server.id,
                             description=f"خرید سرور {server.name}")
 
-        notif = NotificationService(cb.bot)
-        await notif.server_created(user.telegram_id, server)
+        # Try to get VNC info for the delivery message
+        vnc_info: dict = {}
+        if server.provider_account_id and server.provider_server_id:
+            account_obj = await session.get(ProviderAccount, server.provider_account_id)
+            if account_obj:
+                try:
+                    prov = VirtualizorProvider(
+                        account_obj.api_endpoint, account_obj.api_key, account_obj.api_secret
+                    )
+                    vnc_info = await _asyncio.wait_for(
+                        prov.get_vnc(server.provider_server_id), timeout=10
+                    )
+                except Exception:
+                    pass
+
+        plan_name = plan.display_name or plan.name
+        delivery = (
+            f"✅ <b>سرور {server.name} آماده است!</b>\n\n"
+            f"📦 پلن: {plan_name}\n"
+            f"🌐 IPv4: <code>{server.ip_address or 'در حال تخصیص...'}</code>\n"
+            f"🔑 رمز root: <code>{root_password}</code>\n"
+        )
+        if vnc_info.get("host"):
+            delivery += (
+                f"\n🖥 <b>VNC:</b>\n"
+                f"  Host: <code>{vnc_info['host']}</code>\n"
+                f"  Port: <code>{vnc_info.get('port', '')}</code>\n"
+                f"  رمز: <code>{vnc_info.get('password', '')}</code>\n"
+            )
+        delivery += (
+            "\n⚠️ این اطلاعات را در جای امنی ذخیره کنید.\n"
+            "🔔 سیستم‌عامل در حال نصب است — چند دقیقه منتظر بمانید."
+        )
 
         from bot.config import settings as _s
         is_admin = user.is_admin or user.telegram_id in _s.admin_ids
-        await cb.message.answer(
-            f"✅ سرور <b>{server.name}</b> ساخته شد!\n"
-            f"🌐 IP: <code>{server.ip_address or 'در حال تخصیص...'}</code>",
-            parse_mode="HTML",
-            reply_markup=main_menu_kb(is_admin=is_admin),
-        )
+        await cb.message.answer(delivery, parse_mode="HTML", reply_markup=main_menu_kb(is_admin=is_admin))
     except Exception as e:
         from bot.config import settings as _s
         is_admin = user.is_admin or user.telegram_id in _s.admin_ids
@@ -694,6 +775,22 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
             f"❌ خطا در ساخت سرور: {e}\nبا پشتیبانی تماس بگیرید.",
             reply_markup=main_menu_kb(is_admin=is_admin),
         )
+
+
+# ── Mute hourly billing notification ─────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("srv_mute_hourly:"))
+async def cb_mute_hourly(cb: CallbackQuery, user: User, session: AsyncSession):
+    server_id = int(cb.data.split(":")[1])
+    server = await session.get(Server, server_id)
+    if not server or server.user_id != user.id:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    extra = dict(server.extra_data or {})
+    extra["hourly_notify"] = False
+    server.extra_data = extra
+    await session.commit()
+    await cb.answer("✅ اطلاع‌رسانی ساعتی این سرور خاموش شد.", show_alert=True)
 
 
 # ── VNC ───────────────────────────────────────────────────────────────────────

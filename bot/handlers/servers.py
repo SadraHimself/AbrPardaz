@@ -76,15 +76,29 @@ async def cb_server_detail(cb: CallbackQuery, user: User, session: AsyncSession)
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
 
-    status_label = {
-        ServerStatus.ACTIVE: "🟢 فعال",
-        ServerStatus.SUSPENDED: "🔴 ساسپند",
-        ServerStatus.BUILDING: "🔨 در حال ساخت",
-        ServerStatus.REBUILDING: "🔄 ریبیلد",
-        ServerStatus.REBOOTING: "🔄 ریبوت",
-        ServerStatus.DELETED: "⚫ حذف شده",
-        ServerStatus.PENDING: "⏳ در انتظار",
-    }.get(server.status, server.status.value)
+    # Sync live status from Virtualizor on every open so user always sees current state
+    if server.status != ServerStatus.DELETED and server.provider_account_id and server.provider_server_id:
+        try:
+            svc = ServerService(session)
+            await svc.sync_server_status(server)
+        except Exception:
+            pass
+
+    extra_data = server.extra_data or {}
+    is_running = str(extra_data.get("machine_status", "1")) == "1"
+
+    if server.status == ServerStatus.ACTIVE and not is_running:
+        status_label = "⚫ خاموش"
+    else:
+        status_label = {
+            ServerStatus.ACTIVE: "🟢 فعال",
+            ServerStatus.SUSPENDED: "🔴 ساسپند",
+            ServerStatus.BUILDING: "🔨 در حال ساخت",
+            ServerStatus.REBUILDING: "🔄 در حال ریبیلد",
+            ServerStatus.REBOOTING: "🔄 در حال ریبوت",
+            ServerStatus.DELETED: "⚫ حذف شده",
+            ServerStatus.PENDING: "⏳ در انتظار",
+        }.get(server.status, server.status.value)
 
     traffic_text = ""
     if server.traffic_limit_gb:
@@ -250,12 +264,25 @@ async def cb_server_rebuild_do(cb: CallbackQuery, user: User, session: AsyncSess
         return
     await cb.answer("⏳ ریبیلد شروع می‌شود...")
     try:
+        import secrets as _sec
+        import string as _str
+        _alpha = _str.ascii_letters + _str.digits + "!@#$%^&*"
+        new_root_pass = "".join(_sec.choice(_alpha) for _ in range(16))
         svc = ServerService(session)
-        ok = await svc.perform_action(server, "rebuild", os_id=os_id)
+        ok = await svc.perform_action(server, "rebuild", os_id=os_id, new_password=new_root_pass)
         if ok:
             server.status = ServerStatus.REBUILDING
+            _extra = dict(server.extra_data or {})
+            _extra["root_password"] = new_root_pass
+            server.extra_data = _extra
             await session.flush()
-            await cb.message.answer("✅ ریبیلد شروع شد. چند دقیقه صبر کنید.")
+            await cb.message.answer(
+                f"✅ <b>ریبیلد شروع شد.</b>\n\n"
+                f"🔑 رمز root جدید: <code>{new_root_pass}</code>\n\n"
+                "⚠️ این رمز را در جای امنی ذخیره کنید.\n"
+                "🔔 چند دقیقه منتظر نصب OS بمانید.",
+                parse_mode="HTML",
+            )
         else:
             await cb.message.answer("❌ ریبیلد ناموفق بود.")
     except NotImplementedError as e:
@@ -754,7 +781,10 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
 
     hostname = data.get("hostname") or f"srv-{user.telegram_id}"
     os_id = data.get("os_id") or ""
-    root_password = f"TC@{user.telegram_id}!"
+    import secrets as _secrets
+    import string as _string
+    _alpha = _string.ascii_letters + _string.digits + "!@#$%^&*"
+    root_password = "".join(_secrets.choice(_alpha) for _ in range(16))
 
     try:
         import asyncio as _asyncio
@@ -768,6 +798,11 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
         billing = BillingService(session)
         await billing.debit(user.id, final_price or 0, server_id=server.id,
                             description=f"خرید سرور {server.name}")
+        # Persist root password so it can be displayed again from panel
+        _extra = dict(server.extra_data or {})
+        _extra["root_password"] = root_password
+        server.extra_data = _extra
+        await session.flush()
 
         # Try to get VNC info for the delivery message
         vnc_info: dict = {}
@@ -1042,6 +1077,84 @@ async def cb_buy_subprod(cb: CallbackQuery, user: User, session: AsyncSession):
         # refund on failure
         await billing.credit(user.id, sp.price, description=f"برگشت وجه {sp.name}")
         await cb.answer(f"❌ خطا: {e}", show_alert=True)
+
+
+# ── Change root password ─────────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("srv_chpass:"))
+async def cb_change_password_confirm(cb: CallbackQuery, user: User, session: AsyncSession):
+    server_id = int(cb.data.split(":")[1])
+    server = await session.get(Server, server_id)
+    if not server or server.user_id != user.id:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    if server.status != ServerStatus.ACTIVE:
+        await cb.answer("سرور باید فعال باشد.", show_alert=True)
+        return
+    await cb.message.edit_text(
+        f"🔑 <b>تغییر رمز root</b>\n\n"
+        f"سرور: <b>{server.name}</b>\n\n"
+        "⚠️ رمز جدید به صورت خودکار ایجاد می‌شود.\n"
+        "سرور پس از تغییر رمز ریبوت خواهد شد.\n\n"
+        "آیا مطمئن هستید؟",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="✅ بله، رمز تغییر شود", callback_data=f"srv_chpass_do:{server_id}"),
+            InlineKeyboardButton(text="❌ انصراف", callback_data=f"server:{server_id}"),
+        ]]),
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("srv_chpass_do:"))
+async def cb_change_password_do(cb: CallbackQuery, user: User, session: AsyncSession):
+    server_id = int(cb.data.split(":")[1])
+    server = await session.get(Server, server_id)
+    if not server or server.user_id != user.id:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    if server.status != ServerStatus.ACTIVE:
+        await cb.answer("سرور باید فعال باشد.", show_alert=True)
+        return
+
+    import secrets as _secrets
+    import string as _string
+    _alphabet = _string.ascii_letters + _string.digits + "!@#$%^&*"
+    new_password = "".join(_secrets.choice(_alphabet) for _ in range(16))
+
+    await cb.answer("⏳ در حال تغییر رمز...")
+    wait = await cb.message.answer("⏳ در حال تغییر رمز root...")
+    try:
+        svc = ServerService(session)
+        ok = await svc.perform_action(server, "change_password", password=new_password)
+        if ok:
+            account = await session.get(ProviderAccount, server.provider_account_id) if server.provider_account_id else None
+            if account:
+                try:
+                    prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
+                    await prov.restart_server(server.provider_server_id)
+                except Exception:
+                    pass
+            await wait.edit_text(
+                f"✅ <b>رمز root تغییر کرد!</b>\n\n"
+                f"🖥 سرور: <b>{server.name}</b>\n"
+                f"🔑 رمز جدید: <code>{new_password}</code>\n\n"
+                "⚠️ این رمز را در جای امنی ذخیره کنید.\n"
+                "🔄 سرور در حال ریبوت است.",
+                parse_mode="HTML",
+                reply_markup=back_kb(f"server:{server_id}"),
+            )
+        else:
+            await wait.edit_text(
+                "❌ تغییر رمز ناموفق بود.",
+                reply_markup=back_kb(f"server:{server_id}"),
+            )
+    except Exception as e:
+        await wait.edit_text(
+            f"❌ <b>خطا:</b> {e}",
+            parse_mode="HTML",
+            reply_markup=back_kb(f"server:{server_id}"),
+        )
 
 
 # ── Edit server hardware ──────────────────────────────────────────────────────

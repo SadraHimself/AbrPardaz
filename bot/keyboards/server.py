@@ -25,10 +25,16 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
     is_hourly = server.billing_type == BillingType.HOURLY
 
     if server.status == ServerStatus.ACTIVE:
-        builder.button(text="🔄 ریبوت", callback_data=f"srv_action:{sid}:restart_confirm")
-        builder.button(text="⏹ خاموش", callback_data=f"srv_action:{sid}:stop")
+        extra = server.extra_data or {}
+        is_running = str(extra.get("machine_status", "1")) == "1"
+        if is_running:
+            builder.button(text="🔄 ریبوت", callback_data=f"srv_action:{sid}:restart_confirm")
+            builder.button(text="⏹ خاموش", callback_data=f"srv_action:{sid}:stop")
+        else:
+            builder.button(text="▶️ روشن کردن", callback_data=f"srv_action:{sid}:start")
         builder.button(text="🔁 ریبیلد", callback_data=f"srv_action:{sid}:rebuild_menu")
         builder.button(text="🌐 تغییر IP", callback_data=f"srv_changeip:{sid}")
+        builder.button(text="🔑 تغییر رمز", callback_data=f"srv_chpass:{sid}")
         builder.button(text="🖥 VNC", callback_data=f"srv_vnc:{sid}")
         builder.button(text="📊 ترافیک", callback_data=f"srv_traffic:{sid}")
         builder.button(text="➕ ترافیک اضافه", callback_data=f"srv_add_traffic:{sid}")

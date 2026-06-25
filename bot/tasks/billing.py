@@ -9,7 +9,7 @@ from bot.tasks.celery_app import app
 
 def _run(coro):
     """Run async coroutine from sync Celery task."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 @app.task(name="bot.tasks.billing.run_hourly_billing", bind=True, max_retries=3)

@@ -7,7 +7,7 @@ from bot.tasks.celery_app import app
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 @app.task(name="bot.tasks.server.sync_all_traffic")

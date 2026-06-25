@@ -25,6 +25,7 @@ from bot.services.billing import BillingService
 from bot.services.log_service import LogService
 from bot.services.notification import NotificationService
 from bot.services.server import ServerService
+from bot.utils.loading import answer_loading, edit_loading
 
 router = Router(name="servers")
 
@@ -48,25 +49,40 @@ class EditServerStates(StatesGroup):
 
 # ── List servers ──────────────────────────────────────────────────────────────
 
+async def _show_server_list(target_msg, user: User, session: AsyncSession):
+    svc = ServerService(session)
+    servers = await svc.get_user_servers(user.id)
+    if not servers:
+        await target_msg.edit_text(
+            "📭 شما هیچ سروری ندارید.\nبرای خرید از منوی زیر استفاده کنید:",
+            reply_markup=server_list_kb([]),
+        )
+    else:
+        await target_msg.edit_text(
+            f"🖥 <b>سرور‌های شما</b> ({len(servers)} سرور):",
+            parse_mode="HTML",
+            reply_markup=server_list_kb(servers),
+        )
+
+
 @router.callback_query(F.data == "my_servers")
 async def cb_my_servers(cb: CallbackQuery, user: User, session: AsyncSession):
     if not user.is_phone_verified:
         await cb.answer("ابتدا شماره موبایل خود را تأیید کنید.", show_alert=True)
         return
-    svc = ServerService(session)
-    servers = await svc.get_user_servers(user.id)
-    if not servers:
-        await cb.message.edit_text(
-            "📭 شما هیچ سروری ندارید.\nبرای خرید از منوی زیر استفاده کنید:",
-            reply_markup=server_list_kb([]),
-        )
-    else:
-        await cb.message.edit_text(
-            f"🖥 <b>سرور‌های شما</b> ({len(servers)} سرور):",
-            parse_mode="HTML",
-            reply_markup=server_list_kb(servers),
-        )
+    await edit_loading(cb.message)
     await cb.answer()
+    await _show_server_list(cb.message, user, session)
+
+
+@router.message(F.text == "🖥 سرور‌های من")
+async def msg_my_servers(message: Message, user: User, session: AsyncSession):
+    if not user.is_phone_verified:
+        loading = await answer_loading(message)
+        await loading.edit_text("❌ ابتدا شماره موبایل خود را تأیید کنید.")
+        return
+    loading = await answer_loading(message)
+    await _show_server_list(loading, user, session)
 
 
 @router.callback_query(F.data.startswith("server:"))
@@ -365,32 +381,43 @@ async def cb_do_add_traffic(cb: CallbackQuery, user: User, session: AsyncSession
 #  BUY SERVER — category → plan → billing → discount → confirm
 # ══════════════════════════════════════════════════════════════════════════════
 
-@router.callback_query(F.data == "buy_server")
-async def cb_buy_server(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
-    if not user.is_phone_verified:
-        await cb.answer("ابتدا شماره موبایل خود را تأیید کنید.", show_alert=True)
-        return
-
+async def _show_buy_categories(target_msg, user: User, state: FSMContext, session: AsyncSession):
     result = await session.execute(select(ServerPlan.category).distinct())
     categories = sorted({row[0] for row in result.all() if row[0]})
-
     if not categories:
-        await cb.answer("در حال حاضر هیچ محصولی موجود نیست.", show_alert=True)
+        await target_msg.edit_text("در حال حاضر هیچ محصولی موجود نیست.", reply_markup=back_kb())
         return
-
     await state.set_state(BuyServerStates.selecting_category)
     builder = InlineKeyboardBuilder()
     for cat in categories:
         builder.button(text=f"📁 {cat}", callback_data=f"buycat:{cat}")
     builder.button(text="❌ انصراف", callback_data="cancel")
     builder.adjust(1)
-
-    await cb.message.edit_text(
+    await target_msg.edit_text(
         "🛒 <b>خرید سرور</b>\n\nدسته‌بندی مورد نظر را انتخاب کنید:",
         parse_mode="HTML",
         reply_markup=builder.as_markup(),
     )
+
+
+@router.callback_query(F.data == "buy_server")
+async def cb_buy_server(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
+    if not user.is_phone_verified:
+        await cb.answer("ابتدا شماره موبایل خود را تأیید کنید.", show_alert=True)
+        return
+    await edit_loading(cb.message)
     await cb.answer()
+    await _show_buy_categories(cb.message, user, state, session)
+
+
+@router.message(F.text == "🛒 خرید سرور")
+async def msg_buy_server(message: Message, user: User, state: FSMContext, session: AsyncSession):
+    if not user.is_phone_verified:
+        loading = await answer_loading(message)
+        await loading.edit_text("❌ ابتدا شماره موبایل خود را تأیید کنید.")
+        return
+    loading = await answer_loading(message)
+    await _show_buy_categories(loading, user, state, session)
 
 
 @router.callback_query(BuyServerStates.selecting_category, F.data.startswith("buycat:"))

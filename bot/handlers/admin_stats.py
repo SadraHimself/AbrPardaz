@@ -629,5 +629,4 @@ async def cb_admin_log_disconnect(cb: CallbackQuery, session: AsyncSession):
         if row:
             await session.delete(row)
     await session.flush()
-    await cb.answer("✅ گروه قطع شد.")
-    await cb_admin_log_group(cb, session)
+    await cb_admin_log_group(cb, session)  # handles cb.answer() internally

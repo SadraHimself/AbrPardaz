@@ -70,7 +70,7 @@ def run_database_backup():
                         "billing_type": s.billing_type.value,
                         "price_hourly": s.price_hourly,
                         "price_monthly": s.price_monthly,
-                        "plan_id": s.plan_id,
+                        "provider_account_id": s.provider_account_id,
                     }
                     for s in servers
                 ],

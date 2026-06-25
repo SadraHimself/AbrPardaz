@@ -123,7 +123,7 @@ async def cmd_start(message: Message, user: User, session: AsyncSession,
     if not user.is_phone_verified:
         await message.answer(
             "👋 سلام!\n\n"
-            "برای استفاده از ربات، ابتدا باید شماره موبایل ایرانی خود را وارد کنید.\n"
+            "برای استفاده از ربات، ابتدا باید شماره موبایل خود را وارد کنید.\n"
             "دکمه زیر را بزنید تا شماره‌تان به اشتراک گذاشته شود:",
             reply_markup=request_phone_kb(),
         )

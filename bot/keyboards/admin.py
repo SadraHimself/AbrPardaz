@@ -134,7 +134,7 @@ def discount_detail_kb(disc_id: int, is_active: bool) -> InlineKeyboardMarkup:
 
 # ── User management keyboards ─────────────────────────────────────────────────
 
-def user_detail_kb(user_id: int, is_banned: bool, is_kyc: bool) -> InlineKeyboardMarkup:
+def user_detail_kb(user_id: int, is_banned: bool, is_kyc: bool, hourly_limit: int = 5) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     ban_text = "✅ آنبن کاربر" if is_banned else "🚫 بن کاربر"
     builder.button(text=ban_text, callback_data=f"admin:user_ban:{user_id}")
@@ -143,6 +143,7 @@ def user_detail_kb(user_id: int, is_banned: bool, is_kyc: bool) -> InlineKeyboar
     builder.button(text="🏷 کد تخفیف اختصاصی", callback_data=f"admin:user_disc:{user_id}")
     builder.button(text="📜 تاریخچه پرداخت", callback_data=f"admin:user_payments:{user_id}")
     builder.button(text="🖥 سرویس‌های فعال", callback_data=f"admin:user_servers:{user_id}")
+    builder.button(text=f"🔢 لیمیت ساعتی: {hourly_limit}", callback_data=f"admin:user_limit:{user_id}")
     if not is_kyc:
         builder.button(text="✅ احراز هویت دستی", callback_data=f"admin:user_verify:{user_id}")
     builder.button(text="📨 ارسال پیام", callback_data=f"admin:user_msg:{user_id}")

@@ -21,6 +21,7 @@ from bot.keyboards.admin import (
     back_to_admin_kb, cancel_admin_kb, confirm_kb, user_detail_kb, users_list_kb,
 )
 from bot.services.billing import BillingService
+from bot.services.log_service import LogService
 
 router = Router(name="admin_users")
 
@@ -218,6 +219,7 @@ async def msg_user_credit(message: Message, state: FSMContext, session: AsyncSes
         parse_mode="HTML",
         reply_markup=back_to_admin_kb(f"admin:user:{user.id}"),
     )
+    await LogService(message.bot, session).log_wallet_charge(user, amount, user.balance)
     try:
         await message.bot.send_message(
             user.telegram_id,

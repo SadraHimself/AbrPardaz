@@ -8,7 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.database.models import (
@@ -796,6 +796,22 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
     if user.balance < (final_price or 0):
         await cb.answer("موجودی کافی نیست. کیف پول را شارژ کنید.", show_alert=True)
         return
+
+    if billing_type == BillingType.HOURLY:
+        max_hourly = (user.extra_data or {}).get("max_hourly_servers", 5)
+        hourly_count = (await session.execute(
+            select(func.count(Server.id)).where(
+                Server.user_id == user.id,
+                Server.billing_type == BillingType.HOURLY,
+                Server.status.in_([ServerStatus.ACTIVE, ServerStatus.BUILDING]),
+            )
+        )).scalar() or 0
+        if hourly_count >= max_hourly:
+            await cb.answer(
+                f"⛔ شما به حداکثر {max_hourly} سرور ساعتی همزمان رسیده‌اید.",
+                show_alert=True,
+            )
+            return
 
     await cb.message.edit_text("⏳ در حال ساخت سرور...")
     await cb.answer()

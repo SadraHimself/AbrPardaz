@@ -53,10 +53,16 @@ app.conf.update(
             "task": "bot.tasks.stats.cleanup_old_stats",
             "schedule": crontab(hour=3, minute=0, day_of_week=0),
         },
+        # هر ۴ ساعت بکاپ کامل دیتابیس گرفته و به تلگرام ارسال می‌شود
+        "database-backup": {
+            "task": "bot.tasks.backup.run_database_backup",
+            "schedule": crontab(minute=0, hour="*/4"),
+        },
     },
 )
 
 # Import tasks to register them
+import bot.tasks.backup   # noqa: F401, E402
 import bot.tasks.billing  # noqa: F401, E402
 import bot.tasks.server   # noqa: F401, E402
 import bot.tasks.stats    # noqa: F401, E402

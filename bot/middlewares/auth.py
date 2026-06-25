@@ -34,7 +34,9 @@ class AuthMiddleware(BaseMiddleware):
                 select(User).where(User.telegram_id == tg_user.id)
             )
             user = result.scalar_one_or_none()
+            is_new = False
             if not user:
+                is_new = True
                 user = User(
                     telegram_id=tg_user.id,
                     username=tg_user.username,
@@ -45,5 +47,6 @@ class AuthMiddleware(BaseMiddleware):
                 await session.flush()
 
             data["user"] = user
+            data["is_new_user"] = is_new
 
         return await handler(event, data)

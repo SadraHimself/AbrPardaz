@@ -80,13 +80,14 @@ if [[ "$MODE" == "update" ]]; then
 
     # Restart services
     info "Restarting services..."
+    RESTART_TIME=$(date "+%Y-%m-%d %H:%M:%S")
     systemctl start abrpardaz-bot abrpardaz-worker abrpardaz-beat
     success "Services restarted."
 
-    # Check bot
+    # Check bot — only look at logs produced AFTER this restart
     info "Checking bot connection..."
-    sleep 6
-    LOG=$(journalctl -u abrpardaz-bot -n 20 --no-pager 2>/dev/null)
+    sleep 10
+    LOG=$(journalctl -u abrpardaz-bot --since "$RESTART_TIME" --no-pager 2>/dev/null)
     if echo "$LOG" | grep -q "Bot started\|Started polling"; then
         echo -e "\n  ${GREEN}✅ Bot updated and running!${NC}"
     elif echo "$LOG" | grep -q "Unauthorized\|401"; then
@@ -300,13 +301,14 @@ EOF
 
 systemctl daemon-reload
 systemctl enable abrpardaz-bot abrpardaz-worker abrpardaz-beat
+START_TIME=$(date "+%Y-%m-%d %H:%M:%S")
 systemctl start  abrpardaz-bot abrpardaz-worker abrpardaz-beat
 success "Services installed and started."
 
 # ── Check bot connection ──────────────────────────────────────
 info "Checking bot connection to Telegram..."
-sleep 6
-LOG=$(journalctl -u abrpardaz-bot -n 30 --no-pager 2>/dev/null)
+sleep 10
+LOG=$(journalctl -u abrpardaz-bot --since "$START_TIME" --no-pager 2>/dev/null)
 
 if echo "$LOG" | grep -q "Bot started\|Started polling"; then
     echo -e "\n  ${GREEN}✅ Bot connected successfully!${NC}"

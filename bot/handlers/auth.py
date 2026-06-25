@@ -28,17 +28,16 @@ class KYCStates(StatesGroup):
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _normalize_ir_phone(raw: str) -> str | None:
-    """Returns +98xxxxxxxxxx format or None if invalid/non-Iranian."""
-    try:
-        parsed = phonenumbers.parse(raw, "IR")
-        if not phonenumbers.is_valid_number(parsed):
-            return None
-        if parsed.country_code != 98:
-            return None
-        return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
-    except Exception:
-        return None
+def _normalize_phone(raw: str) -> str | None:
+    """Returns E.164 format or None if the number is not valid."""
+    for region in (None, "IR"):
+        try:
+            parsed = phonenumbers.parse(raw, region)
+            if phonenumbers.is_valid_number(parsed):
+                return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
+        except Exception:
+            continue
+    return None
 
 
 # ── Phone contact handler ─────────────────────────────────────────────────────
@@ -52,11 +51,10 @@ async def handle_contact(message: Message, user: User, session: AsyncSession):
         await message.answer("❌ لطفاً شماره خودتان را ارسال کنید.", reply_markup=request_phone_kb())
         return
 
-    phone = _normalize_ir_phone(contact.phone_number)
+    phone = _normalize_phone(contact.phone_number)
     if not phone:
         await message.answer(
-            "❌ فقط شماره موبایل ایرانی (۰۹xxxxxxxxx) قابل قبول است.\n"
-            "لطفاً دوباره تلاش کنید.",
+            "❌ شماره موبایل معتبر نیست.\nلطفاً دوباره تلاش کنید.",
             reply_markup=request_phone_kb(),
         )
         return

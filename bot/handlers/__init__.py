@@ -2,6 +2,7 @@ from aiogram import Router
 
 from .admin import router as admin_router
 from .admin_broadcast import router as admin_broadcast_router
+from .admin_restore import router as admin_restore_router
 from .admin_stats import router as admin_stats_router
 from .admin_users import router as admin_users_router
 from .auth import router as auth_router
@@ -20,4 +21,5 @@ def setup_routers(dp):
     dp.include_router(admin_users_router)
     dp.include_router(admin_stats_router)
     dp.include_router(admin_broadcast_router)
+    dp.include_router(admin_restore_router)
     dp.include_router(admin_router)

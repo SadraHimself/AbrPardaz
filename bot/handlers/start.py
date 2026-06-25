@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.config import settings
 from bot.database.models import BotSettings, User
 from bot.keyboards.main import main_menu_kb, request_phone_kb
+from bot.services.log_service import LogService
 
 router = Router(name="start")
 
@@ -104,8 +105,12 @@ def _terms_kb() -> InlineKeyboardMarkup:
 # ── Main entry flow ───────────────────────────────────────────────────────────
 
 @router.message(CommandStart())
-async def cmd_start(message: Message, user: User, session: AsyncSession, state: FSMContext):
+async def cmd_start(message: Message, user: User, session: AsyncSession,
+                    state: FSMContext, is_new_user: bool = False):
     await state.clear()
+
+    if is_new_user:
+        await LogService(message.bot, session).log_new_user(user)
 
     # 1. Maintenance check
     maintenance = await _get_setting(session, "maintenance_mode", "0")

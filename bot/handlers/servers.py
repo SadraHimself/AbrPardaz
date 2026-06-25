@@ -111,10 +111,10 @@ async def cb_server_detail(cb: CallbackQuery, user: User, session: AsyncSession)
 
     await cb.message.edit_text(
         f"🖥 <b>{server.name}</b>\n\n"
-        f"🌐 آدرس IPv4: <code>{server.ip_address or 'در حال تخصیص'}</code>\n"
+        f"🌐 آیپی: <code>{server.ip_address or 'در حال تخصیص'}</code>\n"
         f"📍 موقعیت: {server.location or 'نامشخص'}\n"
         f"⚡ وضعیت: {status_label}\n\n"
-        f"💾 مقدار RAM: {server.ram} MB | پردازنده: {server.cpu} | دیسک: {server.disk} GB"
+        f"💾 رم: {server.ram} MB | پردازنده: {server.cpu} | دیسک: {server.disk} GB"
         f"{traffic_text}\n"
         f"💳 {billing_label} — {price:,.0f} {price_unit}\n"
         f"🕐 ساخته شده: {server.created_at.strftime('%Y/%m/%d')}",
@@ -559,7 +559,8 @@ async def _ask_os(cb: CallbackQuery, state: FSMContext, session: AsyncSession, u
             await _ask_discount(cb, state)
         return
 
-    await state.update_data(os_options=[(o["id"], o["name"]) for o in os_list[:20]])
+    os_name_map = {str(o["id"]): o["name"] for o in os_list[:20]}
+    await state.update_data(os_options=os_name_map)
     await state.set_state(BuyServerStates.selecting_os)
 
     builder = InlineKeyboardBuilder()
@@ -613,6 +614,8 @@ async def _ask_os_message(message: Message, state: FSMContext, session: AsyncSes
             )
         return
 
+    os_name_map = {str(o["id"]): o["name"] for o in os_list[:20]}
+    await state.update_data(os_options=os_name_map)
     await state.set_state(BuyServerStates.selecting_os)
     builder = InlineKeyboardBuilder()
     for os_item in os_list[:20]:
@@ -630,8 +633,8 @@ async def _ask_os_message(message: Message, state: FSMContext, session: AsyncSes
 async def cb_select_os(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
     os_id = cb.data[len("buyos:"):]
     data = await state.get_data()
-    os_options = data.get("os_options", [])
-    os_name = next((name for oid, name in os_options if str(oid) == str(os_id)), os_id)
+    os_options = data.get("os_options", {})
+    os_name = os_options.get(str(os_id), os_id) if isinstance(os_options, dict) else os_id
     await state.update_data(os_id=os_id, os_name=os_name)
     if data.get("billing") == "hourly":
         await state.update_data(discount_id=None, discount_percent=0)
@@ -830,7 +833,7 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
         delivery = (
             f"✅ <b>سرور {server.name} آماده است!</b>\n\n"
             f"📦 پلن: {plan_name}\n"
-            f"🌐 آدرس IPv4: <code>{server.ip_address or 'در حال تخصیص...'}</code>\n"
+            f"🌐 آیپی: <code>{server.ip_address or 'در حال تخصیص...'}</code>\n"
             f"🔑 پسورد: <code>{root_password}</code>\n"
             f"\n⚠️ این اطلاعات را در جای امنی ذخیره کنید.\n"
             "🔔 سیستم‌عامل در حال نصب است — چند دقیقه منتظر بمانید."

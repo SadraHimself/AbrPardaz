@@ -19,8 +19,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config import settings
 from bot.database.models import BotSettings, Server, ServerStatus, User
-from bot.keyboards.main import main_menu_kb, request_phone_kb
+from bot.keyboards.main import back_kb, main_menu_kb, request_phone_kb
 from bot.services.log_service import LogService
+from bot.utils.loading import answer_loading, edit_loading
 
 router = Router(name="start")
 
@@ -199,7 +200,6 @@ async def cb_check_join(cb: CallbackQuery, user: User, session: AsyncSession):
 
 @router.callback_query(F.data == "main_menu")
 async def cb_main_menu(cb: CallbackQuery, user: User, session: AsyncSession):
-    # Re-check maintenance
     maintenance = await _get_setting(session, "maintenance_mode", "0")
     if maintenance == "1" and not _is_admin(user):
         maint_text = await _get_setting(session, "maintenance_text", "🔧 ربات در حال بروزرسانی است.")
@@ -208,27 +208,21 @@ async def cb_main_menu(cb: CallbackQuery, user: User, session: AsyncSession):
         return
 
     welcome_text = await _build_welcome_text(user, session)
-    await cb.message.edit_text(
-        welcome_text,
-        parse_mode="HTML",
-        reply_markup=main_menu_kb(is_admin=_is_admin(user)),
-    )
+    # Reply keyboard is already at the bottom — just update the inline message
+    await cb.message.edit_text(welcome_text, parse_mode="HTML")
     await cb.answer()
 
 
 @router.callback_query(F.data == "cancel")
-async def cb_cancel(cb: CallbackQuery, user: User, session: AsyncSession):
+async def cb_cancel(cb: CallbackQuery, user: User, session: AsyncSession, state=None):
+    if state:
+        await state.clear()
     welcome_text = await _build_welcome_text(user, session)
-    await cb.message.edit_text(
-        welcome_text,
-        parse_mode="HTML",
-        reply_markup=main_menu_kb(is_admin=_is_admin(user)),
-    )
+    await cb.message.edit_text(welcome_text, parse_mode="HTML")
     await cb.answer("لغو شد.")
 
 
-@router.callback_query(F.data == "support")
-async def cb_support(cb: CallbackQuery, session: AsyncSession):
+async def _render_support(target_msg, session: AsyncSession):
     support_text = await _get_setting(
         session, "support_text",
         default=(
@@ -238,16 +232,26 @@ async def cb_support(cb: CallbackQuery, session: AsyncSession):
     )
     support_id = await _get_setting_opt(session, "support_id")
     website = await _get_setting_opt(session, "website_url")
-
     buttons = []
     if support_id:
         buttons.append([InlineKeyboardButton(text="💬 پشتیبانی", url=f"https://t.me/{support_id.lstrip('@')}")])
     if website:
         buttons.append([InlineKeyboardButton(text="🌐 وبسایت", url=website)])
     buttons.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data="main_menu")])
+    await target_msg.edit_text(support_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
-    await cb.message.edit_text(support_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+@router.callback_query(F.data == "support")
+async def cb_support(cb: CallbackQuery, session: AsyncSession):
+    await edit_loading(cb.message)
     await cb.answer()
+    await _render_support(cb.message, session)
+
+
+@router.message(F.text == "🆘 پشتیبانی")
+async def msg_support(message: Message, session: AsyncSession):
+    loading = await answer_loading(message)
+    await _render_support(loading, session)
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -299,21 +303,17 @@ async def _send_welcome(msg: Message, user: User, session: AsyncSession,
 
 # ── User profile ──────────────────────────────────────────────────────────────
 
-@router.callback_query(F.data == "user_profile")
-async def cb_user_profile(cb: CallbackQuery, user: User, session: AsyncSession):
+async def _render_profile(target_msg, user: User, session: AsyncSession):
     active_count = (await session.execute(
         select(func.count(Server.id)).where(
             Server.user_id == user.id,
             Server.status != ServerStatus.DELETED,
         )
     )).scalar() or 0
-
     hourly_limit = (user.extra_data or {}).get("max_hourly_servers", 5)
-
     name = f"{user.first_name or ''} {user.last_name or ''}".strip() or "—"
     phone = user.phone_number or "ثبت نشده"
     kyc = "✅ تأیید شده" if user.is_kyc_verified else "❌ تأیید نشده"
-
     text = (
         f"👤 <b>{name}</b>\n\n"
         f"🆔 آیدی عددی: <code>{user.telegram_id}</code>\n"
@@ -322,12 +322,23 @@ async def cb_user_profile(cb: CallbackQuery, user: User, session: AsyncSession):
         f"🖥 سرور‌های فعال: <b>{active_count}</b>\n"
         f"🔢 لیمیت سرور ساعتی: <b>{hourly_limit}</b>"
     )
-
-    await cb.message.edit_text(
+    await target_msg.edit_text(
         text,
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔙 بازگشت", callback_data="main_menu")]
         ]),
     )
+
+
+@router.callback_query(F.data == "user_profile")
+async def cb_user_profile(cb: CallbackQuery, user: User, session: AsyncSession):
+    await edit_loading(cb.message)
     await cb.answer()
+    await _render_profile(cb.message, user, session)
+
+
+@router.message(F.text == "👤 مشخصات کاربری")
+async def msg_user_profile(message: Message, user: User, session: AsyncSession):
+    loading = await answer_loading(message)
+    await _render_profile(loading, user, session)

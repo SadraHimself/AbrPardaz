@@ -8,11 +8,9 @@ import aiohttp
 from .base import BaseProvider, CreateServerParams, PlanInfo, ServerInfo
 
 
-def _build_query_string(params: dict) -> str:
-    """Build a query string keeping [ ] unencoded so PHP parses
-    space[0][size]=20 as $_GET['space'][0]['size'].
-    urllib.parse.urlencode would encode brackets to %5B%5D — PHP still
-    parses them but keeping them literal is safer and cleaner."""
+def _encode_form(params: dict) -> str:
+    """Build application/x-www-form-urlencoded keeping [ ] unencoded so PHP
+    parses space[0][size]=20 as $_POST['space'][0]['size']."""
     from urllib.parse import quote
     parts = []
     for k, v in params.items():
@@ -37,26 +35,20 @@ class VirtualizorProvider(BaseProvider):
     ) -> dict:
         import json as _json
 
-        # Virtualizor Admin API is GET-based: ALL parameters (auth + operational)
-        # go in the URL query string. PHP reads them via $_GET / $_REQUEST.
-        # Sending operational params as POST body causes Virtualizor to ignore them
-        # and return the HTML admin panel page instead of JSON.
-        all_params: dict = {
+        # adminapipass = plain password (confirmed live: MD5-hashed form → Access Denied).
+        url_params: dict = {
             "adminapikey": self.api_key,
             "adminapipass": self.api_pass,
             "act": act,
             "api": "json",
         }
         if query:
-            all_params.update({k: str(v) for k, v in query.items()})
-        if params:
-            all_params.update({k: str(v) for k, v in params.items()})
+            url_params.update({k: str(v) for k, v in query.items()})
 
-        # Build query string manually to keep [ ] unencoded for PHP array notation.
-        qs = _build_query_string(all_params)
-
+        form_body = _encode_form(dict(params) if params else {})
         connector = aiohttp.TCPConnector(ssl=False)
         timeout = aiohttp.ClientTimeout(total=30, connect=5)
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
         candidates = [self.panel_url]
         if self.panel_url.startswith("http://"):
@@ -67,23 +59,26 @@ class VirtualizorProvider(BaseProvider):
         last_error = None
         async with aiohttp.ClientSession(connector=connector) as session:
             for base_url in candidates:
-                url = f"{base_url}/index.php?{qs}"
+                url = f"{base_url}/index.php"
                 try:
-                    async with session.get(
-                        url,
-                        timeout=timeout,
-                        allow_redirects=True,
+                    async with session.post(
+                        url, params=url_params, data=form_body, headers=headers,
+                        timeout=timeout, allow_redirects=False,
                     ) as resp:
+                        if resp.status in (301, 302, 303):
+                            location = resp.headers.get("Location", "")
+                            if "login" in location:
+                                raise RuntimeError(
+                                    "API credentials رد شد — Configuration → Admin API → "
+                                    "Enable API را فعال کنید و Key/Pass را مجدداً کپی کنید"
+                                )
+                            last_error = f"ریدایرکت {resp.status} به: {location}"
+                            continue
                         raw = await resp.text()
                         if not raw or not raw.strip():
                             last_error = "پنل پاسخ خالی برگرداند"
                             continue
                         if raw.strip().startswith("<") or "window.location" in raw:
-                            if "login" in str(resp.url).lower():
-                                raise RuntimeError(
-                                    "API credentials رد شد — Configuration → Admin API → "
-                                    "Enable API را فعال کنید و Key/Pass را مجدداً کپی کنید"
-                                )
                             last_error = f"پنل HTML برگرداند — {base_url}"
                             continue
                         try:
@@ -104,7 +99,7 @@ class VirtualizorProvider(BaseProvider):
                         if error:
                             raise RuntimeError(f"Virtualizor: {error}")
                         return data
-                except (aiohttp.ClientError, OSError) as e:
+                except aiohttp.ClientError as e:
                     last_error = str(e)
                     continue
 

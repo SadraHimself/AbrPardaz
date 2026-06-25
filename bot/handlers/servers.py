@@ -22,6 +22,7 @@ from bot.keyboards.server import (
 )
 from bot.providers.virtualizor import VirtualizorProvider
 from bot.services.billing import BillingService
+from bot.services.log_service import LogService
 from bot.services.notification import NotificationService
 from bot.services.server import ServerService
 
@@ -230,6 +231,7 @@ async def cb_server_action(cb: CallbackQuery, user: User, session: AsyncSession)
             if action == "change_ip":
                 msg = f"✅ IP جدید: <code>{server.ip_address}</code>"
             await cb.message.answer(msg, parse_mode="HTML")
+            await LogService(cb.bot, session).log_server_action(user, server, action)
         else:
             await cb.message.answer("❌ عملیات ناموفق بود.")
     except NotImplementedError as e:
@@ -298,6 +300,7 @@ async def cb_server_rebuild_do(cb: CallbackQuery, user: User, session: AsyncSess
                 parse_mode="HTML",
                 reply_markup=back_kb(f"server:{server_id}"),
             )
+            await LogService(cb.bot, session).log_server_action(user, server, "rebuild")
         else:
             await cb.message.answer(
                 "❌ ریبیلد ناموفق بود.",
@@ -839,6 +842,9 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
             "🔔 سیستم‌عامل در حال نصب است — چند دقیقه منتظر بمانید."
         )
         await cb.message.edit_text(delivery, parse_mode="HTML")
+        await LogService(cb.bot, session).log_purchase(
+            user, server, plan_name, billing_str, final_price or 0
+        )
     except Exception as e:
         await cb.message.edit_text(f"❌ خطا در ساخت سرور: {e}\nبا پشتیبانی تماس بگیرید.")
 
@@ -934,6 +940,7 @@ async def cb_change_ip_do(cb: CallbackQuery, user: User, session: AsyncSession):
             parse_mode="HTML",
             reply_markup=back_kb(f"server:{server_id}"),
         )
+        await LogService(cb.bot, session).log_ip_change(user, server, old_ip, new_ip)
     except Exception as e:
         if fee > 0:
             await billing.credit(user.id, fee, description=f"برگشت وجه تغییر IP — {server.name}")
@@ -1103,6 +1110,7 @@ async def cb_change_password_do(cb: CallbackQuery, user: User, session: AsyncSes
                 parse_mode="HTML",
                 reply_markup=back_kb(f"server:{server_id}"),
             )
+            await LogService(cb.bot, session).log_server_action(user, server, "change_password")
         else:
             await wait.edit_text(
                 "❌ تغییر رمز ناموفق بود.",

@@ -7,29 +7,16 @@ from datetime import datetime, timezone
 
 from aiogram import F, Router
 from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.database.models import Transaction, TransactionType, User
+from bot.database.models import Server, Transaction, TransactionType, User
 from bot.keyboards.main import back_kb, charge_amount_kb, wallet_kb
 from bot.utils.loading import answer_loading, edit_loading
 
 router = Router(name="billing")
 
-_TX_LIMIT = 20
 _CLEANUP_HOURS = 72
-
-
-def _tx_is_credit(tx: Transaction) -> bool:
-    return tx.type.value in ("credit", "refund")
-
-
-def _tx_btn_text(tx: Transaction) -> str:
-    is_credit = _tx_is_credit(tx)
-    status = "success" if is_credit else "danger"
-    sign = "+" if is_credit else "−"
-    desc = (tx.description or "")[:28]
-    return f"{status} | {sign}{tx.amount:,.0f} تومان — {desc}"
 
 
 def _build_xml(user: User, txs: list) -> bytes:
@@ -121,30 +108,79 @@ async def cb_tx_history(cb: CallbackQuery, user: User, session: AsyncSession):
     await edit_loading(cb.message)
     await cb.answer()
 
-    result = await session.execute(
+    # Credit/refund transactions — individual
+    credit_result = await session.execute(
         select(Transaction)
-        .where(Transaction.user_id == user.id)
+        .where(Transaction.user_id == user.id, Transaction.type != TransactionType.DEBIT)
         .order_by(Transaction.created_at.desc())
-        .limit(_TX_LIMIT)
+        .limit(10)
     )
-    txs = list(result.scalars().all())
+    credits = list(credit_result.scalars().all())
 
-    if not txs:
+    # Debit transactions grouped by server_id (hourly + purchase per server)
+    srv_result = await session.execute(
+        select(
+            Transaction.server_id,
+            func.sum(Transaction.amount).label("total"),
+            func.count(Transaction.id).label("cnt"),
+            func.max(Transaction.created_at).label("last_date"),
+        )
+        .where(
+            Transaction.user_id == user.id,
+            Transaction.type == TransactionType.DEBIT,
+            Transaction.server_id.isnot(None),
+        )
+        .group_by(Transaction.server_id)
+        .order_by(func.max(Transaction.created_at).desc())
+    )
+    srv_rows = srv_result.all()
+
+    # Standalone debits without server_id (manual deductions, etc.)
+    standalone_result = await session.execute(
+        select(Transaction)
+        .where(
+            Transaction.user_id == user.id,
+            Transaction.type == TransactionType.DEBIT,
+            Transaction.server_id.is_(None),
+        )
+        .order_by(Transaction.created_at.desc())
+        .limit(5)
+    )
+    standalone = list(standalone_result.scalars().all())
+
+    if not credits and not srv_rows and not standalone:
         await cb.message.edit_text(
             "📜 هیچ تراکنشی وجود ندارد.",
             reply_markup=back_kb("wallet"),
         )
         return
 
-    buttons = [[InlineKeyboardButton(text=_tx_btn_text(tx), callback_data="tx_noop")] for tx in txs]
+    buttons = []
+
+    for row in srv_rows:
+        server = await session.get(Server, row.server_id)
+        name = server.name if server else f"سرور #{row.server_id}"
+        btn = f"❌ −{row.total:,.0f} تومان — {name} ({row.cnt} بار)"
+        buttons.append([InlineKeyboardButton(text=btn, callback_data="tx_noop")])
+
+    for tx in credits:
+        desc = (tx.description or "واریز")[:30]
+        btn = f"✅ +{tx.amount:,.0f} تومان — {desc}"
+        buttons.append([InlineKeyboardButton(text=btn, callback_data="tx_noop")])
+
+    for tx in standalone:
+        desc = (tx.description or "برداشت")[:30]
+        btn = f"❌ −{tx.amount:,.0f} تومان — {desc}"
+        buttons.append([InlineKeyboardButton(text=btn, callback_data="tx_noop")])
+
     buttons.append([InlineKeyboardButton(text="📄 دریافت فاکتور XML", callback_data="invoice_xml")])
     buttons.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data="wallet")])
-    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+
     await cb.message.edit_text(
-        f"📜 <b>آخرین {len(txs)} تراکنش</b>\n\n"
+        f"📜 <b>تاریخچه تراکنش‌ها</b>\n\n"
         f"<i>⚠️ تراکنش‌ها هر {_CLEANUP_HOURS} ساعت به‌طور خودکار پاک می‌شوند.</i>",
         parse_mode="HTML",
-        reply_markup=kb,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
     )
 
 
@@ -160,7 +196,7 @@ async def cb_invoice_xml(cb: CallbackQuery, user: User, session: AsyncSession):
         select(Transaction)
         .where(Transaction.user_id == user.id)
         .order_by(Transaction.created_at.desc())
-        .limit(_TX_LIMIT)
+        .limit(200)
     )
     txs = list(result.scalars().all())
     xml_bytes = _build_xml(user, txs)
@@ -179,11 +215,10 @@ async def cb_invoice_xml(cb: CallbackQuery, user: User, session: AsyncSession):
 
 @router.callback_query(F.data == "traffic")
 async def cb_traffic_overview(cb: CallbackQuery, user: User, session: AsyncSession):
-    from bot.database.models import Server, ServerStatus
     result = await session.execute(
         select(Server).where(
             Server.user_id == user.id,
-            Server.status == ServerStatus.ACTIVE,
+            Server.status == Server.status.ACTIVE,
         )
     )
     servers = list(result.scalars().all())

@@ -803,7 +803,7 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
             select(func.count(Server.id)).where(
                 Server.user_id == user.id,
                 Server.billing_type == BillingType.HOURLY,
-                Server.status.in_([ServerStatus.ACTIVE, ServerStatus.BUILDING]),
+                Server.status != ServerStatus.DELETED,
             )
         )).scalar() or 0
         if hourly_count >= max_hourly:

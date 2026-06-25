@@ -1,9 +1,17 @@
 """Server management keyboards."""
 from __future__ import annotations
 
-from bot.database.models import BillingType, Server, ServerStatus
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+from bot.database.models import BillingType, Server, ServerStatus
+
+
+def _btn(text: str, cbd: str, style: str | None = None) -> InlineKeyboardButton:
+    """Create an InlineKeyboardButton with optional Telegram style (success/danger/primary)."""
+    if style:
+        return InlineKeyboardButton(text=text, callback_data=cbd, **{"style": style})
+    return InlineKeyboardButton(text=text, callback_data=cbd)
 
 
 def status_dot(server: Server) -> str:
@@ -17,9 +25,8 @@ def status_dot(server: Server) -> str:
     ):
         return "⚪"
     if server.status == ServerStatus.ACTIVE:
-        # ACTIVE covers both running and powered-off; machine_status decides.
         return "🟢" if str((server.extra_data or {}).get("machine_status", "1")) == "1" else "🔴"
-    return "🔴"  # deleted / unknown
+    return "🔴"
 
 
 def server_list_kb(servers: list[Server]) -> InlineKeyboardMarkup:
@@ -35,48 +42,65 @@ def server_list_kb(servers: list[Server]) -> InlineKeyboardMarkup:
 
 
 def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
     sid = server.id
-
     is_hourly = server.billing_type == BillingType.HOURLY
+    rows: list[list[InlineKeyboardButton]] = []
 
     if server.status == ServerStatus.ACTIVE:
         extra = server.extra_data or {}
         is_running = str(extra.get("machine_status", "1")) == "1"
         if is_running:
-            builder.button(text="🔄 ریبوت", callback_data=f"srv_action:{sid}:restart_confirm")
-            builder.button(text="⏹ خاموش", callback_data=f"srv_action:{sid}:stop")
+            rows.append([
+                _btn("🔄 ریبوت", f"srv_action:{sid}:restart_confirm", "primary"),
+                _btn("⏹ خاموش", f"srv_action:{sid}:stop", "danger"),
+            ])
         else:
-            builder.button(text="▶️ روشن کردن", callback_data=f"srv_action:{sid}:start")
-        builder.button(text="🔁 ریبیلد", callback_data=f"srv_action:{sid}:rebuild_menu")
-        builder.button(text="🌐 تغییر IP", callback_data=f"srv_changeip:{sid}")
-        builder.button(text="🔑 تغییر رمز", callback_data=f"srv_chpass:{sid}")
+            rows.append([
+                _btn("▶️ روشن کردن", f"srv_action:{sid}:start", "success"),
+            ])
+        rows.append([
+            _btn("🔁 ریبیلد", f"srv_action:{sid}:rebuild_menu", "primary"),
+            _btn("🌐 تغییر IP", f"srv_changeip:{sid}"),
+        ])
+        rows.append([
+            _btn("🔑 تغییر رمز", f"srv_chpass:{sid}"),
+        ])
         if is_hourly:
-            builder.button(text="🗑 حذف سرور", callback_data=f"srv_action:{sid}:delete_confirm")
+            rows[-1].append(_btn("🗑 حذف سرور", f"srv_action:{sid}:delete_confirm", "danger"))
 
     elif server.status == ServerStatus.SUSPENDED:
-        builder.button(text="▶️ فعال‌سازی", callback_data=f"srv_action:{sid}:unsuspend")
+        rows.append([
+            _btn("▶️ فعال‌سازی", f"srv_action:{sid}:unsuspend", "success"),
+        ])
         if is_hourly:
-            builder.button(text="🗑 حذف سرور", callback_data=f"srv_action:{sid}:delete_confirm")
+            rows[-1].append(_btn("🗑 حذف سرور", f"srv_action:{sid}:delete_confirm", "danger"))
 
-    elif server.status == ServerStatus.DELETED:
-        pass  # no actions
-
-    else:
-        builder.button(text="▶️ روشن کردن", callback_data=f"srv_action:{sid}:start")
-        builder.button(text="🔁 ریبیلد", callback_data=f"srv_action:{sid}:rebuild_menu")
-        builder.button(text="🔄 بررسی وضعیت", callback_data=f"srv_refresh:{sid}")
+    elif server.status != ServerStatus.DELETED:
+        rows.append([
+            _btn("▶️ روشن کردن", f"srv_action:{sid}:start", "success"),
+            _btn("🔁 ریبیلد", f"srv_action:{sid}:rebuild_menu", "primary"),
+        ])
+        rows.append([
+            _btn("🔄 بررسی وضعیت", f"srv_refresh:{sid}"),
+        ])
         if is_hourly:
-            builder.button(text="🗑 حذف سرور", callback_data=f"srv_action:{sid}:delete_confirm")
+            rows[-1].append(_btn("🗑 حذف سرور", f"srv_action:{sid}:delete_confirm", "danger"))
 
-    builder.button(text="🔙 بازگشت به لیست", callback_data="my_servers")
-    builder.adjust(2)
-    return builder.as_markup()
+    rows.append([_btn("🔙 بازگشت به لیست", "my_servers")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def server_delete_confirm_kb(server_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            _btn("✅ بله، حذف شود", f"srv_action:{server_id}:delete", "danger"),
+            _btn("❌ خیر", f"server:{server_id}", "success"),
+        ]
+    ])
 
 
 def subproducts_buy_kb(server_id: int, sub_products) -> InlineKeyboardMarkup:
-    from aiogram.utils.keyboard import InlineKeyboardBuilder as _B
-    builder = _B()
+    builder = InlineKeyboardBuilder()
     for sp in sub_products:
         unit = "GB" if sp.type.value == "traffic" else "عدد"
         builder.button(
@@ -86,16 +110,6 @@ def subproducts_buy_kb(server_id: int, sub_products) -> InlineKeyboardMarkup:
     builder.button(text="🔙 بازگشت", callback_data=f"server:{server_id}")
     builder.adjust(1)
     return builder.as_markup()
-
-
-def server_delete_confirm_kb(server_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="✅ بله، حذف شود", callback_data=f"srv_action:{server_id}:delete"),
-            InlineKeyboardButton(text="❌ خیر", callback_data=f"server:{server_id}"),
-        ]
-    ])
-
 
 
 def add_traffic_kb(server_id: int) -> InlineKeyboardMarkup:

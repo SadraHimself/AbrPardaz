@@ -3,30 +3,26 @@ from __future__ import annotations
 
 from aiogram.types import (
     InlineKeyboardButton, InlineKeyboardMarkup,
-    KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove,
+    KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove, WebAppInfo,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
 from bot.config import settings
 
 
-def main_menu_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.button(text="🖥 سرور‌های من", callback_data="my_servers")
-    builder.button(text="🛒 خرید سرور", callback_data="buy_server")
-    builder.button(text="💰 کیف پول", callback_data="wallet")
-    builder.button(text="📊 ترافیک", callback_data="traffic")
-    builder.button(text="👤 مشخصات کاربری", callback_data="user_profile")
-    builder.button(text="🆘 پشتیبانی", callback_data="support")
+def main_menu_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="🖥 سرور‌های من")
+    builder.button(text="🛒 خرید سرور")
+    builder.button(text="💰 کیف پول")
+    builder.button(text="👤 مشخصات کاربری")
+    builder.button(text="🆘 پشتیبانی")
     if settings.WEBAPP_URL:
-        builder.button(
-            text="🌐 پنل مدیریت",
-            web_app={"url": settings.WEBAPP_URL},
-        )
+        builder.button(text="🌐 پنل مدیریت", web_app=WebAppInfo(url=settings.WEBAPP_URL))
     if is_admin:
-        builder.button(text="⚙️ پنل ادمین", callback_data="admin_panel")
+        builder.button(text="⚙️ پنل ادمین")
     builder.adjust(2)
-    return builder.as_markup()
+    return builder.as_markup(resize_keyboard=True)
 
 
 def request_phone_kb() -> ReplyKeyboardMarkup:

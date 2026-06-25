@@ -22,6 +22,7 @@ from bot.keyboards.admin import (
     finance_kb, price_adj_categories_kb, settings_menu_kb, stats_kb,
 )
 from bot.services.billing import BillingService
+from bot.utils.loading import edit_loading
 
 router = Router(name="admin_stats")
 
@@ -88,6 +89,8 @@ async def cb_admin_stats_menu(cb: CallbackQuery):
 
 @router.callback_query(F.data == "admin:stats_today")
 async def cb_stats_today(cb: CallbackQuery, session: AsyncSession):
+    await edit_loading(cb.message)
+    await cb.answer()
     now = datetime.now(timezone.utc)
     start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     await _show_stats(cb, session, start, now, "امروز")
@@ -95,6 +98,8 @@ async def cb_stats_today(cb: CallbackQuery, session: AsyncSession):
 
 @router.callback_query(F.data == "admin:stats_month")
 async def cb_stats_month(cb: CallbackQuery, session: AsyncSession):
+    await edit_loading(cb.message)
+    await cb.answer()
     now = datetime.now(timezone.utc)
     start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     await _show_stats(cb, session, start, now, "این ماه")
@@ -158,13 +163,17 @@ async def msg_stats_range_end(message: Message, state: FSMContext, session: Asyn
     )).scalar() or 0
 
     await message.answer(
-        f"📊 <b>آمار: {label}</b>\n\n"
-        f"👥 کل کاربران: {total_users}\n"
-        f"🆕 کاربر جدید: {new_users}\n"
-        f"🖥 سرور جدید: {new_servers}\n"
-        f"🟢 سرور فعال: {active_srv}\n"
-        f"💰 درآمد: {revenue:,.0f} تومان\n"
-        f"👛 جمع موجودی: {total_wallet:,.0f} تومان",
+        f"<b>آمار: {label} 📊</b>\n"
+        f"━━━━━━━━━━━━━━━━━\n\n"
+        f"<b>کاربران 👥</b>\n"
+        f"کاربران کل: <b>{total_users}</b>\n"
+        f"کاربر جدید: <b>{new_users}</b> 🆕\n\n"
+        f"<b>سرور‌ها 🖥</b>\n"
+        f"سرور جدید: <b>{new_servers}</b>\n"
+        f"سرور فعال: <b>{active_srv}</b> 🟢\n\n"
+        f"<b>مالی 💰</b>\n"
+        f"درآمد: <b>{revenue:,.0f} تومان</b>\n"
+        f"موجودی کیف‌پول‌ها: <b>{total_wallet:,.0f} تومان</b> 👛",
         parse_mode="HTML",
         reply_markup=back_to_admin_kb("admin:stats"),
     )
@@ -198,19 +207,22 @@ async def _show_stats(cb: CallbackQuery, session: AsyncSession, start: datetime,
     )).scalar() or 0
 
     await cb.message.edit_text(
-        f"📊 <b>آمار — {label}</b>\n\n"
-        f"👥 کل کاربران: {total_users}\n"
-        f"🆕 کاربر جدید: {new_users}\n"
-        f"🖥 سرور جدید: {new_servers}\n"
-        f"🟢 سرور فعال: {active_srv}\n"
-        f"🔴 سرور ساسپند: {suspended_srv}\n"
-        f"💰 درآمد: {revenue:,.0f} تومان\n"
-        f"👛 جمع موجودی کیف‌پول: {total_wallet:,.0f} تومان\n"
-        f"🏷 کد تخفیف فعال: {active_disc}",
+        f"<b>آمار — {label} 📊</b>\n"
+        f"━━━━━━━━━━━━━━━━━\n\n"
+        f"<b>کاربران 👥</b>\n"
+        f"کاربران کل: <b>{total_users}</b>\n"
+        f"کاربر جدید: <b>{new_users}</b> 🆕\n\n"
+        f"<b>سرور‌ها 🖥</b>\n"
+        f"سرور جدید: <b>{new_servers}</b>\n"
+        f"سرور فعال: <b>{active_srv}</b> 🟢\n"
+        f"سرور ساسپند: <b>{suspended_srv}</b> 🔴\n\n"
+        f"<b>مالی 💰</b>\n"
+        f"درآمد: <b>{revenue:,.0f} تومان</b>\n"
+        f"موجودی کیف‌پول‌ها: <b>{total_wallet:,.0f} تومان</b> 👛\n"
+        f"کد تخفیف فعال: <b>{active_disc}</b> 🏷",
         parse_mode="HTML",
         reply_markup=stats_kb(),
     )
-    await cb.answer()
 
 
 # ══════════════════════════════════════════════════════════════════════════════

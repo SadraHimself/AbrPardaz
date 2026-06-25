@@ -16,6 +16,7 @@ def main_menu_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
     builder.button(text="🛒 خرید سرور", callback_data="buy_server")
     builder.button(text="💰 کیف پول", callback_data="wallet")
     builder.button(text="📊 ترافیک", callback_data="traffic")
+    builder.button(text="👤 مشخصات کاربری", callback_data="user_profile")
     builder.button(text="🆘 پشتیبانی", callback_data="support")
     if settings.WEBAPP_URL:
         builder.button(

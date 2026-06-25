@@ -20,34 +20,16 @@ _TX_LIMIT = 20
 _CLEANUP_HOURS = 72
 
 
-def _tx_icon(tx: Transaction) -> str:
-    if tx.type == TransactionType.CREDIT or tx.type.value == "credit":
-        return "🟢"
-    if tx.type == TransactionType.REFUND or tx.type.value == "refund":
-        return "🔵"
-    return "🔴"
+def _tx_is_credit(tx: Transaction) -> bool:
+    return tx.type.value in ("credit", "refund")
 
 
-def _tx_sign(tx: Transaction) -> str:
-    if tx.type == TransactionType.CREDIT or tx.type.value in ("credit", "refund"):
-        return "+"
-    return "−"
-
-
-def _format_tx_list(txs: list) -> str:
-    lines = []
-    for tx in txs:
-        icon = _tx_icon(tx)
-        sign = _tx_sign(tx)
-        date = tx.created_at.strftime("%Y/%m/%d — %H:%M") if tx.created_at else "—"
-        desc = tx.description or "—"
-        lines.append(
-            f"{icon} {sign}{tx.amount:,.0f} تومان\n"
-            f"📅 {date}\n"
-            f"📄 {desc}\n"
-            f"─────────────────────"
-        )
-    return "\n".join(lines)
+def _tx_btn_text(tx: Transaction) -> str:
+    is_credit = _tx_is_credit(tx)
+    status = "success" if is_credit else "danger"
+    sign = "+" if is_credit else "−"
+    desc = (tx.description or "")[:28]
+    return f"{status} | {sign}{tx.amount:,.0f} تومان — {desc}"
 
 
 def _build_xml(user: User, txs: list) -> bytes:
@@ -154,18 +136,21 @@ async def cb_tx_history(cb: CallbackQuery, user: User, session: AsyncSession):
         )
         return
 
-    body = _format_tx_list(txs)
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📄 دریافت فاکتور XML", callback_data="invoice_xml")],
-        [InlineKeyboardButton(text="🔙 بازگشت", callback_data="wallet")],
-    ])
+    buttons = [[InlineKeyboardButton(text=_tx_btn_text(tx), callback_data="tx_noop")] for tx in txs]
+    buttons.append([InlineKeyboardButton(text="📄 دریافت فاکتور XML", callback_data="invoice_xml")])
+    buttons.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data="wallet")])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await cb.message.edit_text(
         f"📜 <b>آخرین {len(txs)} تراکنش</b>\n\n"
-        f"{body}\n\n"
         f"<i>⚠️ تراکنش‌ها هر {_CLEANUP_HOURS} ساعت به‌طور خودکار پاک می‌شوند.</i>",
         parse_mode="HTML",
         reply_markup=kb,
     )
+
+
+@router.callback_query(F.data == "tx_noop")
+async def cb_tx_noop(cb: CallbackQuery):
+    await cb.answer()
 
 
 @router.callback_query(F.data == "invoice_xml")

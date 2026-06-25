@@ -28,6 +28,7 @@ from bot.keyboards.admin import (
     subprod_detail_kb, subprod_type_kb, subproducts_kb,
 )
 from bot.providers.virtualizor import VirtualizorProvider
+from bot.utils.loading import answer_loading, edit_loading
 from bot.services.billing import BillingService
 
 router = Router(name="admin")
@@ -91,12 +92,24 @@ class SubProductFSM(StatesGroup):
 @router.callback_query(F.data == "admin_panel")
 async def cb_admin_panel(cb: CallbackQuery, state: FSMContext):
     await state.clear()
+    await edit_loading(cb.message)
+    await cb.answer()
     await cb.message.edit_text(
         "⚙️ <b>پنل ادمین</b>\n\nیک بخش را انتخاب کنید:",
         parse_mode="HTML",
         reply_markup=admin_menu_kb(),
     )
-    await cb.answer()
+
+
+@router.message(F.text == "⚙️ پنل ادمین")
+async def msg_admin_panel(message: Message, state: FSMContext):
+    await state.clear()
+    loading = await answer_loading(message)
+    await loading.edit_text(
+        "⚙️ <b>پنل ادمین</b>\n\nیک بخش را انتخاب کنید:",
+        parse_mode="HTML",
+        reply_markup=admin_menu_kb(),
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════

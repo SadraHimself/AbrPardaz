@@ -163,17 +163,16 @@ async def msg_stats_range_end(message: Message, state: FSMContext, session: Asyn
     )).scalar() or 0
 
     await message.answer(
-        f"<b>آمار: {label} 📊</b>\n"
-        f"━━━━━━━━━━━━━━━━━\n\n"
-        f"<b>کاربران 👥</b>\n"
+        f"📊 <b>آمار: {label}</b>\n\n"
+        f"👥 <b>کاربران</b>\n"
         f"کاربران کل: <b>{total_users}</b>\n"
-        f"کاربر جدید: <b>{new_users}</b> 🆕\n\n"
-        f"<b>سرور‌ها 🖥</b>\n"
+        f"کاربر جدید: <b>{new_users}</b>\n\n"
+        f"🖥 <b>سرور‌ها</b>\n"
         f"سرور جدید: <b>{new_servers}</b>\n"
-        f"سرور فعال: <b>{active_srv}</b> 🟢\n\n"
-        f"<b>مالی 💰</b>\n"
+        f"سرور فعال: <b>{active_srv}</b>\n\n"
+        f"💰 <b>مالی</b>\n"
         f"درآمد: <b>{revenue:,.0f} تومان</b>\n"
-        f"موجودی کیف‌پول‌ها: <b>{total_wallet:,.0f} تومان</b> 👛",
+        f"موجودی کیف‌پول‌ها: <b>{total_wallet:,.0f} تومان</b>",
         parse_mode="HTML",
         reply_markup=back_to_admin_kb("admin:stats"),
     )
@@ -207,19 +206,18 @@ async def _show_stats(cb: CallbackQuery, session: AsyncSession, start: datetime,
     )).scalar() or 0
 
     await cb.message.edit_text(
-        f"<b>آمار — {label} 📊</b>\n"
-        f"━━━━━━━━━━━━━━━━━\n\n"
-        f"<b>کاربران 👥</b>\n"
+        f"📊 <b>آمار — {label}</b>\n\n"
+        f"👥 <b>کاربران</b>\n"
         f"کاربران کل: <b>{total_users}</b>\n"
-        f"کاربر جدید: <b>{new_users}</b> 🆕\n\n"
-        f"<b>سرور‌ها 🖥</b>\n"
+        f"کاربر جدید: <b>{new_users}</b>\n\n"
+        f"🖥 <b>سرور‌ها</b>\n"
         f"سرور جدید: <b>{new_servers}</b>\n"
-        f"سرور فعال: <b>{active_srv}</b> 🟢\n"
-        f"سرور ساسپند: <b>{suspended_srv}</b> 🔴\n\n"
-        f"<b>مالی 💰</b>\n"
+        f"سرور فعال: <b>{active_srv}</b>\n"
+        f"سرور ساسپند: <b>{suspended_srv}</b>\n\n"
+        f"💰 <b>مالی</b>\n"
         f"درآمد: <b>{revenue:,.0f} تومان</b>\n"
-        f"موجودی کیف‌پول‌ها: <b>{total_wallet:,.0f} تومان</b> 👛\n"
-        f"کد تخفیف فعال: <b>{active_disc}</b> 🏷",
+        f"موجودی کیف‌پول‌ها: <b>{total_wallet:,.0f} تومان</b>\n"
+        f"کد تخفیف فعال: <b>{active_disc}</b>",
         parse_mode="HTML",
         reply_markup=stats_kb(),
     )

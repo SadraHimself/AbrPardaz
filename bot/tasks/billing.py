@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from bot.tasks.celery_app import app
 
@@ -150,5 +150,20 @@ def send_low_balance_alerts():
                 if srv_result.scalar_one_or_none():
                     from bot.tasks.server import notify_low_balance
                     notify_low_balance.delay(user.telegram_id, user.balance)
+
+    _run(_do())
+
+
+@app.task(name="bot.tasks.billing.cleanup_old_transactions")
+def cleanup_old_transactions():
+    """هر 72 ساعت تراکنش‌های قدیمی‌تر از 72 ساعت را پاک می‌کند."""
+    async def _do():
+        from bot.database.session import AsyncSessionFactory
+        from bot.database.models import Transaction
+        from sqlalchemy import delete
+
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=72)
+        async with AsyncSessionFactory() as session:
+            await session.execute(delete(Transaction).where(Transaction.created_at < cutoff))
 
     _run(_do())

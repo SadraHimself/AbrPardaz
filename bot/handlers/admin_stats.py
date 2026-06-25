@@ -615,6 +615,13 @@ async def msg_log_group_id(message: Message, state: FSMContext, session: AsyncSe
 
     await _set_setting(session, "log_group_id", str(group_id))
 
+    # Trigger an immediate backup now that the group is connected
+    try:
+        from bot.tasks.backup import run_database_backup
+        run_database_backup.apply_async(countdown=5)
+    except Exception:
+        pass
+
     if failed:
         fail_text = "\n".join(failed)
         await message.answer(
@@ -625,7 +632,8 @@ async def msg_log_group_id(message: Message, state: FSMContext, session: AsyncSe
     else:
         await message.answer(
             "✅ <b>اتصال برقرار شد!</b>\n\n"
-            "تمام تاپیک‌ها با موفقیت ساخته شدند.",
+            "تمام تاپیک‌ها با موفقیت ساخته شدند.\n"
+            "اولین بکاپ در چند ثانیه ارسال می‌شود.",
             parse_mode="HTML",
             reply_markup=back_to_admin_kb("admin:log_group"),
         )

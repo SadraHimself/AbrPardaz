@@ -14,10 +14,11 @@ from aiogram.types import (
     CallbackQuery, InlineKeyboardButton,
     InlineKeyboardMarkup, Message,
 )
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config import settings
-from bot.database.models import BotSettings, User
+from bot.database.models import BotSettings, Server, ServerStatus, User
 from bot.keyboards.main import main_menu_kb, request_phone_kb
 from bot.services.log_service import LogService
 
@@ -294,3 +295,39 @@ async def _send_welcome(msg: Message, user: User, session: AsyncSession,
         parse_mode="HTML",
         reply_markup=main_menu_kb(is_admin=_is_admin(user)),
     )
+
+
+# ── User profile ──────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "user_profile")
+async def cb_user_profile(cb: CallbackQuery, user: User, session: AsyncSession):
+    active_count = (await session.execute(
+        select(func.count(Server.id)).where(
+            Server.user_id == user.id,
+            Server.status != ServerStatus.DELETED,
+        )
+    )).scalar() or 0
+
+    hourly_limit = (user.extra_data or {}).get("max_hourly_servers", 5)
+
+    name = f"{user.first_name or ''} {user.last_name or ''}".strip() or "—"
+    phone = user.phone_number or "ثبت نشده"
+    kyc = "✅ تأیید شده" if user.is_kyc_verified else "❌ تأیید نشده"
+
+    text = (
+        f"👤 <b>{name}</b>\n\n"
+        f"🆔 آیدی عددی: <code>{user.telegram_id}</code>\n"
+        f"📱 شماره تلفن: <code>{phone}</code>\n"
+        f"🪪 احراز هویت: {kyc}\n\n"
+        f"🖥 سرور‌های فعال: <b>{active_count}</b>\n"
+        f"🔢 لیمیت سرور ساعتی: <b>{hourly_limit}</b>"
+    )
+
+    await cb.message.edit_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 بازگشت", callback_data="main_menu")]
+        ]),
+    )
+    await cb.answer()

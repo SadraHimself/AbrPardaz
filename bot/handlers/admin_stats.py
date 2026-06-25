@@ -8,7 +8,7 @@ from aiogram import F, Router
 from aiogram.filters import Filter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message, Sticker
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, Sticker
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,6 +50,10 @@ class FinanceFSM(StatesGroup):
 class StatsFSM(StatesGroup):
     range_start = State()
     range_end = State()
+
+
+class LogGroupFSM(StatesGroup):
+    waiting_group_id = State()
 
 
 # ── Helper ────────────────────────────────────────────────────────────────────
@@ -498,3 +502,132 @@ async def cb_price_adj_do(cb: CallbackQuery, state: FSMContext, session: AsyncSe
         reply_markup=back_to_admin_kb("admin:finance"),
     )
     await cb.answer()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  LOG GROUP (FORUM TOPICS)
+# ══════════════════════════════════════════════════════════════════════════════
+
+_LOG_TOPIC_NAMES = {
+    "log_topic_finance":  "💰 گزارش مالی",
+    "log_topic_new_user": "👤 کاربران جدید",
+    "log_topic_purchase": "🛒 گزارش خرید",
+    "log_topic_server":   "🖥 لاگ سرور",
+    "log_topic_backup":   "💾 بکاپ",
+}
+
+
+@router.callback_query(F.data == "admin:log_group")
+async def cb_admin_log_group(cb: CallbackQuery, session: AsyncSession):
+    group_id = await _get_setting(session, "log_group_id")
+    if group_id:
+        topics = []
+        for key, label in _LOG_TOPIC_NAMES.items():
+            tid = await _get_setting(session, key)
+            topics.append(f"  {label}: {'✅' if tid else '❌'}")
+        topics_text = "\n".join(topics)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ قطع اتصال", callback_data="admin:log_disconnect")],
+            [InlineKeyboardButton(text="🔙 بازگشت", callback_data="admin_panel")],
+        ])
+        await cb.message.edit_text(
+            f"📋 <b>تاپیک اطلاعات</b>\n\n"
+            f"✅ متصل به گروه: <code>{group_id}</code>\n\n"
+            f"<b>تاپیک‌ها:</b>\n{topics_text}",
+            parse_mode="HTML",
+            reply_markup=kb,
+        )
+    else:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔗 اتصال گروه", callback_data="admin:log_setup")],
+            [InlineKeyboardButton(text="🔙 بازگشت", callback_data="admin_panel")],
+        ])
+        await cb.message.edit_text(
+            "📋 <b>تاپیک اطلاعات</b>\n\n"
+            "هنوز گروهی متصل نشده.\n\n"
+            "<b>راهنما:</b>\n"
+            "۱. ربات را به یک سوپرگروه تاپیک‌دار اضافه کنید\n"
+            "۲. به ربات دسترسی <b>ادمین کامل</b> بدهید\n"
+            "۳. دکمه اتصال را بزنید و Chat ID گروه را وارد کنید",
+            parse_mode="HTML",
+            reply_markup=kb,
+        )
+    await cb.answer()
+
+
+@router.callback_query(F.data == "admin:log_setup")
+async def cb_admin_log_setup(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(LogGroupFSM.waiting_group_id)
+    await cb.message.edit_text(
+        "🔗 <b>اتصال گروه لاگ</b>\n\n"
+        "Chat ID گروه را وارد کنید:\n"
+        "<i>مثال: -1001234567890</i>",
+        parse_mode="HTML",
+        reply_markup=cancel_admin_kb(),
+    )
+    await cb.answer()
+
+
+@router.message(LogGroupFSM.waiting_group_id)
+async def msg_log_group_id(message: Message, state: FSMContext, session: AsyncSession):
+    raw = (message.text or "").strip()
+    try:
+        group_id = int(raw)
+    except ValueError:
+        await message.answer("❌ آیدی نامعتبر. یک عدد صحیح وارد کنید:")
+        return
+
+    await state.clear()
+
+    # Test connection
+    try:
+        await message.bot.send_message(
+            group_id,
+            "✅ ربات با موفقیت متصل شد! در حال ساخت تاپیک‌ها...",
+        )
+    except Exception as e:
+        await message.answer(
+            f"❌ اتصال به گروه ناموفق بود:\n<code>{e}</code>\n\n"
+            "مطمئن شوید ربات ادمین گروه است.",
+            parse_mode="HTML",
+        )
+        return
+
+    # Create forum topics
+    topics_to_create = list(_LOG_TOPIC_NAMES.items())
+    failed = []
+    for key, name in topics_to_create:
+        try:
+            ft = await message.bot.create_forum_topic(group_id, name)
+            await _set_setting(session, key, str(ft.message_thread_id))
+        except Exception as e:
+            failed.append(f"{name}: {e}")
+
+    await _set_setting(session, "log_group_id", str(group_id))
+
+    if failed:
+        fail_text = "\n".join(failed)
+        await message.answer(
+            f"⚠️ گروه متصل شد ولی برخی تاپیک‌ها ساخته نشدند:\n<code>{fail_text}</code>",
+            parse_mode="HTML",
+            reply_markup=back_to_admin_kb("admin:log_group"),
+        )
+    else:
+        await message.answer(
+            "✅ <b>اتصال برقرار شد!</b>\n\n"
+            "تمام تاپیک‌ها با موفقیت ساخته شدند.",
+            parse_mode="HTML",
+            reply_markup=back_to_admin_kb("admin:log_group"),
+        )
+
+
+@router.callback_query(F.data == "admin:log_disconnect")
+async def cb_admin_log_disconnect(cb: CallbackQuery, session: AsyncSession):
+    keys = ["log_group_id"] + list(_LOG_TOPIC_NAMES.keys())
+    for key in keys:
+        row = await session.get(BotSettings, key)
+        if row:
+            await session.delete(row)
+    await session.flush()
+    await cb.answer("✅ گروه قطع شد.")
+    await cb_admin_log_group(cb, session)

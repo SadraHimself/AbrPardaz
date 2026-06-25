@@ -316,9 +316,9 @@ async def _render_profile(target_msg, user: User, session: AsyncSession):
     kyc = "✅ تأیید شده" if user.is_kyc_verified else "❌ تأیید نشده"
     text = (
         f"👤 <b>{name}</b>\n\n"
-        f"🆔 آیدی عددی: <code>{user.telegram_id}</code>\n"
-        f"📱 شماره تلفن: <code>{phone}</code>\n"
-        f"🪪 احراز هویت: {kyc}\n\n"
+        f"آیدی عددی: <code>{user.telegram_id}</code>\n"
+        f"شماره تلفن: <code>{phone}</code>\n"
+        f"احراز هویت: {kyc}\n\n"
         f"🖥 سرور‌های فعال: <b>{active_count}</b>\n"
         f"🔢 لیمیت سرور ساعتی: <b>{hourly_limit}</b>"
     )

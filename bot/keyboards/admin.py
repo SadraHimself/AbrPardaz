@@ -15,6 +15,7 @@ def admin_menu_kb() -> InlineKeyboardMarkup:
     builder.button(text="📢 پیام همگانی", callback_data="admin:broadcast")
     builder.button(text="⚙️ تنظیمات ربات", callback_data="admin:settings")
     builder.button(text="💰 مالی", callback_data="admin:finance")
+    builder.button(text="📋 تاپیک اطلاعات", callback_data="admin:log_group")
     builder.button(text="🔙 بازگشت", callback_data="main_menu")
     builder.adjust(2)
     return builder.as_markup()

@@ -58,6 +58,11 @@ app.conf.update(
             "task": "bot.tasks.backup.run_database_backup",
             "schedule": crontab(minute=0, hour="*/4"),
         },
+        # هر ۷۲ ساعت تراکنش‌های قدیمی پاک می‌شوند
+        "cleanup-transactions": {
+            "task": "bot.tasks.billing.cleanup_old_transactions",
+            "schedule": crontab(hour=4, minute=0, day_of_week="*/3"),
+        },
     },
 )
 

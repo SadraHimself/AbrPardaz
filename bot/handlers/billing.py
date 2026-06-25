@@ -155,25 +155,28 @@ async def cb_tx_history(cb: CallbackQuery, user: User, session: AsyncSession):
         )
         return
 
+    def _danger(text: str) -> InlineKeyboardButton:
+        return InlineKeyboardButton(text=text, callback_data="tx_noop", **{"style": "danger"})
+
+    def _success(text: str) -> InlineKeyboardButton:
+        return InlineKeyboardButton(text=text, callback_data="tx_noop", **{"style": "success"})
+
     buttons = []
 
     for row in srv_rows:
         server = await session.get(Server, row.server_id)
         name = server.name if server else f"سرور #{row.server_id}"
-        btn = f"❌ −{row.total:,.0f} تومان — {name} ({row.cnt} بار)"
-        buttons.append([InlineKeyboardButton(text=btn, callback_data="tx_noop")])
+        buttons.append([_danger(f"−{row.total:,.0f} تومان — {name} ({row.cnt} بار)")])
 
     for tx in credits:
         desc = (tx.description or "واریز")[:30]
-        btn = f"✅ +{tx.amount:,.0f} تومان — {desc}"
-        buttons.append([InlineKeyboardButton(text=btn, callback_data="tx_noop")])
+        buttons.append([_success(f"+{tx.amount:,.0f} تومان — {desc}")])
 
     for tx in standalone:
         desc = (tx.description or "برداشت")[:30]
-        btn = f"❌ −{tx.amount:,.0f} تومان — {desc}"
-        buttons.append([InlineKeyboardButton(text=btn, callback_data="tx_noop")])
+        buttons.append([_danger(f"−{tx.amount:,.0f} تومان — {desc}")])
 
-    buttons.append([InlineKeyboardButton(text="📄 دریافت فاکتور XML", callback_data="invoice_xml")])
+    buttons.append([InlineKeyboardButton(text="📄 دریافت فاکتور XML", callback_data="invoice_xml", **{"style": "primary"})])
     buttons.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data="wallet")])
 
     await cb.message.edit_text(

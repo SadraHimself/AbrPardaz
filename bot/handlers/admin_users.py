@@ -8,7 +8,7 @@ from aiogram import F, Router
 from aiogram.filters import Filter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,6 +44,7 @@ class UserManageFSM(StatesGroup):
     disc_percent = State()
     disc_expires = State()
     disc_max_uses = State()
+    server_limit = State()
 
 
 # ── User list ─────────────────────────────────────────────────────────────────
@@ -137,6 +138,7 @@ async def _show_user_detail(msg, session: AsyncSession, user: User, edit: bool =
     status_text = "🚫 بن شده" if is_banned else ("✅ فعال" if user.status == UserStatus.ACTIVE else "⏸ معلق")
     kyc_text = "✅ تأیید شده" if user.is_kyc_verified else "❌ تأیید نشده"
     phone_text = user.phone_number or "—"
+    hourly_limit = (user.extra_data or {}).get("max_hourly_servers", 5)
 
     text = (
         f"👤 <b>کاربر #{user.id}</b>\n\n"
@@ -150,9 +152,10 @@ async def _show_user_detail(msg, session: AsyncSession, user: User, edit: bool =
         f"💰 موجودی: <b>{user.balance:,.0f} تومان</b>\n"
         f"🖥 سرور فعال: {srv_count}\n"
         f"📜 تراکنش: {tx_count}\n"
+        f"🔢 لیمیت سرور ساعتی: {hourly_limit}\n"
         f"📅 عضو از: {user.created_at.strftime('%Y/%m/%d')}"
     )
-    kb = user_detail_kb(user.id, is_banned, user.is_kyc_verified)
+    kb = user_detail_kb(user.id, is_banned, user.is_kyc_verified, hourly_limit)
     if edit:
         await msg.edit_text(text, parse_mode="HTML", reply_markup=kb)
     else:
@@ -284,6 +287,7 @@ async def cb_user_verify(cb: CallbackQuery, session: AsyncSession):
         await cb.bot.send_message(
             user.telegram_id,
             "✅ احراز هویت شما توسط مدیریت تأیید شد.",
+            reply_markup=ReplyKeyboardRemove(),
         )
     except Exception:
         pass
@@ -516,4 +520,46 @@ async def msg_disc_max_uses(message: Message, state: FSMContext, session: AsyncS
         f"✅ کد تخفیف اختصاصی <code>{disc.code}</code> با {disc.discount_percent:.0f}% برای کاربر ساخته شد.",
         parse_mode="HTML",
         reply_markup=back_to_admin_kb(f"admin:user:{data['disc_user_id']}"),
+    )
+
+
+# ── Hourly server limit ────────────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("admin:user_limit:"))
+async def cb_user_limit_start(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
+    user_id = int(cb.data.split(":")[2])
+    user = await session.get(User, user_id)
+    if not user:
+        await cb.answer("کاربر یافت نشد.", show_alert=True)
+        return
+    current = (user.extra_data or {}).get("max_hourly_servers", 5)
+    await state.update_data(target_user_id=user_id)
+    await state.set_state(UserManageFSM.server_limit)
+    await cb.message.edit_text(
+        f"🔢 <b>لیمیت سرور ساعتی</b>\n\n"
+        f"لیمیت فعلی: <b>{current}</b>\n\n"
+        f"مقدار جدید را وارد کنید (۵ تا ۵۰):",
+        parse_mode="HTML",
+        reply_markup=cancel_admin_kb(),
+    )
+    await cb.answer()
+
+
+@router.message(UserManageFSM.server_limit, F.text.regexp(r"^\d+$"))
+async def msg_user_server_limit(message: Message, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    await state.clear()
+    value = max(5, min(50, int(message.text)))
+    user = await session.get(User, data["target_user_id"])
+    if not user:
+        await message.answer("کاربر یافت نشد.")
+        return
+    extra = dict(user.extra_data or {})
+    extra["max_hourly_servers"] = value
+    user.extra_data = extra
+    await session.flush()
+    await message.answer(
+        f"✅ لیمیت سرور ساعتی کاربر به <b>{value}</b> تغییر یافت.",
+        parse_mode="HTML",
+        reply_markup=back_to_admin_kb(f"admin:user:{user.id}"),
     )

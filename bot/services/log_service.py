@@ -10,11 +10,12 @@ from bot.database.models import BotSettings, Server, User
 
 
 _TOPIC_KEYS = {
-    "finance":  "log_topic_finance",
-    "new_user": "log_topic_new_user",
-    "purchase": "log_topic_purchase",
-    "server":   "log_topic_server",
-    "backup":   "log_topic_backup",
+    "finance":     "log_topic_finance",
+    "new_user":    "log_topic_new_user",
+    "purchase":    "log_topic_purchase",
+    "server":      "log_topic_server",
+    "backup":      "log_topic_backup",
+    "moderation":  "log_topic_moderation",
 }
 
 
@@ -86,6 +87,25 @@ class LogService:
             f"🖥 سرور: {server.name}\n"
             f"⬅️ IP قدیم: <code>{old_ip or '—'}</code>\n"
             f"➡️ IP جدید: <code>{new_ip}</code>",
+        )
+
+    async def log_ban_user(self, target: User, reason: str, days: int, admin_id: int) -> None:
+        duration = f"{days} روز" if days > 0 else "دائمی"
+        await self._send(
+            "moderation",
+            f"🚫 <b>بن کاربر</b>\n\n"
+            f"{self._user_line(target)}\n"
+            f"📝 علت: {reason}\n"
+            f"⏱ مدت: {duration}\n"
+            f"👮 توسط ادمین: <code>{admin_id}</code>",
+        )
+
+    async def log_unban_user(self, target: User, admin_id: int) -> None:
+        await self._send(
+            "moderation",
+            f"✅ <b>آنبن کاربر</b>\n\n"
+            f"{self._user_line(target)}\n"
+            f"👮 توسط ادمین: <code>{admin_id}</code>",
         )
 
     async def log_server_action(self, user: User, server: Server, action: str) -> None:

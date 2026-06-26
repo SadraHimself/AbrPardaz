@@ -13,7 +13,7 @@ from bot.config import settings
 from bot.database.base import Base
 from bot.database.session import engine
 from bot.handlers import setup_routers
-from bot.middlewares import AuthMiddleware, DbSessionMiddleware
+from bot.middlewares import AuthMiddleware, DbSessionMiddleware, RateLimitMiddleware
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,9 +47,10 @@ async def main() -> None:
     storage = RedisStorage.from_url(settings.REDIS_URL)
     dp = Dispatcher(storage=storage)
 
-    # Middlewares (order matters: DB first, then Auth)
+    # Middlewares (order: DB → Auth → RateLimit)
     dp.update.outer_middleware(DbSessionMiddleware())
     dp.update.outer_middleware(AuthMiddleware())
+    dp.update.outer_middleware(RateLimitMiddleware())
 
     setup_routers(dp)
 

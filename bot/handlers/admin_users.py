@@ -204,6 +204,7 @@ async def cb_user_ban(cb: CallbackQuery, user: User, session: AsyncSession, stat
             await cb.bot.send_message(target.telegram_id, "✅ حساب شما از حالت بن خارج شد.")
         except Exception:
             pass
+        await LogService(cb.bot, session).log_unban_user(target, cb.from_user.id)
         await _show_user_detail(cb.message, session, target, edit=True)
     else:
         # Self-ban check
@@ -271,6 +272,7 @@ async def msg_ban_reason(message: Message, state: FSMContext, session: AsyncSess
         await message.bot.send_message(target.telegram_id, notify)
     except Exception:
         pass
+    await LogService(message.bot, session).log_ban_user(target, reason, days, message.from_user.id)
 
 
 # ── Credit / Debit ────────────────────────────────────────────────────────────

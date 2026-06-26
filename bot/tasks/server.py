@@ -120,7 +120,11 @@ def notify_user_traffic_exceeded(user_id: int, server_id: int):
 @app.task(name="bot.tasks.server.notify_hourly_billing")
 def notify_hourly_billing(user_id: int, server_id: int, amount: float, new_balance: float):
     async def _do():
-        from bot.database.session import AsyncSessionFactory
+        from bot.database.session import engine, AsyncSessionFactory
+        try:
+            await engine.dispose(close=False)
+        except Exception:
+            pass
         from bot.database.models import User, Server
         from aiogram import Bot
         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton

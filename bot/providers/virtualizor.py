@@ -246,14 +246,13 @@ class VirtualizorProvider(BaseProvider):
         has_plan = plan_id_str.isdigit() and int(plan_id_str) > 0
         if has_plan:
             payload["plid"] = int(plan_id_str)
-            # With a plan assigned, Virtualizor allocates IPs from the plan's own pool.
-            # Manually pre-selecting an IP (ips[0]) bypasses that restriction, so we
-            # use num_ips=1 and let Virtualizor pick.
-            payload["num_ips"] = 1
+            # Do NOT set num_ips here — plans carry their own IP pool settings.
+            # Setting num_ips=1 causes Virtualizor to look for IPs assigned to the
+            # specific serid (localhost), which fails when the pool is "All Servers".
+            # Virtualizor will assign an IP from whatever pool is configured for the plan.
         elif ip_to_assign:
             payload["ips[0]"] = ip_to_assign
-        else:
-            payload["num_ips"] = 1
+        # No plan + no specific IP: let Virtualizor handle assignment automatically
 
         if st_uuid:
             payload["space[0][size]"] = disk_gb

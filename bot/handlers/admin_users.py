@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from aiogram import F, Router
 from aiogram.filters import Filter
@@ -45,6 +45,10 @@ class UserManageFSM(StatesGroup):
     disc_expires = State()
     disc_max_uses = State()
     server_limit = State()
+    ban_days = State()
+    ban_reason = State()
+    edit_national_id = State()
+    edit_phone = State()
 
 
 # ── User list ─────────────────────────────────────────────────────────────────
@@ -135,7 +139,22 @@ async def _show_user_detail(msg, session: AsyncSession, user: User, edit: bool =
     )).scalar() or 0
 
     is_banned = user.status == UserStatus.BANNED
-    status_text = "🚫 بن شده" if is_banned else ("✅ فعال" if user.status == UserStatus.ACTIVE else "⏸ معلق")
+    if is_banned:
+        extra_u = user.extra_data or {}
+        ban_reason = extra_u.get("ban_reason", "—")
+        ban_until_raw = extra_u.get("ban_until")
+        if ban_until_raw:
+            try:
+                bt = datetime.fromisoformat(ban_until_raw).strftime("%Y/%m/%d %H:%M")
+                status_text = f"🚫 بن تا {bt}\n(علت: {ban_reason})"
+            except (ValueError, TypeError):
+                status_text = f"🚫 بن دائمی\n(علت: {ban_reason})"
+        else:
+            status_text = f"🚫 بن دائمی\n(علت: {ban_reason})"
+    elif user.status == UserStatus.ACTIVE:
+        status_text = "✅ فعال"
+    else:
+        status_text = "⏸ معلق"
     kyc_text = "✅ تأیید شده" if user.is_kyc_verified else "❌ تأیید نشده"
     phone_text = user.phone_number or "—"
     hourly_limit = (user.extra_data or {}).get("max_hourly_servers", 5)
@@ -165,30 +184,93 @@ async def _show_user_detail(msg, session: AsyncSession, user: User, edit: bool =
 # ── Ban / Unban ───────────────────────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("admin:user_ban:"))
-async def cb_user_ban(cb: CallbackQuery, session: AsyncSession):
+async def cb_user_ban(cb: CallbackQuery, user: User, session: AsyncSession, state: FSMContext):
     user_id = int(cb.data.split(":")[2])
-    user = await session.get(User, user_id)
-    if not user:
+    target = await session.get(User, user_id)
+    if not target:
         await cb.answer("کاربر یافت نشد.", show_alert=True)
         return
-    if user.status == UserStatus.BANNED:
-        user.status = UserStatus.ACTIVE
+
+    if target.status == UserStatus.BANNED:
+        # Unban immediately
+        target.status = UserStatus.ACTIVE
+        extra = dict(target.extra_data or {})
+        extra.pop("ban_until", None)
+        extra.pop("ban_reason", None)
+        target.extra_data = extra
         await session.flush()
         await cb.answer("✅ کاربر آنبن شد.")
         try:
-            await cb.bot.send_message(user.telegram_id, "✅ حساب شما از حالت بن خارج شد.")
+            await cb.bot.send_message(target.telegram_id, "✅ حساب شما از حالت بن خارج شد.")
         except Exception:
             pass
+        await _show_user_detail(cb.message, session, target, edit=True)
     else:
-        user.status = UserStatus.BANNED
-        await session.flush()
-        await cb.answer("🚫 کاربر بن شد.")
-        try:
-            await cb.bot.send_message(user.telegram_id, "🚫 حساب شما توسط مدیریت بن شده است.")
-        except Exception:
-            pass
-    # Reload detail
-    await _show_user_detail(cb.message, session, user, edit=True)
+        # Self-ban check
+        if target.telegram_id == cb.from_user.id:
+            await cb.answer("شما نمی‌توانید خودتان را بن کنید!", show_alert=True)
+            return
+        # Start ban FSM — ask duration
+        await state.update_data(target_user_id=user_id)
+        await state.set_state(UserManageFSM.ban_days)
+        await cb.message.edit_text(
+            f"🚫 <b>بن کاربر #{user_id}</b>\n\n"
+            "چند روز بن شود؟\n"
+            "<i>(عدد وارد کنید — ۰ = بن دائمی)</i>",
+            parse_mode="HTML",
+            reply_markup=cancel_admin_kb(),
+        )
+        await cb.answer()
+
+
+@router.message(UserManageFSM.ban_days, F.text.regexp(r"^\d+$"))
+async def msg_ban_days(message: Message, state: FSMContext):
+    await state.update_data(ban_days=int(message.text))
+    await state.set_state(UserManageFSM.ban_reason)
+    await message.answer("علت بن را بنویسید:", reply_markup=cancel_admin_kb())
+
+
+@router.message(UserManageFSM.ban_reason)
+async def msg_ban_reason(message: Message, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    await state.clear()
+
+    reason = message.text.strip()
+    days = data.get("ban_days", 0)
+    user_id = data["target_user_id"]
+
+    target = await session.get(User, user_id)
+    if not target:
+        await message.answer("کاربر یافت نشد.")
+        return
+
+    target.status = UserStatus.BANNED
+    extra = dict(target.extra_data or {})
+    extra["ban_reason"] = reason
+
+    if days > 0:
+        ban_until = datetime.now(timezone.utc) + timedelta(days=days)
+        extra["ban_until"] = ban_until.isoformat()
+        duration_text = f"{days} روز"
+    else:
+        extra.pop("ban_until", None)
+        duration_text = "دائمی"
+
+    target.extra_data = extra
+    await session.flush()
+
+    await message.answer(
+        f"🚫 کاربر برای <b>{duration_text}</b> بن شد.\nعلت: {reason}",
+        parse_mode="HTML",
+        reply_markup=back_to_admin_kb(f"admin:user:{user_id}"),
+    )
+    try:
+        notify = f"🚫 حساب شما توسط مدیریت بن شده است.\nعلت: {reason}"
+        if days > 0:
+            notify += f"\nمدت: {days} روز"
+        await message.bot.send_message(target.telegram_id, notify)
+    except Exception:
+        pass
 
 
 # ── Credit / Debit ────────────────────────────────────────────────────────────
@@ -270,7 +352,7 @@ async def msg_user_debit(message: Message, state: FSMContext, session: AsyncSess
         )
 
 
-# ── Manual KYC ────────────────────────────────────────────────────────────────
+# ── KYC management ────────────────────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("admin:user_verify:"))
 async def cb_user_verify(cb: CallbackQuery, session: AsyncSession):
@@ -292,6 +374,89 @@ async def cb_user_verify(cb: CallbackQuery, session: AsyncSession):
     except Exception:
         pass
     await _show_user_detail(cb.message, session, user, edit=True)
+
+
+@router.callback_query(F.data.startswith("admin:user_unverify:"))
+async def cb_user_unverify(cb: CallbackQuery, session: AsyncSession):
+    user_id = int(cb.data.split(":")[2])
+    user = await session.get(User, user_id)
+    if not user:
+        await cb.answer("کاربر یافت نشد.", show_alert=True)
+        return
+    user.is_kyc_verified = False
+    user.national_id = None
+    await session.flush()
+    await cb.answer("🗑 احراز هویت حذف شد.")
+    try:
+        await cb.bot.send_message(
+            user.telegram_id,
+            "⚠️ احراز هویت شما توسط مدیریت حذف شد. لطفاً مجدداً احراز هویت کنید.",
+        )
+    except Exception:
+        pass
+    await _show_user_detail(cb.message, session, user, edit=True)
+
+
+@router.callback_query(F.data.startswith("admin:user_edit_nid:"))
+async def cb_user_edit_nid_start(cb: CallbackQuery, state: FSMContext):
+    user_id = int(cb.data.split(":")[2])
+    await state.update_data(target_user_id=user_id)
+    await state.set_state(UserManageFSM.edit_national_id)
+    await cb.message.edit_text(
+        "✏️ <b>ویرایش کد ملی</b>\n\nکد ملی جدید (۱۰ رقم) را وارد کنید:",
+        parse_mode="HTML",
+        reply_markup=cancel_admin_kb(),
+    )
+    await cb.answer()
+
+
+@router.message(UserManageFSM.edit_national_id, F.text.regexp(r"^\d{10}$"))
+async def msg_user_edit_nid(message: Message, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    await state.clear()
+    user = await session.get(User, data["target_user_id"])
+    if not user:
+        await message.answer("کاربر یافت نشد.")
+        return
+    user.national_id = message.text.strip()
+    await session.flush()
+    await message.answer(
+        f"✅ کد ملی به <code>{user.national_id}</code> تغییر یافت.",
+        parse_mode="HTML",
+        reply_markup=back_to_admin_kb(f"admin:user:{user.id}"),
+    )
+
+
+@router.callback_query(F.data.startswith("admin:user_edit_phone:"))
+async def cb_user_edit_phone_start(cb: CallbackQuery, state: FSMContext):
+    user_id = int(cb.data.split(":")[2])
+    await state.update_data(target_user_id=user_id)
+    await state.set_state(UserManageFSM.edit_phone)
+    await cb.message.edit_text(
+        "✏️ <b>ویرایش شماره موبایل</b>\n\nشماره موبایل جدید را وارد کنید:",
+        parse_mode="HTML",
+        reply_markup=cancel_admin_kb(),
+    )
+    await cb.answer()
+
+
+@router.message(UserManageFSM.edit_phone)
+async def msg_user_edit_phone(message: Message, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    await state.clear()
+    phone = message.text.strip()
+    user = await session.get(User, data["target_user_id"])
+    if not user:
+        await message.answer("کاربر یافت نشد.")
+        return
+    user.phone_number = phone
+    user.is_phone_verified = True
+    await session.flush()
+    await message.answer(
+        f"✅ شماره موبایل به <code>{phone}</code> تغییر یافت.",
+        parse_mode="HTML",
+        reply_markup=back_to_admin_kb(f"admin:user:{user.id}"),
+    )
 
 
 # ── Send message ──────────────────────────────────────────────────────────────

@@ -1,14 +1,14 @@
 """Billing service: charge, credit, suspend logic."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, and_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.database.models import (
-    Server, ServerStatus, SuspendReason,
+    BillingType, Server, ServerStatus, SuspendReason,
     Transaction, TransactionType, User,
 )
 
@@ -123,8 +123,16 @@ class BillingService:
     # ── Queries ───────────────────────────────────────────────────────────────
 
     async def get_active_servers_for_billing(self) -> list[Server]:
+        one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
         result = await self.session.execute(
-            select(Server).where(Server.status == ServerStatus.ACTIVE)
+            select(Server).where(
+                Server.status == ServerStatus.ACTIVE,
+                Server.billing_type == BillingType.HOURLY,
+                or_(
+                    and_(Server.last_billed_at.is_(None), Server.created_at <= one_hour_ago),
+                    Server.last_billed_at <= one_hour_ago,
+                ),
+            )
         )
         return list(result.scalars().all())
 

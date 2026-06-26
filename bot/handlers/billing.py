@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import io
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from aiogram import F, Router
 from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.database.models import Server, Transaction, TransactionType, User
@@ -17,22 +17,22 @@ from bot.utils.loading import answer_loading, edit_loading
 router = Router(name="billing")
 
 _CLEANUP_HOURS = 72
+_PAGE_SIZE = 8
+_TEHRAN = timezone(timedelta(hours=3, minutes=30))
 
+
+# ── XML invoice builder ──────────────────────────────────────────────────────
 
 def _build_xml(user: User, txs: list) -> bytes:
     root = ET.Element("invoice")
     root.set("generated", datetime.utcnow().isoformat())
-
     u_el = ET.SubElement(root, "user")
     ET.SubElement(u_el, "name").text = f"{user.first_name or ''} {user.last_name or ''}".strip() or "—"
     ET.SubElement(u_el, "telegram_id").text = str(user.telegram_id)
     ET.SubElement(u_el, "phone").text = user.phone_number or "—"
-
     txs_el = ET.SubElement(root, "transactions")
     txs_el.set("count", str(len(txs)))
-
-    total_debit = 0.0
-    total_credit = 0.0
+    total_debit = total_credit = 0.0
     for tx in txs:
         t = ET.SubElement(txs_el, "transaction")
         t.set("id", str(tx.id))
@@ -40,21 +40,20 @@ def _build_xml(user: User, txs: list) -> bytes:
         ET.SubElement(t, "amount").text = str(tx.amount)
         ET.SubElement(t, "description").text = tx.description or ""
         ET.SubElement(t, "timestamp").text = tx.created_at.isoformat() if tx.created_at else ""
-        if tx.type.value in ("debit",):
+        if tx.type.value == "debit":
             total_debit += tx.amount
         else:
             total_credit += tx.amount
-
     summary = ET.SubElement(root, "summary")
     ET.SubElement(summary, "total_debit").text = str(total_debit)
     ET.SubElement(summary, "total_credit").text = str(total_credit)
     ET.SubElement(summary, "current_balance").text = str(user.balance)
-
     buf = io.BytesIO()
-    tree = ET.ElementTree(root)
-    tree.write(buf, encoding="utf-8", xml_declaration=True)
+    ET.ElementTree(root).write(buf, encoding="utf-8", xml_declaration=True)
     return buf.getvalue()
 
+
+# ── Wallet ───────────────────────────────────────────────────────────────────
 
 async def _render_wallet(target_msg, user: User):
     await target_msg.edit_text(
@@ -103,93 +102,221 @@ async def cb_do_charge(cb: CallbackQuery, user: User):
     await cb.answer()
 
 
-@router.callback_query(F.data == "tx_history")
-async def cb_tx_history(cb: CallbackQuery, user: User, session: AsyncSession):
-    await edit_loading(cb.message)
-    await cb.answer()
+# ── Transaction history ──────────────────────────────────────────────────────
 
-    # Credit/refund transactions — individual
-    credit_result = await session.execute(
+def _tz(d: datetime | None) -> datetime:
+    """Ensure datetime is timezone-aware (UTC)."""
+    if d is None:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+
+async def _get_tx_items(user_id: int, session: AsyncSession) -> list[dict]:
+    """
+    Build a sorted list of display items:
+    - Grouped hourly billing per server (description starts with "ساعتی — ")
+    - All other transactions individually
+    """
+    result = await session.execute(
         select(Transaction)
-        .where(Transaction.user_id == user.id, Transaction.type != TransactionType.DEBIT)
+        .where(Transaction.user_id == user_id)
         .order_by(Transaction.created_at.desc())
-        .limit(10)
+        .limit(500)
     )
-    credits = list(credit_result.scalars().all())
+    all_txs = list(result.scalars().all())
 
-    # Debit transactions grouped by server_id (hourly + purchase per server)
-    srv_result = await session.execute(
-        select(
-            Transaction.server_id,
-            func.sum(Transaction.amount).label("total"),
-            func.count(Transaction.id).label("cnt"),
-            func.max(Transaction.created_at).label("last_date"),
+    hourly: dict[int, dict] = {}
+    others: list[dict] = []
+
+    for tx in all_txs:
+        is_hourly = (
+            tx.type == TransactionType.DEBIT
+            and tx.server_id is not None
+            and (tx.description or "").startswith("ساعتی — ")
         )
-        .where(
-            Transaction.user_id == user.id,
-            Transaction.type == TransactionType.DEBIT,
-            Transaction.server_id.isnot(None),
+        if is_hourly:
+            g = hourly.setdefault(tx.server_id, {
+                "kind": "srv",
+                "server_id": tx.server_id,
+                "total": 0.0,
+                "count": 0,
+                "last_date": tx.created_at,
+                "rate": tx.amount,
+            })
+            g["total"] += tx.amount
+            g["count"] += 1
+            if _tz(tx.created_at) > _tz(g["last_date"]):
+                g["last_date"] = tx.created_at
+        else:
+            others.append({
+                "kind": "tx",
+                "tx_id": tx.id,
+                "amount": tx.amount,
+                "type": tx.type,
+                "description": tx.description or "",
+                "server_id": tx.server_id,
+                "created_at": tx.created_at,
+            })
+
+    items: list[dict] = list(hourly.values()) + others
+    items.sort(key=lambda x: _tz(x.get("last_date") or x.get("created_at")), reverse=True)
+    return items
+
+
+def _item_btn(item: dict, page: int) -> InlineKeyboardButton:
+    if item["kind"] == "srv":
+        return InlineKeyboardButton(
+            text=f"برداشت — {item['total']:,.0f} تومان",
+            callback_data=f"tx_srv:{item['server_id']}:{page}",
+            **{"style": "danger"},
         )
-        .group_by(Transaction.server_id)
-        .order_by(func.max(Transaction.created_at).desc())
+    is_debit = item["type"] == TransactionType.DEBIT
+    return InlineKeyboardButton(
+        text=f"{'برداشت' if is_debit else 'واریز'} — {item['amount']:,.0f} تومان",
+        callback_data=f"tx_item:{item['tx_id']}:{page}",
+        **{"style": "danger" if is_debit else "success"},
     )
-    srv_rows = srv_result.all()
 
-    # Standalone debits without server_id (manual deductions, etc.)
-    standalone_result = await session.execute(
-        select(Transaction)
-        .where(
-            Transaction.user_id == user.id,
-            Transaction.type == TransactionType.DEBIT,
-            Transaction.server_id.is_(None),
-        )
-        .order_by(Transaction.created_at.desc())
-        .limit(5)
-    )
-    standalone = list(standalone_result.scalars().all())
 
-    if not credits and not srv_rows and not standalone:
-        await cb.message.edit_text(
-            "📜 هیچ تراکنشی وجود ندارد.",
-            reply_markup=back_kb("wallet"),
-        )
+async def _render_tx_page(target_msg, user: User, session: AsyncSession, page: int = 0):
+    items = await _get_tx_items(user.id, session)
+
+    if not items:
+        await target_msg.edit_text("📜 هیچ تراکنشی وجود ندارد.", reply_markup=back_kb("wallet"))
         return
 
-    def _danger(text: str) -> InlineKeyboardButton:
-        return InlineKeyboardButton(text=text, callback_data="tx_noop", **{"style": "danger"})
+    total_pages = max(1, (len(items) + _PAGE_SIZE - 1) // _PAGE_SIZE)
+    page = max(0, min(page, total_pages - 1))
+    page_items = items[page * _PAGE_SIZE: (page + 1) * _PAGE_SIZE]
 
-    def _success(text: str) -> InlineKeyboardButton:
-        return InlineKeyboardButton(text=text, callback_data="tx_noop", **{"style": "success"})
+    buttons = [[_item_btn(item, page)] for item in page_items]
 
-    buttons = []
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="← قبلی", callback_data=f"tx_page:{page - 1}"))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton(text="بعدی →", callback_data=f"tx_page:{page + 1}"))
+    if nav:
+        buttons.append(nav)
 
-    for row in srv_rows:
-        server = await session.get(Server, row.server_id)
-        name = server.name if server else f"سرور #{row.server_id}"
-        buttons.append([_danger(f"−{row.total:,.0f} تومان — {name} ({row.cnt} بار)")])
-
-    for tx in credits:
-        desc = (tx.description or "واریز")[:30]
-        buttons.append([_success(f"+{tx.amount:,.0f} تومان — {desc}")])
-
-    for tx in standalone:
-        desc = (tx.description or "برداشت")[:30]
-        buttons.append([_danger(f"−{tx.amount:,.0f} تومان — {desc}")])
-
-    buttons.append([InlineKeyboardButton(text="📄 دریافت فاکتور XML", callback_data="invoice_xml", **{"style": "primary"})])
+    buttons.append([
+        InlineKeyboardButton(text="📄 فاکتور XML", callback_data="invoice_xml", **{"style": "primary"}),
+    ])
     buttons.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data="wallet")])
 
-    await cb.message.edit_text(
-        f"📜 <b>تاریخچه تراکنش‌ها</b>\n\n"
-        f"<i>⚠️ تراکنش‌ها هر {_CLEANUP_HOURS} ساعت به‌طور خودکار پاک می‌شوند.</i>",
+    await target_msg.edit_text(
+        f"📜 <b>تاریخچه تراکنش‌ها</b>  {page + 1}/{total_pages}\n\n"
+        f"<i>⚠️ تراکنش‌ها هر {_CLEANUP_HOURS} ساعت پاک می‌شوند.</i>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
     )
 
 
-@router.callback_query(F.data == "tx_noop")
-async def cb_tx_noop(cb: CallbackQuery):
+@router.callback_query(F.data == "tx_history")
+async def cb_tx_history(cb: CallbackQuery, user: User, session: AsyncSession):
+    await edit_loading(cb.message)
     await cb.answer()
+    await _render_tx_page(cb.message, user, session, page=0)
+
+
+@router.callback_query(F.data.startswith("tx_page:"))
+async def cb_tx_page(cb: CallbackQuery, user: User, session: AsyncSession):
+    page = int(cb.data.split(":")[1])
+    await edit_loading(cb.message)
+    await cb.answer()
+    await _render_tx_page(cb.message, user, session, page)
+
+
+@router.callback_query(F.data.startswith("tx_srv:"))
+async def cb_tx_srv_detail(cb: CallbackQuery, user: User, session: AsyncSession):
+    parts = cb.data.split(":")
+    server_id = int(parts[1])
+    back_page = int(parts[2]) if len(parts) > 2 else 0
+    await cb.answer()
+
+    result = await session.execute(
+        select(Transaction).where(
+            Transaction.user_id == user.id,
+            Transaction.server_id == server_id,
+            Transaction.type == TransactionType.DEBIT,
+        ).order_by(Transaction.created_at.asc())
+    )
+    hourly_txs = [
+        t for t in result.scalars().all()
+        if (t.description or "").startswith("ساعتی — ")
+    ]
+
+    server = await session.get(Server, server_id)
+    srv_name = server.name if server else f"سرور #{server_id}"
+    srv_ip = (server.ip_address or "—") if server else "—"
+
+    if not hourly_txs:
+        back_row = [[InlineKeyboardButton(text="🔙 بازگشت", callback_data=f"tx_page:{back_page}")]]
+        await cb.message.edit_text(
+            "تراکنشی یافت نشد.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=back_row),
+        )
+        return
+
+    rate = hourly_txs[0].amount
+    count = len(hourly_txs)
+    total = sum(t.amount for t in hourly_txs)
+
+    back_row = [[InlineKeyboardButton(text="🔙 بازگشت", callback_data=f"tx_page:{back_page}")]]
+    await cb.message.edit_text(
+        f"💸 <b>جزئیات برداشت</b>\n\n"
+        f"🖥 سرور: <b>{srv_name}</b>\n"
+        f"🌐 آی‌پی: <code>{srv_ip}</code>\n"
+        f"💳 نوع: ساعتی\n"
+        f"⏱ مدت: {count} ساعت × {rate:,.0f} تومان\n"
+        f"💰 مجموع: <b>{total:,.0f} تومان</b>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=back_row),
+    )
+
+
+@router.callback_query(F.data.startswith("tx_item:"))
+async def cb_tx_item_detail(cb: CallbackQuery, user: User, session: AsyncSession):
+    parts = cb.data.split(":")
+    tx_id = int(parts[1])
+    back_page = int(parts[2]) if len(parts) > 2 else 0
+    await cb.answer()
+
+    tx = await session.get(Transaction, tx_id)
+    if not tx or tx.user_id != user.id:
+        await cb.answer("تراکنش یافت نشد.", show_alert=True)
+        return
+
+    server = await session.get(Server, tx.server_id) if tx.server_id else None
+
+    if tx.type == TransactionType.DEBIT:
+        icon, label = "💸", "برداشت وجه"
+    elif tx.type == TransactionType.REFUND:
+        icon, label = "💚", "برگشت وجه"
+    else:
+        icon, label = "💰", "واریز"
+
+    date_str = ""
+    if tx.created_at:
+        d = _tz(tx.created_at).astimezone(_TEHRAN)
+        date_str = d.strftime("%Y/%m/%d — %H:%M")
+
+    lines = [f"{icon} <b>{label}</b>", "", f"💰 مبلغ: <b>{tx.amount:,.0f} تومان</b>"]
+    if tx.description:
+        lines.append(f"📝 شرح: {tx.description}")
+    if server:
+        lines.append(f"🖥 سرور: {server.name}")
+        if server.ip_address:
+            lines.append(f"🌐 آی‌پی: <code>{server.ip_address}</code>")
+    if date_str:
+        lines.append(f"📅 {date_str}")
+
+    back_row = [[InlineKeyboardButton(text="🔙 بازگشت", callback_data=f"tx_page:{back_page}")]]
+    await cb.message.edit_text(
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=back_row),
+    )
 
 
 @router.callback_query(F.data == "invoice_xml")

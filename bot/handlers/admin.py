@@ -101,7 +101,7 @@ async def cb_admin_panel(cb: CallbackQuery, state: FSMContext):
     )
 
 
-@router.message(F.text == "⚙️ پنل ادمین")
+@router.message(F.text == "🛡 پنل ادمین")
 async def msg_admin_panel(message: Message, state: FSMContext):
     await state.clear()
     loading = await answer_loading(message)

@@ -144,8 +144,12 @@ def user_detail_kb(user_id: int, is_banned: bool, is_kyc: bool, hourly_limit: in
     builder.button(text="📜 تاریخچه پرداخت", callback_data=f"admin:user_payments:{user_id}")
     builder.button(text="🖥 سرویس‌های فعال", callback_data=f"admin:user_servers:{user_id}")
     builder.button(text=f"🔢 لیمیت ساعتی: {hourly_limit}", callback_data=f"admin:user_limit:{user_id}")
-    if not is_kyc:
+    if is_kyc:
+        builder.button(text="🗑 حذف احراز هویت", callback_data=f"admin:user_unverify:{user_id}")
+    else:
         builder.button(text="✅ احراز هویت دستی", callback_data=f"admin:user_verify:{user_id}")
+    builder.button(text="✏️ کد ملی", callback_data=f"admin:user_edit_nid:{user_id}")
+    builder.button(text="✏️ شماره موبایل", callback_data=f"admin:user_edit_phone:{user_id}")
     builder.button(text="📨 ارسال پیام", callback_data=f"admin:user_msg:{user_id}")
     builder.button(text="🔙 بازگشت", callback_data="admin:users")
     builder.adjust(2)

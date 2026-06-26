@@ -25,7 +25,7 @@ from bot.services.billing import BillingService
 from bot.services.log_service import LogService
 from bot.services.notification import NotificationService
 from bot.services.server import ServerService
-from bot.utils.loading import answer_loading, edit_loading
+from bot.utils.loading import P, answer_loading, edit_loading
 
 router = Router(name="servers")
 
@@ -59,7 +59,7 @@ async def _show_server_list(target_msg, user: User, session: AsyncSession):
         )
     else:
         await target_msg.edit_text(
-            f"🖥 <b>سرور‌های شما</b> ({len(servers)} سرور):",
+            f"{P['server']} <b>سرور‌های شما</b> ({len(servers)} سرور):",
             parse_mode="HTML",
             reply_markup=server_list_kb(servers),
         )
@@ -128,7 +128,7 @@ async def cb_server_detail(cb: CallbackQuery, user: User, session: AsyncSession)
 
     hostname = server.hostname or server.name
     await cb.message.edit_text(
-        f"💻 <b>نام سرور:</b> {server.name}\n"
+        f"{P['server']} <b>نام سرور:</b> {server.name}\n"
         f"🖥 هاست: <code>{hostname}</code>\n\n"
         f"🌐 آیپی: <code>{server.ip_address or 'در حال تخصیص'}</code>\n"
         f"📍 موقعیت: {server.location or 'نامشخص'}\n"

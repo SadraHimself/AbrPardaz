@@ -1,10 +1,27 @@
-"""Loading indicator utilities."""
+"""Loading indicator and premium emoji utilities."""
 from __future__ import annotations
 
 from aiogram.types import Message
 
 _LOADING_TEXT = '<tg-emoji emoji-id="5386367538735104399">⌛️</tg-emoji>'
 _LOADING_FALLBACK = "⌛️"
+
+
+def pe(emoji_id: str, fallback: str) -> str:
+    """Wrap an emoji in a Telegram premium custom emoji tag (HTML parse mode only)."""
+    return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
+
+
+# Premium emoji map — use in message text with parse_mode="HTML"
+# Button text (ReplyKeyboard) does not support HTML; buttons keep plain Unicode.
+P = {
+    "server":  pe("5262701463049609410", "💻"),
+    "buy":     pe("5265226165085282693", "🛒"),
+    "wallet":  pe("6102735781258861018", "💰"),
+    "profile": pe("5974048815789903111", "👤"),
+    "support": pe("5368476981312631953", "📞"),
+    "admin":   pe("5895483165182529286", "🛡"),
+}
 
 
 async def answer_loading(message: Message) -> Message:

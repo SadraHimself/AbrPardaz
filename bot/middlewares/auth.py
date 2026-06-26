@@ -31,7 +31,14 @@ class AuthMiddleware(BaseMiddleware):
                 if event.message.chat.type == "private":
                     tg_user = event.message.from_user
             elif event.callback_query:
-                tg_user = event.callback_query.from_user
+                # Ignore callbacks from non-private chats (e.g. group inline buttons)
+                cb_msg = event.callback_query.message
+                if cb_msg is None or cb_msg.chat.type == "private":
+                    tg_user = event.callback_query.from_user
+
+        # Never register bots as users
+        if tg_user and tg_user.is_bot:
+            tg_user = None
 
         if tg_user:
             result = await session.execute(

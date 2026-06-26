@@ -47,26 +47,21 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
 
     if server.status == ServerStatus.ACTIVE:
-        extra = server.extra_data or {}
-        is_running = str(extra.get("machine_status", "1")) == "1"
-        if is_running:
-            rows.append([
-                _btn("🔄 ریبوت", f"srv_action:{sid}:restart_confirm", "primary"),
-                _btn("⏹ خاموش", f"srv_action:{sid}:stop", "danger"),
-            ])
-        else:
-            rows.append([
-                _btn("▶️ روشن کردن", f"srv_action:{sid}:start", "success"),
-            ])
+        # Always show both power buttons — start (green) and stop (red)
         rows.append([
-            _btn("🔁 ریبیلد", f"srv_action:{sid}:rebuild_menu", "primary"),
-            _btn("🌐 تغییر IP", f"srv_changeip:{sid}"),
+            _btn("▶️ روشن", f"srv_action:{sid}:start", "success"),
+            _btn("⏹ خاموش", f"srv_action:{sid}:stop", "danger"),
         ])
         rows.append([
+            _btn("🔄 ریبوت", f"srv_action:{sid}:restart_confirm", "primary"),
+            _btn("🔁 ریبیلد", f"srv_action:{sid}:rebuild_menu", "primary"),
+        ])
+        rows.append([
+            _btn("🌐 تغییر IP", f"srv_changeip:{sid}"),
             _btn("🔑 تغییر رمز", f"srv_chpass:{sid}"),
         ])
         if is_hourly:
-            rows[-1].append(_btn("🗑 حذف سرور", f"srv_action:{sid}:delete_confirm", "danger"))
+            rows.append([_btn("🗑 حذف سرور", f"srv_action:{sid}:delete_confirm", "danger")])
 
     elif server.status == ServerStatus.SUSPENDED:
         rows.append([
@@ -80,9 +75,7 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
             _btn("▶️ روشن کردن", f"srv_action:{sid}:start", "success"),
             _btn("🔁 ریبیلد", f"srv_action:{sid}:rebuild_menu", "primary"),
         ])
-        rows.append([
-            _btn("🔄 بررسی وضعیت", f"srv_refresh:{sid}"),
-        ])
+        rows.append([_btn("🔄 بررسی وضعیت", f"srv_refresh:{sid}")])
         if is_hourly:
             rows[-1].append(_btn("🗑 حذف سرور", f"srv_action:{sid}:delete_confirm", "danger"))
 

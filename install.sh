@@ -139,6 +139,16 @@ if command -v apt-get &>/dev/null; then
     apt-get install -y git python3 python3-pip python3-venv curl \
         postgresql postgresql-contrib redis-server build-essential libpq-dev \
         || die "Failed to install system packages."
+
+    # pydantic-core requires Python <= 3.13. Install 3.12 if 3.11/3.12 not present.
+    if ! command -v python3.12 &>/dev/null && ! command -v python3.11 &>/dev/null; then
+        info "Python 3.12/3.11 not found — installing from deadsnakes PPA..."
+        apt-get install -y software-properties-common 2>/dev/null || true
+        add-apt-repository -y ppa:deadsnakes/ppa 2>/dev/null || true
+        apt-get update -y 2>/dev/null || true
+        apt-get install -y python3.12 python3.12-venv python3.12-dev \
+            || warn "Could not install Python 3.12. Install may fail on Python 3.14+."
+    fi
 elif command -v yum &>/dev/null; then
     yum install -y git python3 python3-pip curl postgresql postgresql-server redis \
         || die "Failed to install system packages."

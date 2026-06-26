@@ -248,7 +248,7 @@ async def cb_support(cb: CallbackQuery, session: AsyncSession):
     await _render_support(cb.message, session)
 
 
-@router.message(F.text == "🆘 پشتیبانی")
+@router.message(F.text == "پشتیبانی 📞")
 async def msg_support(message: Message, session: AsyncSession):
     loading = await answer_loading(message)
     await _render_support(loading, session)

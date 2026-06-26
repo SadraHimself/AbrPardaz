@@ -21,7 +21,7 @@ from bot.config import settings
 from bot.database.models import BotSettings, Server, ServerStatus, User
 from bot.keyboards.main import back_kb, main_menu_kb, request_phone_kb
 from bot.services.log_service import LogService
-from bot.utils.loading import answer_loading, edit_loading
+from bot.utils.loading import P, answer_loading, edit_loading
 
 router = Router(name="start")
 
@@ -248,7 +248,7 @@ async def cb_support(cb: CallbackQuery, session: AsyncSession):
     await _render_support(cb.message, session)
 
 
-@router.message(F.text == "پشتیبانی 📞")
+@router.message(F.text == "📞 پشتیبانی")
 async def msg_support(message: Message, session: AsyncSession):
     loading = await answer_loading(message)
     await _render_support(loading, session)
@@ -274,7 +274,7 @@ async def _build_welcome_text(user: User, session: AsyncSession) -> str:
         f"به ربات <b>Abr Pardaz</b> خوش آمدید.\n"
         f"با این ربات می‌توانید سرور مجازی ایران و خارج را به صورت ساعتی یا ماهیانه تهیه و مدیریت کنید.\n\n"
         f"📱 وضعیت احراز هویت: {verify_status}\n"
-        f"💰 موجودی: {user.balance:,.0f} تومان\n\n"
+        f"{P['wallet']} موجودی: {user.balance:,.0f} تومان\n\n"
         "از منوی زیر استفاده کنید:"
     )
 
@@ -315,11 +315,11 @@ async def _render_profile(target_msg, user: User, session: AsyncSession):
     phone = user.phone_number or "ثبت نشده"
     kyc = "✅ تأیید شده" if user.is_kyc_verified else "❌ تأیید نشده"
     text = (
-        f"👤 <b>{name}</b>\n\n"
+        f"{P['profile']} <b>{name}</b>\n\n"
         f"آیدی عددی: <code>{user.telegram_id}</code>\n"
         f"شماره تلفن: <code>{phone}</code>\n"
         f"احراز هویت: {kyc}\n\n"
-        f"🖥 سرور‌های فعال: <b>{active_count}</b>\n"
+        f"{P['server']} سرور‌های فعال: <b>{active_count}</b>\n"
         f"🔢 لیمیت سرور ساعتی: <b>{hourly_limit}</b>"
     )
     await target_msg.edit_text(

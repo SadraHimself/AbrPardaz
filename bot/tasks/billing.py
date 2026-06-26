@@ -21,20 +21,22 @@ def run_hourly_billing(self):
       3. اگر سرور قبلاً ساسپند بود و موجودی داشت → رفع ساسپند.
     """
     async def _do():
-        from bot.database.session import AsyncSessionFactory
+        from bot.database.session import engine, AsyncSessionFactory
         from bot.database.models import Server, ServerStatus, SuspendReason, User
         from bot.services.billing import BillingService
         from bot.providers import get_provider
         from sqlalchemy import select
+        # Reset pool — each asyncio.run() creates a new event loop; old pool connections are invalid
+        try:
+            await engine.dispose(close=False)
+        except Exception:
+            pass
 
         async with AsyncSessionFactory() as session:
             billing = BillingService(session)
             servers = await billing.get_active_servers_for_billing()
 
             for server in servers:
-                if server.billing_type.value != "hourly":
-                    continue
-
                 success = await billing.charge_hourly(server)
                 if success:
                     user_obj = await session.get(User, server.user_id)
@@ -76,11 +78,15 @@ def run_monthly_expiry_check(self):
     اگر شده → شارژ ماهیانه را کسر می‌کند یا ساسپند می‌شود.
     """
     async def _do():
-        from bot.database.session import AsyncSessionFactory
+        from bot.database.session import engine, AsyncSessionFactory
         from bot.database.models import Server, ServerStatus, BillingType, SuspendReason
         from bot.services.billing import BillingService
         from bot.providers import get_provider
         from sqlalchemy import select
+        try:
+            await engine.dispose(close=False)
+        except Exception:
+            pass
 
         now = datetime.now(timezone.utc)
 

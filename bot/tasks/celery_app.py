@@ -18,10 +18,10 @@ app.conf.update(
     enable_utc=True,
     # Periodic tasks
     beat_schedule={
-        # هر ساعت بیلینگ ساعتی اجرا می‌شود
+        # هر ۵ دقیقه چک می‌کند کدام سرورها به ۱ ساعت رسیده‌اند
         "hourly-billing": {
             "task": "bot.tasks.billing.run_hourly_billing",
-            "schedule": crontab(minute=0),
+            "schedule": crontab(minute="*/5"),
         },
         # هر شب نیمه‌شب بیلینگ ماهیانه بررسی می‌شود
         "monthly-expiry-check": {

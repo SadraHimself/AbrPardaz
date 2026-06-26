@@ -12,15 +12,15 @@ from bot.config import settings
 
 def main_menu_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
-    builder.button(text="🖥 سرور‌های من")
+    builder.button(text="💻 سرور‌های من")
     builder.button(text="🛒 خرید سرور")
     builder.button(text="💰 کیف پول")
     builder.button(text="👤 مشخصات کاربری")
-    builder.button(text="🆘 پشتیبانی")
+    builder.button(text="پشتیبانی 📞")
     if settings.WEBAPP_URL:
         builder.button(text="🌐 پنل مدیریت", web_app=WebAppInfo(url=settings.WEBAPP_URL))
     if is_admin:
-        builder.button(text="⚙️ پنل ادمین")
+        builder.button(text="🛡 پنل ادمین")
     builder.adjust(2)
     return builder.as_markup(resize_keyboard=True)
 

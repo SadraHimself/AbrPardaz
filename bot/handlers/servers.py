@@ -75,7 +75,7 @@ async def cb_my_servers(cb: CallbackQuery, user: User, session: AsyncSession):
     await _show_server_list(cb.message, user, session)
 
 
-@router.message(F.text == "🖥 سرور‌های من")
+@router.message(F.text == "💻 سرور‌های من")
 async def msg_my_servers(message: Message, user: User, session: AsyncSession):
     if not user.is_phone_verified:
         loading = await answer_loading(message)
@@ -126,8 +126,10 @@ async def cb_server_detail(cb: CallbackQuery, user: User, session: AsyncSession)
     price = server.price_hourly if server.billing_type == BillingType.HOURLY else server.price_monthly
     price_unit = "تومان/ساعت" if server.billing_type == BillingType.HOURLY else "تومان/ماه"
 
+    hostname = server.hostname or server.name
     await cb.message.edit_text(
-        f"🖥 <b>{server.name}</b>\n\n"
+        f"💻 <b>نام سرور:</b> {server.name}\n"
+        f"🖥 هاست: <code>{hostname}</code>\n\n"
         f"🌐 آیپی: <code>{server.ip_address or 'در حال تخصیص'}</code>\n"
         f"📍 موقعیت: {server.location or 'نامشخص'}\n"
         f"⚡ وضعیت: {status_label}\n\n"

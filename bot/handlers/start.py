@@ -274,7 +274,7 @@ async def _build_welcome_text(user: User, session: AsyncSession) -> str:
         f"به ربات <b>Abr Pardaz</b> خوش آمدید.\n"
         f"با این ربات می‌توانید سرور مجازی ایران و خارج را به صورت ساعتی یا ماهیانه تهیه و مدیریت کنید.\n\n"
         f"📱 وضعیت احراز هویت: {verify_status}\n"
-        f"{P['wallet']} موجودی: {user.balance:,.0f} تومان\n\n"
+        f"💰 موجودی: {user.balance:,.0f} تومان\n\n"
         "از منوی زیر استفاده کنید:"
     )
 
@@ -315,11 +315,11 @@ async def _render_profile(target_msg, user: User, session: AsyncSession):
     phone = user.phone_number or "ثبت نشده"
     kyc = "✅ تأیید شده" if user.is_kyc_verified else "❌ تأیید نشده"
     text = (
-        f"{P['profile']} <b>{name}</b>\n\n"
+        f"👤 <b>{name}</b>\n\n"
         f"آیدی عددی: <code>{user.telegram_id}</code>\n"
         f"شماره تلفن: <code>{phone}</code>\n"
         f"احراز هویت: {kyc}\n\n"
-        f"{P['server']} سرور‌های فعال: <b>{active_count}</b>\n"
+        f"🖥 سرور‌های فعال: <b>{active_count}</b>\n"
         f"🔢 لیمیت سرور ساعتی: <b>{hourly_limit}</b>"
     )
     await target_msg.edit_text(

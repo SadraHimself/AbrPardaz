@@ -1,16 +1,17 @@
-"""Crypto wallet top-up via NOWPayments invoice flow."""
+"""Crypto wallet top-up via NOWPayments Direct Payment flow."""
 from __future__ import annotations
 
+import io
 import time
+from datetime import datetime, timezone
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config import settings
 from bot.database.models import BotSettings, CryptoPayment, User
 from bot.services.nowpayments import NOWPaymentsClient, NOWPaymentsError
-from bot.utils.loading import edit_loading
 
 router = Router(name="crypto_payment")
 
@@ -32,6 +33,17 @@ def _amount_kb() -> InlineKeyboardMarkup:
     ]
     rows.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data="wallet")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _make_qr_bytes(data: str) -> bytes:
+    import qrcode  # lazy import — only used when payment is created
+    qr = qrcode.QRCode(version=1, box_size=10, border=4)
+    qr.add_data(data)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 @router.callback_query(F.data == "crypto_pay")
@@ -63,58 +75,91 @@ async def cb_np_amount(cb: CallbackQuery, user: User, session: AsyncSession):
     ipn_url = await _get_setting(session, "np_webhook_url") or ""
     if not ipn_url:
         await cb.answer(
-            "❌ آدرس webhook تنظیم نشده.\nادمین باید np_webhook_url را ست کند.",
+            "❌ آدرس webhook تنظیم نشده.\nادمین باید np_webhook_url را از پنل ادمین ست کند.",
             show_alert=True,
         )
         return
 
-    await edit_loading(cb.message)
-    await cb.answer()
+    await cb.answer("⏳ در حال ساخت آدرس پرداخت...")
 
     order_id = f"np_{user.telegram_id}_{int(time.time())}"
-    bot_username = (await cb.bot.get_me()).username
-
     client = NOWPaymentsClient()
     try:
-        invoice = await client.create_invoice(
+        payment = await client.create_payment(
             amount_usd=float(amount_usd),
             order_id=order_id,
             description=f"شارژ کیف پول {amount_usd}$ — کاربر {user.telegram_id}",
             ipn_callback_url=ipn_url,
-            success_url=f"https://t.me/{bot_username}",
         )
     except NOWPaymentsError as exc:
         await cb.message.edit_text(
-            f"❌ خطا در ساخت فاکتور:\n<code>{exc}</code>",
+            f"❌ خطا در ساخت درخواست پرداخت:\n<code>{exc}</code>",
             parse_mode="HTML",
             reply_markup=_BACK_KB,
         )
         return
 
+    pay_address = payment.get("pay_address", "")
+    pay_amount = float(payment.get("pay_amount") or 0)
+    pay_currency = (payment.get("pay_currency") or settings.NP_OUTCOME_CURRENCY).upper()
+    payment_id = str(payment.get("payment_id", ""))
+    expiry_str = payment.get("expiration_estimate_date", "")
+
+    expiry_dt = None
+    expiry_text = "⏳ آدرس ۶۰ دقیقه اعتبار دارد."
+    if expiry_str:
+        try:
+            expiry_dt = datetime.fromisoformat(expiry_str.replace("Z", "+00:00"))
+            remaining = int((expiry_dt - datetime.now(timezone.utc)).total_seconds() / 60)
+            expiry_text = f"⏳ آدرس تا <b>{remaining} دقیقه</b> دیگر معتبر است."
+        except Exception:
+            pass
+
     cp = CryptoPayment(
         user_id=user.id,
         chat_id=user.telegram_id,
         order_id=order_id,
-        invoice_id=str(invoice.get("id", "")),
+        payment_id=payment_id,
         amount_usd=float(amount_usd),
         amount_irt=amount_irt,
+        pay_address=pay_address,
+        pay_amount=pay_amount,
+        pay_currency=pay_currency.lower(),
+        expires_at=expiry_dt,
         status="waiting",
         activated=False,
     )
     session.add(cp)
     await session.flush()
 
-    invoice_url = invoice.get("invoice_url", "")
-    await cb.message.edit_text(
-        f"💎 <b>فاکتور کریپتو ساخته شد</b>\n\n"
+    caption = (
+        f"💎 <b>آدرس واریز کریپتو</b>\n\n"
         f"💵 مبلغ: <b>{amount_usd}$</b>\n"
         f"💰 معادل: <b>{amount_irt:,.0f} تومان</b>\n\n"
-        f"⏳ لینک پرداخت ۶۰ دقیقه اعتبار دارد.\n"
-        f"پس از پرداخت، موجودی کیف پول به‌صورت خودکار شارژ می‌شود.\n\n"
-        f"🔑 شناسه: <code>{order_id}</code>",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💳 پرداخت با کریپتو", url=invoice_url)],
-            [InlineKeyboardButton(text="🔙 بازگشت", callback_data="wallet")],
-        ]),
+        f"⛓ شبکه: <b>TRON (TRC20)</b>\n\n"
+        f"💸 مبلغ دقیق:\n"
+        f"<code>{pay_amount} {pay_currency}</code>\n\n"
+        f"📬 آدرس واریز:\n"
+        f"<code>{pay_address}</code>\n\n"
+        f"{expiry_text}\n\n"
+        f"⚠️ <b>دقیقاً همین مبلغ را ارسال کنید.</b>\n"
+        f"پس از تأیید شبکه، موجودی به‌صورت خودکار شارژ می‌شود."
     )
+
+    back_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 بازگشت به کیف پول", callback_data="wallet")]
+    ])
+
+    try:
+        qr_bytes = _make_qr_bytes(pay_address)
+        photo = BufferedInputFile(qr_bytes, filename="qr.png")
+        await cb.message.answer_photo(
+            photo=photo,
+            caption=caption,
+            parse_mode="HTML",
+            reply_markup=back_kb,
+        )
+        await cb.message.delete()
+    except Exception:
+        # fallback: show as text if QR generation fails
+        await cb.message.edit_text(caption, parse_mode="HTML", reply_markup=back_kb)

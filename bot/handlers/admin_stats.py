@@ -676,3 +676,54 @@ async def cb_admin_log_disconnect(cb: CallbackQuery, session: AsyncSession):
             await session.delete(row)
     await session.flush()
     await cb_admin_log_group(cb, session)  # handles cb.answer() internally
+
+
+# ── NOWPayments connection test ───────────────────────────────────────────────
+
+@router.callback_query(F.data == "admin:np_test")
+async def cb_admin_np_test(cb: CallbackQuery):
+    from bot.config import settings as _s
+    from bot.services.nowpayments import NOWPaymentsClient, NOWPaymentsError
+    from bot.keyboards.admin import back_to_admin_kb
+
+    await cb.answer("⏳ در حال تست...")
+
+    if not _s.NP_API_KEY:
+        await cb.message.edit_text(
+            "❌ <b>NP_API_KEY</b> در .env تنظیم نشده.",
+            parse_mode="HTML",
+            reply_markup=back_to_admin_kb(),
+        )
+        return
+
+    client = NOWPaymentsClient()
+    lines = ["💎 <b>تست اتصال NOWPayments</b>\n"]
+
+    try:
+        status = await client.check_status()
+        api_ok = status.get("message") == "OK"
+        lines.append(f"🔌 وضعیت API: {'✅ آنلاین' if api_ok else '❌ مشکل'}")
+    except NOWPaymentsError as e:
+        lines.append(f"🔌 وضعیت API: ❌ خطا — {e}")
+        await cb.message.edit_text("\n".join(lines), parse_mode="HTML", reply_markup=back_to_admin_kb())
+        return
+
+    try:
+        coins = await client.get_merchant_coins()
+        outcome = _s.NP_OUTCOME_CURRENCY.lower()
+        trx_active = any(c.lower() == outcome for c in coins)
+        lines.append(f"🪙 ارز خروجی ({outcome.upper()}): {'✅ فعال' if trx_active else '❌ غیرفعال'}")
+        active_list = ", ".join(coins[:10]) + ("…" if len(coins) > 10 else "")
+        lines.append(f"📋 ارزهای فعال: {active_list}")
+    except NOWPaymentsError as e:
+        lines.append(f"🪙 دریافت لیست ارزها: ❌ خطا — {e}")
+
+    lines.append(f"\n🔑 API Key: <code>***{_s.NP_API_KEY[-6:]}</code>")
+    lines.append(f"💱 قیمت‌گذاری: {_s.NP_PRICE_CURRENCY.upper()}")
+    lines.append(f"🎯 پرداخت به: {_s.NP_OUTCOME_CURRENCY.upper()}")
+
+    await cb.message.edit_text(
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=back_to_admin_kb(),
+    )

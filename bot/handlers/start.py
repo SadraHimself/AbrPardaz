@@ -344,3 +344,33 @@ async def cb_user_profile(cb: CallbackQuery, user: User, session: AsyncSession):
 async def msg_user_profile(message: Message, user: User, session: AsyncSession):
     loading = await answer_loading(message)
     await _render_profile(loading, user, session)
+
+
+async def _render_rules(target_msg, session: AsyncSession):
+    rules_text = await _get_setting(
+        session, "rules_text",
+        default=(
+            "📃 <b>قوانین استفاده از سرویس</b>\n\n"
+            "• استفاده از سرویس برای فعالیت‌های غیرقانونی ممنوع است.\n"
+            "• ربات هر زمان می‌تواند سرویس را مطابق قوانین تعلیق کند.\n"
+            "• با استفاده از سرویس، موافقت خود را با این قوانین اعلام می‌کنید."
+        ),
+    )
+    await target_msg.edit_text(
+        rules_text,
+        parse_mode="HTML",
+        reply_markup=back_kb("main_menu"),
+    )
+
+
+@router.callback_query(F.data == "rules")
+async def cb_rules(cb: CallbackQuery, session: AsyncSession):
+    await edit_loading(cb.message)
+    await cb.answer()
+    await _render_rules(cb.message, session)
+
+
+@router.message(F.text == "قوانین")
+async def msg_rules(message: Message, session: AsyncSession):
+    loading = await answer_loading(message)
+    await _render_rules(loading, session)

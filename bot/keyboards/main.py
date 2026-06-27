@@ -21,12 +21,12 @@ _ICON = {
 
 
 def main_menu_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
-    row1 = [KeyboardButton(text="تهیه سرور", icon_custom_emoji_id=_ICON["buy"])]
+    row1 = [KeyboardButton(text="تهیه سرور", icon_custom_emoji_id=_ICON["buy"], **{"style": "primary"})]
     row2 = [
         KeyboardButton(text="سرور‌های من", icon_custom_emoji_id=_ICON["server"]),
         KeyboardButton(text="مشخصات کاربری", icon_custom_emoji_id=_ICON["profile"]),
     ]
-    row3 = [KeyboardButton(text="پشتیبانی", icon_custom_emoji_id=_ICON["support"])]
+    row3 = [KeyboardButton(text="پشتیبانی", icon_custom_emoji_id=_ICON["support"], **{"style": "success"})]
     if settings.WEBAPP_URL:
         row3.append(KeyboardButton(text="🌐 پنل مدیریت", web_app=WebAppInfo(url=settings.WEBAPP_URL)))
     rows = [row1, row2, row3]

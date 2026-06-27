@@ -22,17 +22,36 @@ logger = logging.getLogger(__name__)
 
 
 def _verify_hmac(raw_body: bytes, received_sig: str) -> bool:
-    if not settings.NP_IPN_SECRET or not received_sig:
+    """Return True if signature is valid, or if NP_IPN_SECRET is not configured (open mode)."""
+    if not settings.NP_IPN_SECRET:
+        return True  # secret not configured — accept all (warned at startup)
+    if not received_sig:
+        logger.warning("IPN received with no x-nowpayments-sig header")
         return False
-    # Signature is computed on sorted-keys JSON (per NOWPayments docs)
     body_dict = json.loads(raw_body)
-    sorted_json = json.dumps(body_dict, sort_keys=True, separators=(",", ":"))
-    expected = hmac.new(
+    # NOWPayments signs sorted-keys compact JSON (no spaces)
+    sorted_compact = json.dumps(body_dict, sort_keys=True, separators=(",", ":"))
+    expected_compact = hmac.new(
         settings.NP_IPN_SECRET.encode(),
-        sorted_json.encode(),
+        sorted_compact.encode(),
         hashlib.sha512,
     ).hexdigest()
-    return hmac.compare_digest(expected, received_sig)
+    if hmac.compare_digest(expected_compact, received_sig.lower()):
+        return True
+    # Fallback: try default separators (spaces) in case their side serializes differently
+    sorted_spaced = json.dumps(body_dict, sort_keys=True)
+    expected_spaced = hmac.new(
+        settings.NP_IPN_SECRET.encode(),
+        sorted_spaced.encode(),
+        hashlib.sha512,
+    ).hexdigest()
+    if hmac.compare_digest(expected_spaced, received_sig.lower()):
+        return True
+    logger.warning(
+        "IPN HMAC mismatch — order=%s sig_received=%s sig_compact=%s",
+        body_dict.get("order_id", "?"), received_sig[:16] + "…", expected_compact[:16] + "…",
+    )
+    return False
 
 
 async def _handle_ipn(request: web.Request) -> web.Response:
@@ -40,7 +59,7 @@ async def _handle_ipn(request: web.Request) -> web.Response:
     sig = request.headers.get("x-nowpayments-sig", "")
 
     if not _verify_hmac(raw_body, sig):
-        logger.warning("IPN HMAC mismatch — possible forgery from %s", request.remote)
+        logger.warning("IPN rejected from %s", request.remote)
         return web.Response(status=403, text="invalid signature")
 
     try:

@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     MIN_BALANCE_THRESHOLD: float = 0.0
     TRAFFIC_GRACE_SECONDS: int = 300
 
+    # ── NOWPayments ───────────────────────────────────────────────────────────────
+    NP_API_KEY: str = ""
+    NP_IPN_SECRET: str = ""
+    NP_PRICE_CURRENCY: str = "usd"
+    NP_OUTCOME_CURRENCY: str = "trx"
+    NP_WEBHOOK_PORT: int = 8081
+
     @property
     def admin_ids(self) -> List[int]:
         return json.loads(self.ADMIN_IDS)

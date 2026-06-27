@@ -393,7 +393,7 @@ async def _show_buy_categories(target_msg, user: User, state: FSMContext, sessio
     builder = InlineKeyboardBuilder()
     for cat in categories:
         builder.button(text=cat, callback_data=f"buycat:{cat}")
-    builder.button(text="⭐️ بازگشت به منو", callback_data="cancel")
+    builder.button(text="بازگشت به منو", callback_data="cancel", **{"icon_custom_emoji_id": "5933748020960038714"})
     builder.adjust(1)
     await target_msg.edit_text(
         '<tg-emoji emoji-id="5926980668624998964">🟡</tg-emoji> دسته‌بندی مورد نظر را انتخاب کنید:',
@@ -434,7 +434,7 @@ async def cb_select_category(cb: CallbackQuery, user: User, state: FSMContext, s
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🪪 احراز هویت", callback_data="start_kyc")],
-                [InlineKeyboardButton(text="⭐️ بازگشت به منو", callback_data="cancel")],
+                [InlineKeyboardButton(text="بازگشت به منو", callback_data="cancel", **{"icon_custom_emoji_id": "5933748020960038714"})],
             ]),
         )
         await state.clear()
@@ -497,7 +497,7 @@ async def cb_select_plan(cb: CallbackQuery, state: FSMContext, session: AsyncSes
                     InlineKeyboardButton(text=f"⏲️ ساعتی — {plan.price_hourly:,.0f} تومان", callback_data="buybilling:hourly"),
                     InlineKeyboardButton(text=f"⏲️ ماهانه — {plan.price_monthly:,.0f} تومان", callback_data="buybilling:monthly"),
                 ],
-                [InlineKeyboardButton(text="🚫 انصراف", callback_data="cancel")],
+                [InlineKeyboardButton(text="🚫 انصراف", callback_data="cancel", **{"style": "danger"})],
             ]),
         )
     elif has_hourly:
@@ -529,7 +529,7 @@ async def _ask_hostname(cb: CallbackQuery, state: FSMContext):
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✏️ خودکار", callback_data="buyhost:auto")],
-            [InlineKeyboardButton(text="⭐️ بازگشت به منو", callback_data="cancel")],
+            [InlineKeyboardButton(text="بازگشت به منو", callback_data="cancel", **{"icon_custom_emoji_id": "5933748020960038714"})],
         ]),
     )
 
@@ -593,7 +593,7 @@ async def _ask_os(cb: CallbackQuery, state: FSMContext, session: AsyncSession, u
     builder = InlineKeyboardBuilder()
     for os_item in os_list[:20]:
         builder.button(text=os_item["name"], callback_data=f"buyos:{os_item['id']}")
-    builder.button(text="⭐️ بازگشت به منو", callback_data="cancel")
+    builder.button(text="بازگشت به منو", callback_data="cancel", **{"icon_custom_emoji_id": "5933748020960038714"})
     builder.adjust(2)
 
     await cb.message.edit_text(
@@ -637,7 +637,7 @@ async def _ask_os_message(message: Message, state: FSMContext, session: AsyncSes
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="⏭ بدون کد تخفیف", callback_data="buydisc:skip")],
-                    [InlineKeyboardButton(text="❌ انصراف", callback_data="cancel")],
+                    [InlineKeyboardButton(text="❌ انصراف", callback_data="cancel", **{"style": "danger"})],
                 ]),
             )
         return
@@ -648,7 +648,7 @@ async def _ask_os_message(message: Message, state: FSMContext, session: AsyncSes
     builder = InlineKeyboardBuilder()
     for os_item in os_list[:20]:
         builder.button(text=os_item["name"], callback_data=f"buyos:{os_item['id']}")
-    builder.button(text="⭐️ بازگشت به منو", callback_data="cancel")
+    builder.button(text="بازگشت به منو", callback_data="cancel", **{"icon_custom_emoji_id": "5933748020960038714"})
     builder.adjust(2)
 
     await message.answer(
@@ -682,7 +682,7 @@ async def _ask_discount(cb: CallbackQuery, state: FSMContext):
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="⏭ بدون کد تخفیف", callback_data="buydisc:skip")],
-            [InlineKeyboardButton(text="❌ انصراف", callback_data="cancel")],
+            [InlineKeyboardButton(text="❌ انصراف", callback_data="cancel", **{"style": "danger"})],
         ]),
     )
 
@@ -773,8 +773,8 @@ async def _show_confirm(msg, state: FSMContext, session, from_message=False, use
     await state.set_state(BuyServerStates.confirming)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✔️", callback_data="confirm_purchase"),
-            InlineKeyboardButton(text="❌", callback_data="cancel"),
+            InlineKeyboardButton(text="✔️", callback_data="confirm_purchase", **{"style": "success"}),
+            InlineKeyboardButton(text="❌", callback_data="cancel", **{"style": "danger"}),
         ]
     ])
 

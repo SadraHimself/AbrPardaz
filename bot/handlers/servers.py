@@ -457,8 +457,8 @@ async def cb_select_category(cb: CallbackQuery, user: User, state: FSMContext, s
     builder = InlineKeyboardBuilder()
     for plan in plans:
         ram_display = plan.ram // 1024 if plan.ram >= 1024 else plan.ram
-        label = f"✅ {plan.display_name or plan.name} | {ram_display}GB/{plan.cpu}C/{plan.disk}G"
-        builder.button(text=label, callback_data=f"buyplan:{plan.id}")
+        label = f"{plan.display_name or plan.name} | {ram_display}GB/{plan.cpu}C/{plan.disk}G"
+        builder.button(text=label, callback_data=f"buyplan:{plan.id}", **{"icon_custom_emoji_id": "5260726538302660868"})
     builder.button(text="بازگشت", callback_data="buy_server")
     builder.adjust(1)
 
@@ -494,10 +494,10 @@ async def cb_select_plan(cb: CallbackQuery, state: FSMContext, session: AsyncSes
             f"نوع بیلینگ را انتخاب کنید:\nپلن: {plan.display_name or plan.name}",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [
-                    InlineKeyboardButton(text=f"⏲️ ساعتی — {plan.price_hourly:,.0f} تومان", callback_data="buybilling:hourly"),
-                    InlineKeyboardButton(text=f"⏲️ ماهانه — {plan.price_monthly:,.0f} تومان", callback_data="buybilling:monthly"),
+                    InlineKeyboardButton(text=f"ساعتی — {plan.price_hourly:,.0f} تومان", callback_data="buybilling:hourly", **{"icon_custom_emoji_id": "5798535677318533269"}),
+                    InlineKeyboardButton(text=f"ماهانه — {plan.price_monthly:,.0f} تومان", callback_data="buybilling:monthly", **{"icon_custom_emoji_id": "5778496382117613636"}),
                 ],
-                [InlineKeyboardButton(text="🚫 انصراف", callback_data="cancel", **{"style": "danger"})],
+                [InlineKeyboardButton(text="انصراف", callback_data="cancel", **{"icon_custom_emoji_id": "5348362704572664028", "style": "danger"})],
             ]),
         )
     elif has_hourly:
@@ -528,7 +528,7 @@ async def _ask_hostname(cb: CallbackQuery, state: FSMContext):
         "یا دکمه زیر را بزنید تا سیستم خودکار انتخاب کند:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✏️ خودکار", callback_data="buyhost:auto")],
+            [InlineKeyboardButton(text="خودکار", callback_data="buyhost:auto", **{"icon_custom_emoji_id": "6039614175917903752"})],
             [InlineKeyboardButton(text="بازگشت به منو", callback_data="cancel", **{"icon_custom_emoji_id": "5933748020960038714"})],
         ]),
     )
@@ -773,8 +773,8 @@ async def _show_confirm(msg, state: FSMContext, session, from_message=False, use
     await state.set_state(BuyServerStates.confirming)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✔️", callback_data="confirm_purchase", **{"style": "success"}),
-            InlineKeyboardButton(text="❌", callback_data="cancel", **{"style": "danger"}),
+            InlineKeyboardButton(text=" ", callback_data="confirm_purchase", **{"icon_custom_emoji_id": "5206607081334906820", "style": "success"}),
+            InlineKeyboardButton(text=" ", callback_data="cancel", **{"icon_custom_emoji_id": "5210952531676504517", "style": "danger"}),
         ]
     ])
 

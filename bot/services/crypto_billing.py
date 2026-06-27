@@ -6,6 +6,7 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.database.models import CryptoPayment, Transaction, TransactionType, User
+from bot.services.log_service import LogService
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,8 @@ async def activate_crypto_payment(cp: CryptoPayment, session: AsyncSession, bot)
     ))
     cp.activated = True
     cp.status = "finished"
+
+    await LogService(bot, session).log_crypto_charge(user, cp.amount_usd, cp.amount_irt, cp.order_id)
 
     try:
         await bot.send_message(

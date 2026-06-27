@@ -72,7 +72,7 @@ async def cb_wallet(cb: CallbackQuery, user: User):
     await _render_wallet(cb.message, user)
 
 
-@router.message(F.text == "💰 کیف پول")
+@router.message(F.text == "کیف پول")
 async def msg_wallet(message: Message, user: User):
     loading = await answer_loading(message)
     await _render_wallet(loading, user)

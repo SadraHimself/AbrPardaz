@@ -21,7 +21,7 @@ from bot.config import settings
 from bot.database.models import BotSettings, Server, ServerStatus, User
 from bot.keyboards.main import back_kb, main_menu_kb, request_phone_kb
 from bot.services.log_service import LogService
-from bot.utils.loading import P, answer_loading, edit_loading
+from bot.utils.loading import answer_loading, edit_loading
 
 router = Router(name="start")
 

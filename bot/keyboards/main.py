@@ -23,19 +23,19 @@ _ICON = {
 
 def main_menu_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
     row1 = [
-        KeyboardButton(text="💻 سرور‌های من", icon_custom_emoji_id=_ICON["server"]),
-        KeyboardButton(text="🛒 خرید سرور", icon_custom_emoji_id=_ICON["buy"]),
+        KeyboardButton(text="سرور‌های من", icon_custom_emoji_id=_ICON["server"]),
+        KeyboardButton(text="خرید سرور", icon_custom_emoji_id=_ICON["buy"]),
     ]
     row2 = [
-        KeyboardButton(text="💰 کیف پول", icon_custom_emoji_id=_ICON["wallet"]),
-        KeyboardButton(text="👤 مشخصات کاربری", icon_custom_emoji_id=_ICON["profile"]),
+        KeyboardButton(text="کیف پول", icon_custom_emoji_id=_ICON["wallet"]),
+        KeyboardButton(text="مشخصات کاربری", icon_custom_emoji_id=_ICON["profile"]),
     ]
-    row3 = [KeyboardButton(text="📞 پشتیبانی", icon_custom_emoji_id=_ICON["support"])]
+    row3 = [KeyboardButton(text="پشتیبانی", icon_custom_emoji_id=_ICON["support"])]
     if settings.WEBAPP_URL:
         row3.append(KeyboardButton(text="🌐 پنل مدیریت", web_app=WebAppInfo(url=settings.WEBAPP_URL)))
     rows = [row1, row2, row3]
     if is_admin:
-        rows.append([KeyboardButton(text="🛡 پنل ادمین", icon_custom_emoji_id=_ICON["admin"])])
+        rows.append([KeyboardButton(text="پنل ادمین", icon_custom_emoji_id=_ICON["admin"])])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 

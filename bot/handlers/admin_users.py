@@ -306,7 +306,11 @@ async def msg_user_credit(message: Message, state: FSMContext, session: AsyncSes
         parse_mode="HTML",
         reply_markup=back_to_admin_kb(f"admin:user:{user.id}"),
     )
-    await LogService(message.bot, session).log_wallet_charge(user, amount, user.balance)
+    await LogService(message.bot, session).log_admin_wallet_change(
+        user, amount, is_credit=True,
+        admin_tg_id=message.from_user.id,
+        admin_name=message.from_user.first_name or "ادمین",
+    )
     try:
         await message.bot.send_message(
             user.telegram_id,
@@ -346,6 +350,11 @@ async def msg_user_debit(message: Message, state: FSMContext, session: AsyncSess
             f"✅ {amount:,.0f} تومان از <b>{user.first_name or user.telegram_id}</b> کسر شد.",
             parse_mode="HTML",
             reply_markup=back_to_admin_kb(f"admin:user:{user.id}"),
+        )
+        await LogService(message.bot, session).log_admin_wallet_change(
+            user, amount, is_credit=False,
+            admin_tg_id=message.from_user.id,
+            admin_name=message.from_user.first_name or "ادمین",
         )
     else:
         await message.answer(

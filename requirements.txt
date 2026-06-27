@@ -16,3 +16,4 @@ phonenumbers==8.13.50
 babel==2.16.0
 pytz==2024.2
 apscheduler==3.10.4
+qrcode[pil]>=7.4.2

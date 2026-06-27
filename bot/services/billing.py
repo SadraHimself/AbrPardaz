@@ -75,7 +75,8 @@ class BillingService:
             description=f"ساعتی — {server.name}",
         )
         if success:
-            server.last_billed_at = datetime.now(timezone.utc)
+            now = datetime.now(timezone.utc)
+            server.last_billed_at = now.replace(second=0, microsecond=0, minute=(now.minute // 5) * 5)
         return success
 
     # ── Monthly billing ───────────────────────────────────────────────────────
@@ -91,7 +92,8 @@ class BillingService:
             description=f"ماهیانه — {server.name}",
         )
         if success:
-            server.last_billed_at = datetime.now(timezone.utc)
+            now = datetime.now(timezone.utc)
+            server.last_billed_at = now.replace(second=0, microsecond=0, minute=(now.minute // 5) * 5)
         return success
 
     # ── Suspension ────────────────────────────────────────────────────────────

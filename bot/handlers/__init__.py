@@ -1,6 +1,7 @@
 from aiogram import Router
 
 from .admin import router as admin_router
+from .crypto_payment import router as crypto_payment_router
 from .admin_broadcast import router as admin_broadcast_router
 from .admin_restore import router as admin_restore_router
 from .admin_stats import router as admin_stats_router
@@ -17,6 +18,7 @@ def setup_routers(dp):
     dp.include_router(auth_router)
     dp.include_router(servers_router)
     dp.include_router(billing_router)
+    dp.include_router(crypto_payment_router)
     # Admin routers — order matters: specific before generic
     dp.include_router(admin_users_router)
     dp.include_router(admin_stats_router)

@@ -248,7 +248,7 @@ async def cb_support(cb: CallbackQuery, session: AsyncSession):
     await _render_support(cb.message, session)
 
 
-@router.message(F.text == "📞 پشتیبانی")
+@router.message(F.text == "پشتیبانی")
 async def msg_support(message: Message, session: AsyncSession):
     loading = await answer_loading(message)
     await _render_support(loading, session)
@@ -338,7 +338,7 @@ async def cb_user_profile(cb: CallbackQuery, user: User, session: AsyncSession):
     await _render_profile(cb.message, user, session)
 
 
-@router.message(F.text == "👤 مشخصات کاربری")
+@router.message(F.text == "مشخصات کاربری")
 async def msg_user_profile(message: Message, user: User, session: AsyncSession):
     loading = await answer_loading(message)
     await _render_profile(loading, user, session)

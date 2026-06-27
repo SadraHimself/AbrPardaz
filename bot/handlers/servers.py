@@ -392,11 +392,11 @@ async def _show_buy_categories(target_msg, user: User, state: FSMContext, sessio
     await state.set_state(BuyServerStates.selecting_category)
     builder = InlineKeyboardBuilder()
     for cat in categories:
-        builder.button(text=f"📁 {cat}", callback_data=f"buycat:{cat}")
-    builder.button(text="❌ انصراف", callback_data="cancel")
+        builder.button(text=cat, callback_data=f"buycat:{cat}")
+    builder.button(text="⭐️ بازگشت به منو", callback_data="cancel")
     builder.adjust(1)
     await target_msg.edit_text(
-        "🛒 <b>خرید سرور</b>\n\nدسته‌بندی مورد نظر را انتخاب کنید:",
+        '<tg-emoji emoji-id="5926980668624998964">🟡</tg-emoji> دسته‌بندی مورد نظر را انتخاب کنید:',
         parse_mode="HTML",
         reply_markup=builder.as_markup(),
     )
@@ -434,7 +434,7 @@ async def cb_select_category(cb: CallbackQuery, user: User, state: FSMContext, s
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🪪 احراز هویت", callback_data="start_kyc")],
-                [InlineKeyboardButton(text="❌ انصراف", callback_data="cancel")],
+                [InlineKeyboardButton(text="⭐️ بازگشت به منو", callback_data="cancel")],
             ]),
         )
         await state.clear()
@@ -456,19 +456,15 @@ async def cb_select_category(cb: CallbackQuery, user: User, state: FSMContext, s
 
     builder = InlineKeyboardBuilder()
     for plan in plans:
-        price_parts = []
-        if plan.price_hourly:
-            price_parts.append(f"ساعتی:{plan.price_hourly:,.0f}T")
-        if plan.price_monthly:
-            price_parts.append(f"ماهانه:{plan.price_monthly:,.0f}T")
-        label = f"{plan.display_name or plan.name} | {plan.ram//1024 or plan.ram}GB/{plan.cpu}C/{plan.disk}G | {' / '.join(price_parts)}"
+        ram_display = plan.ram // 1024 if plan.ram >= 1024 else plan.ram
+        label = f"✅ {plan.display_name or plan.name} | {ram_display}GB/{plan.cpu}C/{plan.disk}G"
         builder.button(text=label, callback_data=f"buyplan:{plan.id}")
-    builder.button(text="🔙 بازگشت", callback_data="buy_server")
+    builder.button(text="بازگشت", callback_data="buy_server")
     builder.adjust(1)
 
     await state.set_state(BuyServerStates.selecting_plan)
     await cb.message.edit_text(
-        f"📁 <b>{category}</b>\n\nیک محصول انتخاب کنید:",
+        '<tg-emoji emoji-id="5926980668624998964">🟡</tg-emoji> یک محصول انتخاب کنید:',
         parse_mode="HTML",
         reply_markup=builder.as_markup(),
     )
@@ -498,10 +494,10 @@ async def cb_select_plan(cb: CallbackQuery, state: FSMContext, session: AsyncSes
             f"نوع بیلینگ را انتخاب کنید:\nپلن: {plan.display_name or plan.name}",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [
-                    InlineKeyboardButton(text=f"⏱ ساعتی — {plan.price_hourly:,.0f} T/ساعت", callback_data="buybilling:hourly"),
-                    InlineKeyboardButton(text=f"📅 ماهانه — {plan.price_monthly:,.0f} T/ماه", callback_data="buybilling:monthly"),
+                    InlineKeyboardButton(text=f"⏲️ ساعتی — {plan.price_hourly:,.0f} تومان", callback_data="buybilling:hourly"),
+                    InlineKeyboardButton(text=f"⏲️ ماهانه — {plan.price_monthly:,.0f} تومان", callback_data="buybilling:monthly"),
                 ],
-                [InlineKeyboardButton(text="❌ انصراف", callback_data="cancel")],
+                [InlineKeyboardButton(text="🚫 انصراف", callback_data="cancel")],
             ]),
         )
     elif has_hourly:
@@ -527,14 +523,13 @@ async def cb_select_billing(cb: CallbackQuery, state: FSMContext):
 async def _ask_hostname(cb: CallbackQuery, state: FSMContext):
     await state.set_state(BuyServerStates.entering_hostname)
     await cb.message.edit_text(
-        "🖥 <b>نام سرور</b>\n\n"
         "یک اسم برای سرور خود انتخاب کنید.\n\n"
-        "⚠️ فقط حروف کوچک، اعداد و خط تیره مجاز است.\n"
+        '<tg-emoji emoji-id="5447644880824181073">⚠️</tg-emoji> فقط حروف کوچک، اعداد و خط تیره مجاز است.\n'
         "یا دکمه زیر را بزنید تا سیستم خودکار انتخاب کند:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔀 خودکار", callback_data="buyhost:auto")],
-            [InlineKeyboardButton(text="❌ انصراف", callback_data="cancel")],
+            [InlineKeyboardButton(text="✏️ خودکار", callback_data="buyhost:auto")],
+            [InlineKeyboardButton(text="⭐️ بازگشت به منو", callback_data="cancel")],
         ]),
     )
 
@@ -598,11 +593,12 @@ async def _ask_os(cb: CallbackQuery, state: FSMContext, session: AsyncSession, u
     builder = InlineKeyboardBuilder()
     for os_item in os_list[:20]:
         builder.button(text=os_item["name"], callback_data=f"buyos:{os_item['id']}")
-    builder.button(text="❌ انصراف", callback_data="cancel")
+    builder.button(text="⭐️ بازگشت به منو", callback_data="cancel")
     builder.adjust(2)
 
     await cb.message.edit_text(
-        "🖥 یک OS برای سرور انتخاب کنید",
+        '<tg-emoji emoji-id="4916105371858240403">🖱</tg-emoji> یک OS برای سرور انتخاب کنید',
+        parse_mode="HTML",
         reply_markup=builder.as_markup(),
     )
 
@@ -652,11 +648,12 @@ async def _ask_os_message(message: Message, state: FSMContext, session: AsyncSes
     builder = InlineKeyboardBuilder()
     for os_item in os_list[:20]:
         builder.button(text=os_item["name"], callback_data=f"buyos:{os_item['id']}")
-    builder.button(text="❌ انصراف", callback_data="cancel")
+    builder.button(text="⭐️ بازگشت به منو", callback_data="cancel")
     builder.adjust(2)
 
     await message.answer(
-        "🖥 یک OS برای سرور انتخاب کنید",
+        '<tg-emoji emoji-id="4916105371858240403">🖱</tg-emoji> یک OS برای سرور انتخاب کنید',
+        parse_mode="HTML",
         reply_markup=builder.as_markup(),
     )
 
@@ -773,32 +770,29 @@ async def _show_confirm(msg, state: FSMContext, session, from_message=False, use
     final_price = base_price * (1 - discount_pct / 100) if discount_pct else base_price
     price_unit = "تومان/ساعت" if billing == "hourly" else "تومان/ماه"
 
-    discount_line = ""
-    if discount_pct:
-        discount_line = f"🏷 تخفیف: {discount_pct:.0f}% (قیمت اصلی: {base_price:,.0f} T)\n"
-
     await state.set_state(BuyServerStates.confirming)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✅ تأیید و خرید", callback_data="confirm_purchase"),
-            InlineKeyboardButton(text="❌ انصراف", callback_data="cancel"),
+            InlineKeyboardButton(text="✔️", callback_data="confirm_purchase"),
+            InlineKeyboardButton(text="❌", callback_data="cancel"),
         ]
     ])
 
-    hostname_line = f"🖥 نام سرور: {data['hostname']}\n" if data.get("hostname") else ""
-    os_line = f"💿 سیستم‌عامل: {data.get('os_name', '')}\n" if data.get("os_name") else ""
+    hostname_line = f"• نام سرور: {data['hostname']}\n" if data.get("hostname") else ""
+    os_line = f"• سیستم‌عامل: {data.get('os_name', '')}\n" if data.get("os_name") else ""
+    discount_line = f"• تخفیف: {discount_pct:.0f}% (قیمت اصلی: {base_price:,.0f} T)\n" if discount_pct else ""
 
     text = (
-        f"✅ <b>تأیید سفارش</b>\n\n"
-        f"📦 {plan.display_name or plan.name}\n"
-        f"📁 {plan.category or ''}\n"
-        f"💾 رم: {plan.ram} MB | پردازنده: {plan.cpu} | دیسک: {plan.disk} GB\n"
-        f"🌐 ترافیک: {plan.bandwidth} GB\n"
-        f"📍 {plan.location or 'نامشخص'}\n"
+        f'<tg-emoji emoji-id="4987757216040747796">💎</tg-emoji> <b>تأیید سفارش</b>\n\n'
+        f"• {plan.display_name or plan.name}\n"
+        f"• {plan.category or ''}\n"
+        f"• رم: {plan.ram} MB | پردازنده: {plan.cpu} | دیسک: {plan.disk} GB\n"
+        f"• ترافیک: {plan.bandwidth} GB\n"
+        f"• {plan.location or 'نامشخص'}\n"
         f"{hostname_line}"
         f"{os_line}\n"
         f"{discount_line}"
-        f"💳 قیمت نهایی: <b>{final_price:,.0f} {price_unit}</b>\n\n"
+        f"• قیمت نهایی: <b>{final_price:,.0f} {price_unit}</b>\n\n"
         "آیا تأیید می‌کنید؟"
     )
 
@@ -879,12 +873,12 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
 
         plan_name = plan.display_name or plan.name
         delivery = (
-            f"✅ <b>سرور {server.name} آماده است!</b>\n\n"
-            f"📦 پلن: {plan_name}\n"
-            f"🌐 آیپی: <code>{server.ip_address or 'در حال تخصیص...'}</code>\n"
-            f"🔑 پسورد: <code>{root_password}</code>\n"
-            f"\n⚠️ این اطلاعات را در جای امنی ذخیره کنید.\n"
-            "🔔 سیستم‌عامل در حال نصب است — چند دقیقه منتظر بمانید."
+            f'<tg-emoji emoji-id="5397916757333654639">➕</tg-emoji> <b>سرور {server.name} آماده است!</b>\n\n'
+            f"• پلن: {plan_name}\n"
+            f"• آیپی: <code>{server.ip_address or 'در حال تخصیص...'}</code>\n"
+            f"• پسورد: <code>{root_password}</code>\n"
+            f"\n• این اطلاعات را در جای امنی ذخیره کنید.\n"
+            "• سیستم‌عامل در حال نصب است — چند دقیقه منتظر بمانید."
         )
         await cb.message.edit_text(delivery, parse_mode="HTML")
         await LogService(cb.bot, session).log_purchase(

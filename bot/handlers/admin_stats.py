@@ -519,11 +519,12 @@ async def cb_price_adj_do(cb: CallbackQuery, state: FSMContext, session: AsyncSe
 # ══════════════════════════════════════════════════════════════════════════════
 
 _LOG_TOPIC_NAMES = {
-    "log_topic_finance":  "💰 گزارش مالی",
-    "log_topic_new_user": "👤 کاربران جدید",
-    "log_topic_purchase": "🛒 گزارش خرید",
-    "log_topic_server":   "🖥 لاگ سرور",
-    "log_topic_backup":   "💾 بکاپ",
+    "log_topic_finance":      "💰 گزارش مالی",
+    "log_topic_new_user":     "👤 کاربران جدید",
+    "log_topic_purchase":     "🛒 گزارش خرید",
+    "log_topic_server":       "🖥 لاگ سرور",
+    "log_topic_backup":       "💾 بکاپ",
+    "log_topic_moderation":   "🔨 مودریشن",
 }
 
 
@@ -537,6 +538,7 @@ async def cb_admin_log_group(cb: CallbackQuery, session: AsyncSession):
             topics.append(f"  {label}: {'✅' if tid else '❌'}")
         topics_text = "\n".join(topics)
         kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➕ ساخت تاپیک‌های جدید", callback_data="admin:log_sync")],
             [InlineKeyboardButton(text="❌ قطع اتصال", callback_data="admin:log_disconnect")],
             [InlineKeyboardButton(text="🔙 بازگشت", callback_data="admin_panel")],
         ])
@@ -637,6 +639,32 @@ async def msg_log_group_id(message: Message, state: FSMContext, session: AsyncSe
             parse_mode="HTML",
             reply_markup=back_to_admin_kb("admin:log_group"),
         )
+
+
+@router.callback_query(F.data == "admin:log_sync")
+async def cb_admin_log_sync(cb: CallbackQuery, session: AsyncSession):
+    group_id = await _get_setting(session, "log_group_id")
+    if not group_id:
+        await cb.answer("گروهی متصل نیست.", show_alert=True)
+        return
+    created, failed = [], []
+    for key, name in _LOG_TOPIC_NAMES.items():
+        existing = await _get_setting(session, key)
+        if existing:
+            continue
+        try:
+            ft = await cb.bot.create_forum_topic(int(group_id), name)
+            await _set_setting(session, key, str(ft.message_thread_id))
+            created.append(name)
+        except Exception as e:
+            failed.append(f"{name}: {e}")
+    if not created and not failed:
+        await cb.answer("همه تاپیک‌ها قبلاً موجودند.", show_alert=True)
+    elif failed:
+        await cb.answer(f"❌ خطا در ساخت: {', '.join(failed[:2])}", show_alert=True)
+    else:
+        await cb.answer(f"✅ ساخته شد: {', '.join(created)}", show_alert=True)
+    await cb_admin_log_group(cb, session)
 
 
 @router.callback_query(F.data == "admin:log_disconnect")

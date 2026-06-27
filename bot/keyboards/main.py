@@ -22,14 +22,8 @@ _ICON = {
 
 
 def main_menu_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
-    row1 = [
-        KeyboardButton(text="سرور‌های من", icon_custom_emoji_id=_ICON["server"]),
-        KeyboardButton(text="خرید سرور", icon_custom_emoji_id=_ICON["buy"]),
-    ]
-    row2 = [
-        KeyboardButton(text="کیف پول", icon_custom_emoji_id=_ICON["wallet"]),
-        KeyboardButton(text="مشخصات کاربری", icon_custom_emoji_id=_ICON["profile"]),
-    ]
+    row1 = [KeyboardButton(text="سرور‌های من", icon_custom_emoji_id=_ICON["server"])]
+    row2 = [KeyboardButton(text="مشخصات کاربری", icon_custom_emoji_id=_ICON["profile"])]
     row3 = [KeyboardButton(text="پشتیبانی", icon_custom_emoji_id=_ICON["support"])]
     if settings.WEBAPP_URL:
         row3.append(KeyboardButton(text="🌐 پنل مدیریت", web_app=WebAppInfo(url=settings.WEBAPP_URL)))
@@ -65,8 +59,7 @@ def wallet_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="💳 شارژ کیف پول", callback_data="charge_wallet")
     builder.button(text="💎 شارژ با کریپتو", callback_data="crypto_pay")
-    builder.button(text="📜 تاریخچه تراکنش‌ها", callback_data="tx_history")
-    builder.button(text="🔙 بازگشت", callback_data="main_menu")
+    builder.button(text="🔙 بازگشت", callback_data="user_profile")
     builder.adjust(1)
     return builder.as_markup()
 

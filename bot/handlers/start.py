@@ -207,13 +207,8 @@ async def cb_main_menu(cb: CallbackQuery, user: User, session: AsyncSession):
         await cb.answer()
         return
 
-    await cb.message.edit_text(
-        '<tg-emoji emoji-id="5346024644635804737">🌍</tg-emoji> <b>تهیه سرور</b>',
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🌍 تهیه سرور", callback_data="buy_server")]
-        ]),
-    )
+    welcome_text = await _build_welcome_text(user, session)
+    await cb.message.edit_text(welcome_text, parse_mode="HTML")
     await cb.answer()
 
 
@@ -221,13 +216,8 @@ async def cb_main_menu(cb: CallbackQuery, user: User, session: AsyncSession):
 async def cb_cancel(cb: CallbackQuery, user: User, session: AsyncSession, state=None):
     if state:
         await state.clear()
-    await cb.message.edit_text(
-        '<tg-emoji emoji-id="5346024644635804737">🌍</tg-emoji> <b>تهیه سرور</b>',
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🌍 تهیه سرور", callback_data="buy_server")]
-        ]),
-    )
+    welcome_text = await _build_welcome_text(user, session)
+    await cb.message.edit_text(welcome_text, parse_mode="HTML")
     await cb.answer("لغو شد.")
 
 
@@ -307,14 +297,6 @@ async def _send_welcome(msg: Message, user: User, session: AsyncSession,
         welcome_text,
         parse_mode="HTML",
         reply_markup=main_menu_kb(is_admin=_is_admin(user)),
-    )
-    await target_bot.send_message(
-        target_chat,
-        '<tg-emoji emoji-id="5346024644635804737">🌍</tg-emoji> <b>تهیه سرور</b>',
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🌍 تهیه سرور", callback_data="buy_server")]
-        ]),
     )
 
 

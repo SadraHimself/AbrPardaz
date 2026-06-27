@@ -64,6 +64,7 @@ def back_kb(callback: str = "main_menu") -> InlineKeyboardMarkup:
 def wallet_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="💳 شارژ کیف پول", callback_data="charge_wallet")
+    builder.button(text="💎 شارژ با کریپتو", callback_data="crypto_pay")
     builder.button(text="📜 تاریخچه تراکنش‌ها", callback_data="tx_history")
     builder.button(text="🔙 بازگشت", callback_data="main_menu")
     builder.adjust(1)

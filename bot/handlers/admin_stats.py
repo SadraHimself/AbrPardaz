@@ -19,7 +19,7 @@ from bot.database.models import (
 )
 from bot.keyboards.admin import (
     back_to_admin_kb, cancel_admin_kb, channels_kb, confirm_kb,
-    finance_kb, price_adj_categories_kb, settings_menu_kb, stats_kb,
+    finance_kb, np_gateway_kb, price_adj_categories_kb, settings_menu_kb, stats_kb,
 )
 from bot.services.billing import BillingService
 from bot.utils.loading import edit_loading
@@ -55,6 +55,11 @@ class StatsFSM(StatesGroup):
 
 class LogGroupFSM(StatesGroup):
     waiting_group_id = State()
+
+
+class NPSettingsFSM(StatesGroup):
+    waiting_rate = State()
+    waiting_webhook_url = State()
 
 
 # ── Helper ────────────────────────────────────────────────────────────────────
@@ -678,13 +683,101 @@ async def cb_admin_log_disconnect(cb: CallbackQuery, session: AsyncSession):
     await cb_admin_log_group(cb, session)  # handles cb.answer() internally
 
 
-# ── NOWPayments connection test ───────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  NOWPAYMENTS GATEWAY MANAGEMENT
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data == "admin:np")
+async def cb_admin_np_gateway(cb: CallbackQuery, session: AsyncSession):
+    from bot.config import settings as _s
+
+    rate = await _get_setting(session, "np_usd_to_irt_rate", "تنظیم نشده")
+    wh_url = await _get_setting(session, "np_webhook_url", "تنظیم نشده")
+
+    api_status = "✅ تنظیم شده" if _s.NP_API_KEY else "❌ تنظیم نشده"
+    if wh_url and wh_url != "تنظیم نشده":
+        wh_short = wh_url[:40] + "…" if len(wh_url) > 40 else wh_url
+    else:
+        wh_short = "تنظیم نشده"
+
+    await cb.message.edit_text(
+        f"💎 <b>مدیریت درگاه NOWPayments</b>\n\n"
+        f"🔑 API Key: {api_status}\n"
+        f"💱 نرخ دلار: <b>{rate}</b> تومان\n"
+        f"🌐 Webhook URL: <code>{wh_short}</code>\n\n"
+        f"<i>برای تغییر هر مورد دکمه مربوطه را بزنید.</i>",
+        parse_mode="HTML",
+        reply_markup=np_gateway_kb(),
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data == "admin:np_rate")
+async def cb_admin_np_rate(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(NPSettingsFSM.waiting_rate)
+    await cb.message.edit_text(
+        "💱 <b>تنظیم نرخ دلار به تومان</b>\n\n"
+        "نرخ تبدیل هر دلار به تومان را وارد کنید:\n"
+        "<i>مثال: 75000</i>",
+        parse_mode="HTML",
+        reply_markup=cancel_admin_kb(),
+    )
+    await cb.answer()
+
+
+@router.message(NPSettingsFSM.waiting_rate)
+async def msg_np_rate(message: Message, state: FSMContext, session: AsyncSession):
+    raw = (message.text or "").strip().replace(",", "")
+    try:
+        rate = float(raw)
+        if rate <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer("❌ مقدار نامعتبر. یک عدد مثبت وارد کنید:")
+        return
+
+    await state.clear()
+    await _set_setting(session, "np_usd_to_irt_rate", str(rate))
+    await message.answer(
+        f"✅ نرخ دلار به <b>{rate:,.0f} تومان</b> تنظیم شد.",
+        parse_mode="HTML",
+        reply_markup=back_to_admin_kb("admin:np"),
+    )
+
+
+@router.callback_query(F.data == "admin:np_wh")
+async def cb_admin_np_wh(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(NPSettingsFSM.waiting_webhook_url)
+    await cb.message.edit_text(
+        "🌐 <b>تنظیم Webhook URL</b>\n\n"
+        "آدرس IPN webhook را وارد کنید:\n"
+        "<i>مثال: https://example.com/np-webhook</i>",
+        parse_mode="HTML",
+        reply_markup=cancel_admin_kb(),
+    )
+    await cb.answer()
+
+
+@router.message(NPSettingsFSM.waiting_webhook_url)
+async def msg_np_wh(message: Message, state: FSMContext, session: AsyncSession):
+    url = (message.text or "").strip()
+    if not url.startswith("http"):
+        await message.answer("❌ آدرس باید با http یا https شروع شود:")
+        return
+
+    await state.clear()
+    await _set_setting(session, "np_webhook_url", url)
+    await message.answer(
+        f"✅ Webhook URL تنظیم شد:\n<code>{url}</code>",
+        parse_mode="HTML",
+        reply_markup=back_to_admin_kb("admin:np"),
+    )
+
 
 @router.callback_query(F.data == "admin:np_test")
 async def cb_admin_np_test(cb: CallbackQuery):
     from bot.config import settings as _s
     from bot.services.nowpayments import NOWPaymentsClient, NOWPaymentsError
-    from bot.keyboards.admin import back_to_admin_kb
 
     await cb.answer("⏳ در حال تست...")
 
@@ -692,7 +785,7 @@ async def cb_admin_np_test(cb: CallbackQuery):
         await cb.message.edit_text(
             "❌ <b>NP_API_KEY</b> در .env تنظیم نشده.",
             parse_mode="HTML",
-            reply_markup=back_to_admin_kb(),
+            reply_markup=back_to_admin_kb("admin:np"),
         )
         return
 
@@ -705,7 +798,8 @@ async def cb_admin_np_test(cb: CallbackQuery):
         lines.append(f"🔌 وضعیت API: {'✅ آنلاین' if api_ok else '❌ مشکل'}")
     except NOWPaymentsError as e:
         lines.append(f"🔌 وضعیت API: ❌ خطا — {e}")
-        await cb.message.edit_text("\n".join(lines), parse_mode="HTML", reply_markup=back_to_admin_kb())
+        await cb.message.edit_text("\n".join(lines), parse_mode="HTML",
+                                   reply_markup=back_to_admin_kb("admin:np"))
         return
 
     try:
@@ -725,5 +819,5 @@ async def cb_admin_np_test(cb: CallbackQuery):
     await cb.message.edit_text(
         "\n".join(lines),
         parse_mode="HTML",
-        reply_markup=back_to_admin_kb(),
+        reply_markup=back_to_admin_kb("admin:np"),
     )

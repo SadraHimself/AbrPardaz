@@ -63,6 +63,11 @@ app.conf.update(
             "task": "bot.tasks.billing.cleanup_old_transactions",
             "schedule": crontab(hour=4, minute=0, day_of_week="*/3"),
         },
+        # هر ۵ دقیقه پرداخت‌های کریپتوی معلق بررسی می‌شوند (fallback IPN)
+        "crypto-payment-poll": {
+            "task": "bot.tasks.crypto_polling.poll_crypto_payments",
+            "schedule": crontab(minute="*/5"),
+        },
     },
 )
 
@@ -70,4 +75,5 @@ app.conf.update(
 import bot.tasks.backup   # noqa: F401, E402
 import bot.tasks.billing  # noqa: F401, E402
 import bot.tasks.server   # noqa: F401, E402
-import bot.tasks.stats    # noqa: F401, E402
+import bot.tasks.stats           # noqa: F401, E402
+import bot.tasks.crypto_polling  # noqa: F401, E402

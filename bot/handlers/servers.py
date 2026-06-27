@@ -75,7 +75,7 @@ async def cb_my_servers(cb: CallbackQuery, user: User, session: AsyncSession):
     await _show_server_list(cb.message, user, session)
 
 
-@router.message(F.text == "💻 سرور‌های من")
+@router.message(F.text == "سرور‌های من")
 async def msg_my_servers(message: Message, user: User, session: AsyncSession):
     if not user.is_phone_verified:
         loading = await answer_loading(message)
@@ -412,7 +412,7 @@ async def cb_buy_server(cb: CallbackQuery, user: User, state: FSMContext, sessio
     await _show_buy_categories(cb.message, user, state, session)
 
 
-@router.message(F.text == "🛒 خرید سرور")
+@router.message(F.text == "خرید سرور")
 async def msg_buy_server(message: Message, user: User, state: FSMContext, session: AsyncSession):
     if not user.is_phone_verified:
         loading = await answer_loading(message)

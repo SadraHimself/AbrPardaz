@@ -5,24 +5,38 @@ from aiogram.types import (
     InlineKeyboardButton, InlineKeyboardMarkup,
     KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove, WebAppInfo,
 )
-from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.config import settings
 
 
+# Premium emoji IDs for keyboard button icons (Bot API 9.4+, requires bot owner Premium)
+_ICON = {
+    "server":  "5262701463049609410",
+    "buy":     "5265226165085282693",
+    "wallet":  "6102735781258861018",
+    "profile": "5974048815789903111",
+    "support": "5368476981312631953",
+    "admin":   "5895483165182529286",
+}
+
+
 def main_menu_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
-    builder = ReplyKeyboardBuilder()
-    builder.button(text="💻 سرور‌های من")
-    builder.button(text="🛒 خرید سرور")
-    builder.button(text="💰 کیف پول")
-    builder.button(text="👤 مشخصات کاربری")
-    builder.button(text="پشتیبانی 📞")
+    row1 = [
+        KeyboardButton(text="💻 سرور‌های من", icon_custom_emoji_id=_ICON["server"]),
+        KeyboardButton(text="🛒 خرید سرور", icon_custom_emoji_id=_ICON["buy"]),
+    ]
+    row2 = [
+        KeyboardButton(text="💰 کیف پول", icon_custom_emoji_id=_ICON["wallet"]),
+        KeyboardButton(text="👤 مشخصات کاربری", icon_custom_emoji_id=_ICON["profile"]),
+    ]
+    row3 = [KeyboardButton(text="📞 پشتیبانی", icon_custom_emoji_id=_ICON["support"])]
     if settings.WEBAPP_URL:
-        builder.button(text="🌐 پنل مدیریت", web_app=WebAppInfo(url=settings.WEBAPP_URL))
+        row3.append(KeyboardButton(text="🌐 پنل مدیریت", web_app=WebAppInfo(url=settings.WEBAPP_URL)))
+    rows = [row1, row2, row3]
     if is_admin:
-        builder.button(text="🛡 پنل ادمین")
-    builder.adjust(2)
-    return builder.as_markup(resize_keyboard=True)
+        rows.append([KeyboardButton(text="🛡 پنل ادمین", icon_custom_emoji_id=_ICON["admin"])])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
 def request_phone_kb() -> ReplyKeyboardMarkup:

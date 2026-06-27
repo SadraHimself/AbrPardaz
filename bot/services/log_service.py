@@ -64,6 +64,31 @@ class LogService:
             f"💼 موجودی جدید: {new_balance:,.0f} تومان",
         )
 
+    async def log_crypto_charge(self, user: User, amount_usd: float, amount_irt: float, order_id: str) -> None:
+        await self._send(
+            "finance",
+            f"💎 <b>شارژ کریپتو</b>\n\n"
+            f"{self._user_line(user)}\n"
+            f"💵 مبلغ: <b>{amount_usd:.0f}$</b> ≈ <b>{amount_irt:,.0f} تومان</b>\n"
+            f"💳 روش: درگاه NOWPayments\n"
+            f"🔑 شناسه: <code>{order_id}</code>\n"
+            f"💼 موجودی جدید: {user.balance:,.0f} تومان",
+        )
+
+    async def log_admin_wallet_change(self, target: User, amount: float, is_credit: bool,
+                                      admin_tg_id: int, admin_name: str = "ادمین") -> None:
+        icon = "💚" if is_credit else "🔴"
+        action = "افزایش موجودی" if is_credit else "کاهش موجودی"
+        sign = "+" if is_credit else "-"
+        await self._send(
+            "finance",
+            f"{icon} <b>{action} توسط ادمین</b>\n\n"
+            f"👮 ادمین: {admin_name} | <code>{admin_tg_id}</code>\n\n"
+            f"👤 کاربر:\n{self._user_line(target)}\n"
+            f"💵 مبلغ: <b>{sign}{amount:,.0f} تومان</b>\n"
+            f"💼 موجودی جدید: {target.balance:,.0f} تومان",
+        )
+
     async def log_purchase(self, user: User, server: Server, plan_name: str,
                            billing_type: str, amount: float) -> None:
         billing_label = "ساعتی" if billing_type == "hourly" else "ماهانه"

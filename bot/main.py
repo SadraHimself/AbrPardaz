@@ -57,6 +57,17 @@ async def main() -> None:
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
 
+    # Start IPN webhook server alongside the bot (only when configured)
+    if settings.NP_API_KEY and settings.NP_IPN_SECRET:
+        from aiohttp import web
+        from bot.webhook_server import create_webhook_app
+        webhook_app = create_webhook_app(bot)
+        runner = web.AppRunner(webhook_app)
+        await runner.setup()
+        site = web.TCPSite(runner, "0.0.0.0", settings.NP_WEBHOOK_PORT)
+        await site.start()
+        logger.info("IPN webhook server listening on port %d", settings.NP_WEBHOOK_PORT)
+
     logger.info("Starting polling...")
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 

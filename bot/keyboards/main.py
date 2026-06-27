@@ -13,17 +13,19 @@ from bot.config import settings
 # Premium emoji IDs for keyboard button icons (Bot API 9.4+, requires bot owner Premium)
 _ICON = {
     "server":  "5262701463049609410",
-    "buy":     "5265226165085282693",
-    "wallet":  "6102735781258861018",
+    "buy":     "5346024644635804737",
     "profile": "5974048815789903111",
-    "support": "5368476981312631953",
+    "support": "5348323259593014362",
     "admin":   "5895483165182529286",
 }
 
 
 def main_menu_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
-    row1 = [KeyboardButton(text="سرور‌های من", icon_custom_emoji_id=_ICON["server"])]
-    row2 = [KeyboardButton(text="مشخصات کاربری", icon_custom_emoji_id=_ICON["profile"])]
+    row1 = [KeyboardButton(text="تهیه سرور", icon_custom_emoji_id=_ICON["buy"])]
+    row2 = [
+        KeyboardButton(text="سرور‌های من", icon_custom_emoji_id=_ICON["server"]),
+        KeyboardButton(text="مشخصات کاربری", icon_custom_emoji_id=_ICON["profile"]),
+    ]
     row3 = [KeyboardButton(text="پشتیبانی", icon_custom_emoji_id=_ICON["support"])]
     if settings.WEBAPP_URL:
         row3.append(KeyboardButton(text="🌐 پنل مدیریت", web_app=WebAppInfo(url=settings.WEBAPP_URL)))

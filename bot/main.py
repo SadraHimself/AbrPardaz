@@ -58,9 +58,14 @@ async def main() -> None:
     dp.shutdown.register(on_shutdown)
 
     # Start IPN webhook server alongside the bot (only when configured)
-    if settings.NP_API_KEY and settings.NP_IPN_SECRET:
+    if settings.NP_API_KEY:
         from aiohttp import web
         from bot.webhook_server import create_webhook_app
+        if not settings.NP_IPN_SECRET:
+            logger.warning(
+                "NP_IPN_SECRET is not set — IPN webhook will accept requests WITHOUT signature verification. "
+                "Set NP_IPN_SECRET in .env for production security."
+            )
         webhook_app = create_webhook_app(bot)
         runner = web.AppRunner(webhook_app)
         await runner.setup()

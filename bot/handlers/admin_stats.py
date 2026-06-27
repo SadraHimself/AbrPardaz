@@ -238,7 +238,8 @@ _SETTING_LABELS = {
     "support_text": "متن پشتیبانی",
     "support_id": "آیدی تلگرام پشتیبان\n<i>مثال: @support_user</i>",
     "website_url": "لینک سایت\n<i>مثال: https://example.ir</i>",
-    "terms_text": "متن شرایط و قوانین\n<i>HTML مجاز است</i>",
+    "terms_text": "متن شرایط پذیرش (هنگام ثبت‌نام)\n<i>HTML مجاز است</i>",
+    "rules_text": "متن قوانین (دکمه منوی اصلی)\n<i>HTML مجاز است</i>",
 }
 
 

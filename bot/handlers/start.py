@@ -207,9 +207,13 @@ async def cb_main_menu(cb: CallbackQuery, user: User, session: AsyncSession):
         await cb.answer()
         return
 
-    welcome_text = await _build_welcome_text(user, session)
-    # Reply keyboard is already at the bottom — just update the inline message
-    await cb.message.edit_text(welcome_text, parse_mode="HTML")
+    await cb.message.edit_text(
+        '<tg-emoji emoji-id="5346024644635804737">🌍</tg-emoji> <b>تهیه سرور</b>',
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🌍 تهیه سرور", callback_data="buy_server")]
+        ]),
+    )
     await cb.answer()
 
 
@@ -217,8 +221,13 @@ async def cb_main_menu(cb: CallbackQuery, user: User, session: AsyncSession):
 async def cb_cancel(cb: CallbackQuery, user: User, session: AsyncSession, state=None):
     if state:
         await state.clear()
-    welcome_text = await _build_welcome_text(user, session)
-    await cb.message.edit_text(welcome_text, parse_mode="HTML")
+    await cb.message.edit_text(
+        '<tg-emoji emoji-id="5346024644635804737">🌍</tg-emoji> <b>تهیه سرور</b>',
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🌍 تهیه سرور", callback_data="buy_server")]
+        ]),
+    )
     await cb.answer("لغو شد.")
 
 
@@ -299,6 +308,14 @@ async def _send_welcome(msg: Message, user: User, session: AsyncSession,
         parse_mode="HTML",
         reply_markup=main_menu_kb(is_admin=_is_admin(user)),
     )
+    await target_bot.send_message(
+        target_chat,
+        '<tg-emoji emoji-id="5346024644635804737">🌍</tg-emoji> <b>تهیه سرور</b>',
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🌍 تهیه سرور", callback_data="buy_server")]
+        ]),
+    )
 
 
 # ── User profile ──────────────────────────────────────────────────────────────
@@ -320,13 +337,16 @@ async def _render_profile(target_msg, user: User, session: AsyncSession):
         f"شماره تلفن: <code>{phone}</code>\n"
         f"احراز هویت: {kyc}\n\n"
         f"🖥 سرور‌های فعال: <b>{active_count}</b>\n"
-        f"🔢 لیمیت سرور ساعتی: <b>{hourly_limit}</b>"
+        f"🔢 لیمیت سرور ساعتی: <b>{hourly_limit}</b>\n\n"
+        f"💰 موجودی کیف پول: <b>{user.balance:,.0f} تومان</b>"
     )
     await target_msg.edit_text(
         text,
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 بازگشت", callback_data="main_menu")]
+            [InlineKeyboardButton(text="💰 شارژ کیف پول", callback_data="wallet")],
+            [InlineKeyboardButton(text="📜 تاریخچه تراکنش‌ها", callback_data="tx_history")],
+            [InlineKeyboardButton(text="🔙 بازگشت", callback_data="main_menu")],
         ]),
     )
 

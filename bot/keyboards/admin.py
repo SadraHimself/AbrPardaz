@@ -16,6 +16,7 @@ def admin_menu_kb() -> InlineKeyboardMarkup:
     builder.button(text="⚙️ تنظیمات ربات", callback_data="admin:settings")
     builder.button(text="💰 مالی", callback_data="admin:finance")
     builder.button(text="📋 تاپیک اطلاعات", callback_data="admin:log_group")
+    builder.button(text="💎 NOWPayments", callback_data="admin:np")
     builder.button(text="🔙 بازگشت", callback_data="main_menu")
     builder.adjust(2)
     return builder.as_markup()
@@ -341,6 +342,16 @@ def confirm_kb(confirm_data: str, cancel_data: str = "admin_panel") -> InlineKey
             InlineKeyboardButton(text="❌ انصراف", callback_data=cancel_data),
         ]
     ])
+
+
+def np_gateway_kb() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🔌 تست اتصال", callback_data="admin:np_test")
+    builder.button(text="💱 تنظیم نرخ $/T", callback_data="admin:np_rate")
+    builder.button(text="🌐 تنظیم Webhook URL", callback_data="admin:np_wh")
+    builder.button(text="🔙 بازگشت", callback_data="admin_panel")
+    builder.adjust(2)
+    return builder.as_markup()
 
 
 def back_to_admin_kb(target: str = "admin_panel") -> InlineKeyboardMarkup:

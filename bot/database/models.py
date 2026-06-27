@@ -285,6 +285,24 @@ class BotSettings(Base):
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), onupdate=func.now())
 
 
+class CryptoPayment(Base):
+    """ردیابی پرداخت‌های کریپتو از طریق NOWPayments."""
+    __tablename__ = "crypto_payments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    order_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
+    payment_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    invoice_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    amount_usd: Mapped[float] = mapped_column(Float, nullable=False)
+    amount_irt: Mapped[float] = mapped_column(Float, nullable=False)
+    status: Mapped[str] = mapped_column(String(50), default="waiting")
+    activated: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), onupdate=func.now())
+
+
 class DailyStat(Base):
     """آمار روزانه — بعد از ۳۰ روز پاک می‌شود"""
     __tablename__ = "daily_stats"

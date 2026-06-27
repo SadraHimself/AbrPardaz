@@ -412,7 +412,7 @@ async def cb_buy_server(cb: CallbackQuery, user: User, state: FSMContext, sessio
     await _show_buy_categories(cb.message, user, state, session)
 
 
-@router.message(F.text == "خرید سرور")
+@router.message(F.text == "تهیه سرور")
 async def msg_buy_server(message: Message, user: User, state: FSMContext, session: AsyncSession):
     if not user.is_phone_verified:
         loading = await answer_loading(message)

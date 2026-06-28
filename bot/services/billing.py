@@ -76,7 +76,13 @@ class BillingService:
         )
         if success:
             now = datetime.now(timezone.utc)
-            server.last_billed_at = now.replace(second=0, microsecond=0, minute=(now.minute // 5) * 5)
+            # Anchor last_billed_at to creation time to prevent cumulative drift.
+            # e.g. created at 02:19 → bills at 03:19, 04:19, 05:19 exactly.
+            created = server.created_at
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            elapsed_hours = int((now - created).total_seconds() // 3600)
+            server.last_billed_at = created + timedelta(hours=max(elapsed_hours, 1))
         return success
 
     # ── Monthly billing ───────────────────────────────────────────────────────
@@ -92,8 +98,7 @@ class BillingService:
             description=f"ماهیانه — {server.name}",
         )
         if success:
-            now = datetime.now(timezone.utc)
-            server.last_billed_at = now.replace(second=0, microsecond=0, minute=(now.minute // 5) * 5)
+            server.last_billed_at = datetime.now(timezone.utc).replace(second=0, microsecond=0)
         return success
 
     # ── Suspension ────────────────────────────────────────────────────────────

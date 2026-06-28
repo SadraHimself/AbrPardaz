@@ -57,7 +57,7 @@ def _build_xml(user: User, txs: list) -> bytes:
 
 async def _render_wallet(target_msg, user: User):
     await target_msg.edit_text(
-        f"💰 <b>کیف پول</b>\n\n"
+        f'<tg-emoji emoji-id="5769126056262898415">👛</tg-emoji> <b>کیف پول</b>\n\n'
         f"موجودی فعلی: <b>{user.balance:,.0f} تومان</b>\n\n"
         f"برای شارژ کیف پول دکمه زیر را بزنید:",
         parse_mode="HTML",
@@ -71,11 +71,6 @@ async def cb_wallet(cb: CallbackQuery, user: User):
     await cb.answer()
     await _render_wallet(cb.message, user)
 
-
-@router.message(F.text == "کیف پول")
-async def msg_wallet(message: Message, user: User):
-    loading = await answer_loading(message)
-    await _render_wallet(loading, user)
 
 
 @router.callback_query(F.data == "charge_wallet")
@@ -182,7 +177,7 @@ async def _render_tx_page(target_msg, user: User, session: AsyncSession, page: i
     items = await _get_tx_items(user.id, session)
 
     if not items:
-        await target_msg.edit_text("📜 هیچ تراکنشی وجود ندارد.", reply_markup=back_kb("wallet"))
+        await target_msg.edit_text("📜 هیچ تراکنشی وجود ندارد.", reply_markup=back_kb("user_profile"))
         return
 
     total_pages = max(1, (len(items) + _PAGE_SIZE - 1) // _PAGE_SIZE)
@@ -202,7 +197,7 @@ async def _render_tx_page(target_msg, user: User, session: AsyncSession, page: i
     buttons.append([
         InlineKeyboardButton(text="📄 فاکتور XML", callback_data="invoice_xml", **{"style": "primary"}),
     ])
-    buttons.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data="wallet")])
+    buttons.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data="user_profile")])
 
     await target_msg.edit_text(
         f"📜 <b>تاریخچه تراکنش‌ها</b>  {page + 1}/{total_pages}\n\n"

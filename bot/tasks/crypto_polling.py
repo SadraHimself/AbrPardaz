@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 
@@ -34,6 +35,8 @@ async def _do_poll() -> None:
     if not settings.NP_API_KEY:
         return
 
+    now = datetime.now(timezone.utc)
+
     async with AsyncSessionFactory() as session:
         result = await session.execute(
             select(CryptoPayment).where(
@@ -53,6 +56,27 @@ async def _do_poll() -> None:
 
     try:
         for cp in pending:
+            # Check expiry first — cancel and notify user
+            if cp.expires_at:
+                exp = cp.expires_at if cp.expires_at.tzinfo else cp.expires_at.replace(tzinfo=timezone.utc)
+                if exp < now:
+                    async with AsyncSessionFactory() as session:
+                        cp_fresh = await session.get(CryptoPayment, cp.id)
+                        if cp_fresh and not cp_fresh.activated and cp_fresh.status in _PENDING_STATUSES:
+                            cp_fresh.status = "expired"
+                            await session.commit()
+                    try:
+                        invoice_ref = cp.payment_id or cp.order_id
+                        await bot.send_message(
+                            cp.chat_id,
+                            f'<tg-emoji emoji-id="5032973497861669622">❌</tg-emoji> '
+                            f'کاربر عزیز شما قادر به پرداخت فاکتور <code>{invoice_ref}</code> نبودید',
+                            parse_mode="HTML",
+                        )
+                    except Exception:
+                        pass
+                    continue
+
             try:
                 data = await client.get_payment_status(cp.payment_id)
                 new_status = data.get("payment_status", "")

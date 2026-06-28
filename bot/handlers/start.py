@@ -222,7 +222,7 @@ async def cb_cancel(cb: CallbackQuery, user: User, session: AsyncSession, state=
 
 
 async def _render_support(target_msg, session: AsyncSession):
-    support_text = "برای ارتباط با پشتیبانی میتونید با ایدی زیر در ارتباط باشید @AskAfagh"
+    support_text = "برای ارتباط با پشتیبانی میتونید با ایدی در ارتباط باشید @AskAfagh"
     support_id = await _get_setting_opt(session, "support_id")
     buttons = []
     if support_id:

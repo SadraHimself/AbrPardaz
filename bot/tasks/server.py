@@ -142,16 +142,17 @@ def notify_hourly_billing(user_id: int, server_id: int, amount: float, new_balan
             try:
                 kb = InlineKeyboardMarkup(inline_keyboard=[[
                     InlineKeyboardButton(
-                        text="🔕 خاموش کردن اطلاع‌رسانی",
+                        text="خاموش کردن اطلاع‌رسانی",
                         callback_data=f"srv_mute_hourly:{server_id}",
+                        **{"icon_custom_emoji_id": "5990205245806875298"},
                     )
                 ]])
                 await bot.send_message(
                     user.telegram_id,
-                    f"⏱ <b>بیلینگ ساعتی</b>\n\n"
-                    f"🖥 سرور: {server.name}\n"
-                    f"💸 کسر شد: {amount:,.0f} تومان\n"
-                    f"💰 موجودی جدید: {new_balance:,.0f} تومان",
+                    f'<tg-emoji emoji-id="5852614259082530343">⏱</tg-emoji> <b>بیلینگ ساعتی</b>\n\n'
+                    f"سرور: {server.name}\n"
+                    f"کسر شد: {amount:,.0f} تومان\n"
+                    f'<tg-emoji emoji-id="5778318458802409852">💰</tg-emoji> موجودی جدید: {new_balance:,.0f} تومان',
                     parse_mode="HTML",
                     reply_markup=kb,
                 )

@@ -9,7 +9,7 @@ from aiogram.filters import Filter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, Sticker
-from sqlalchemy import func, select, update
+from sqlalchemy import func, not_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config import settings
@@ -156,12 +156,20 @@ async def msg_stats_range_end(message: Message, state: FSMContext, session: Asyn
     )).scalar() or 0
     revenue = (await session.execute(
         select(func.sum(Transaction.amount)).where(
-            Transaction.type == TransactionType.DEBIT,
+            Transaction.type == TransactionType.CREDIT,
             Transaction.created_at.between(start, end),
+            not_(Transaction.description.contains("ادمین")),
+            not_(Transaction.description.contains("برگشت")),
         )
     )).scalar() or 0
     active_srv = (await session.execute(
         select(func.count(Server.id)).where(Server.status == ServerStatus.ACTIVE)
+    )).scalar() or 0
+    suspended_srv = (await session.execute(
+        select(func.count(Server.id)).where(Server.status == ServerStatus.SUSPENDED)
+    )).scalar() or 0
+    deleted_srv = (await session.execute(
+        select(func.count(Server.id)).where(Server.status == ServerStatus.DELETED)
     )).scalar() or 0
     total_wallet = (await session.execute(
         select(func.sum(User.balance)).where(User.status == UserStatus.ACTIVE)
@@ -174,7 +182,9 @@ async def msg_stats_range_end(message: Message, state: FSMContext, session: Asyn
         f"کاربر جدید: <b>{new_users}</b>\n\n"
         f"🖥 <b>سرور‌ها</b>\n"
         f"سرور جدید: <b>{new_servers}</b>\n"
-        f"سرور فعال: <b>{active_srv}</b>\n\n"
+        f"سرور فعال: <b>{active_srv}</b>\n"
+        f"سرور ساسپند: <b>{suspended_srv}</b>\n"
+        f"سرور حذف شده: <b>{deleted_srv}</b>\n\n"
         f"💰 <b>مالی</b>\n"
         f"درآمد: <b>{revenue:,.0f} تومان</b>\n"
         f"موجودی کیف‌پول‌ها: <b>{total_wallet:,.0f} تومان</b>",
@@ -193,8 +203,10 @@ async def _show_stats(cb: CallbackQuery, session: AsyncSession, start: datetime,
     )).scalar() or 0
     revenue = (await session.execute(
         select(func.sum(Transaction.amount)).where(
-            Transaction.type == TransactionType.DEBIT,
+            Transaction.type == TransactionType.CREDIT,
             Transaction.created_at.between(start, end),
+            not_(Transaction.description.contains("ادمین")),
+            not_(Transaction.description.contains("برگشت")),
         )
     )).scalar() or 0
     active_srv = (await session.execute(
@@ -202,6 +214,9 @@ async def _show_stats(cb: CallbackQuery, session: AsyncSession, start: datetime,
     )).scalar() or 0
     suspended_srv = (await session.execute(
         select(func.count(Server.id)).where(Server.status == ServerStatus.SUSPENDED)
+    )).scalar() or 0
+    deleted_srv = (await session.execute(
+        select(func.count(Server.id)).where(Server.status == ServerStatus.DELETED)
     )).scalar() or 0
     total_wallet = (await session.execute(
         select(func.sum(User.balance)).where(User.status == UserStatus.ACTIVE)
@@ -218,7 +233,8 @@ async def _show_stats(cb: CallbackQuery, session: AsyncSession, start: datetime,
         f"🖥 <b>سرور‌ها</b>\n"
         f"سرور جدید: <b>{new_servers}</b>\n"
         f"سرور فعال: <b>{active_srv}</b>\n"
-        f"سرور ساسپند: <b>{suspended_srv}</b>\n\n"
+        f"سرور ساسپند: <b>{suspended_srv}</b>\n"
+        f"سرور حذف شده: <b>{deleted_srv}</b>\n\n"
         f"💰 <b>مالی</b>\n"
         f"درآمد: <b>{revenue:,.0f} تومان</b>\n"
         f"موجودی کیف‌پول‌ها: <b>{total_wallet:,.0f} تومان</b>\n"
@@ -233,13 +249,8 @@ async def _show_stats(cb: CallbackQuery, session: AsyncSession, start: datetime,
 # ══════════════════════════════════════════════════════════════════════════════
 
 _SETTING_LABELS = {
-    "welcome_text": "متن خوش‌آمدگویی\n<i>متغیرها: {name}، {balance}</i>",
-    "welcome_sticker_id": "آیدی استیکر خوش‌آمدگویی\n<i>استیکر موردنظر را برای من ارسال کنید</i>",
-    "support_text": "متن پشتیبانی",
     "support_id": "آیدی تلگرام پشتیبان\n<i>مثال: @support_user</i>",
-    "website_url": "لینک سایت\n<i>مثال: https://example.ir</i>",
     "terms_text": "متن شرایط پذیرش (هنگام ثبت‌نام)\n<i>HTML مجاز است</i>",
-    "rules_text": "متن قوانین (دکمه منوی اصلی)\n<i>HTML مجاز است</i>",
 }
 
 

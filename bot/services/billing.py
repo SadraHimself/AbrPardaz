@@ -26,9 +26,21 @@ class BillingService:
 
     async def credit(self, user_id: int, amount: float, description: str = "",
                      reference_id: Optional[str] = None) -> Transaction:
-        await self.session.execute(
-            update(User).where(User.id == user_id).values(balance=User.balance + amount)
+        result = await self.session.execute(
+            select(User).where(User.id == user_id).with_for_update()
         )
+        user = result.scalar_one_or_none()
+        if user:
+            user.balance += amount
+            extra = dict(user.extra_data or {})
+            if "balance_empty_at" in extra or "balance_warn_level" in extra:
+                extra.pop("balance_empty_at", None)
+                extra.pop("balance_warn_level", None)
+                user.extra_data = extra
+        else:
+            await self.session.execute(
+                update(User).where(User.id == user_id).values(balance=User.balance + amount)
+            )
         tx = Transaction(
             user_id=user_id, amount=amount,
             type=TransactionType.CREDIT,

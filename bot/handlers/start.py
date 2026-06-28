@@ -287,7 +287,7 @@ async def _render_profile(target_msg, user: User, session: AsyncSession):
         f"احراز هویت: {kyc}\n\n"
         f'<tg-emoji emoji-id="5348263477943222701">📑</tg-emoji> سرور‌های فعال: <b>{active_count}</b>\n'
         f'<tg-emoji emoji-id="5258477770735885832">📄</tg-emoji> لیمیت سرور ساعتی: <b>{hourly_limit}</b>\n\n'
-        f"💰 موجودی کیف پول: <b>{user.balance:,.0f} تومان</b>"
+        f"موجودی کیف پول: <b>{user.balance:,.0f} تومان</b>"
     )
     await target_msg.edit_text(
         text,

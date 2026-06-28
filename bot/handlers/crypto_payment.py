@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import io
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from aiogram import F, Router
 from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
@@ -15,9 +15,16 @@ from bot.services.nowpayments import NOWPaymentsClient, NOWPaymentsError
 
 router = Router(name="crypto_payment")
 
-_USD_AMOUNTS = [5, 10, 20, 50, 100]
+_USD_AMOUNTS = [3, 10, 20, 50, 100]
+_AMOUNT_ICONS = {
+    3:   "5803336218099848042",
+    10:  "5800901723262293755",
+    20:  "5453902265922376865",
+    50:  "5447203607294265305",
+    100: "5440539497383087970",
+}
 _BACK_KB = InlineKeyboardMarkup(inline_keyboard=[[
-    InlineKeyboardButton(text="🔙 بازگشت", callback_data="wallet")
+    InlineKeyboardButton(text="بازگشت به کیف پول", callback_data="wallet", **{"icon_custom_emoji_id": "5933748020960038714"})
 ]])
 
 
@@ -27,11 +34,12 @@ async def _get_setting(session: AsyncSession, key: str) -> str | None:
 
 
 def _amount_kb() -> InlineKeyboardMarkup:
+    # largest amount at top, smallest at bottom
     rows = [
-        [InlineKeyboardButton(text=f"💵 {a}$", callback_data=f"np_amount:{a}")]
-        for a in _USD_AMOUNTS
+        [InlineKeyboardButton(text=f"{a}$", callback_data=f"np_amount:{a}", **{"icon_custom_emoji_id": _AMOUNT_ICONS[a]})]
+        for a in reversed(_USD_AMOUNTS)
     ]
-    rows.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data="wallet")])
+    rows.append([InlineKeyboardButton(text="بازگشت", callback_data="wallet", **{"icon_custom_emoji_id": "5933748020960038714"})])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -55,11 +63,10 @@ async def cb_crypto_pay(cb: CallbackQuery, session: AsyncSession):
     rate_str = await _get_setting(session, "np_usd_to_irt_rate") or "60000"
     rate = float(rate_str)
 
-    lines = ["💎 <b>شارژ کیف پول با کریپتو</b>\n",
-             "مبلغ دلاری را انتخاب کنید:\n"]
-    for a in _USD_AMOUNTS:
-        lines.append(f"• {a}$  ≈  {a * rate:,.0f} تومان")
-
+    lines = [
+        '<tg-emoji emoji-id="5769403330761593044">👛</tg-emoji> <b>شارژ کیف پول با کریپتو</b>\n',
+        "مبلغ دلاری را انتخاب کنید:",
+    ]
     await cb.message.edit_text("\n".join(lines), parse_mode="HTML", reply_markup=_amount_kb())
     await cb.answer()
 
@@ -103,17 +110,7 @@ async def cb_np_amount(cb: CallbackQuery, user: User, session: AsyncSession):
     pay_amount = float(payment.get("pay_amount") or 0)
     pay_currency = (payment.get("pay_currency") or settings.NP_OUTCOME_CURRENCY).upper()
     payment_id = str(payment.get("payment_id", ""))
-    expiry_str = payment.get("expiration_estimate_date", "")
-
-    expiry_dt = None
-    expiry_text = "⏳ آدرس ۶۰ دقیقه اعتبار دارد."
-    if expiry_str:
-        try:
-            expiry_dt = datetime.fromisoformat(expiry_str.replace("Z", "+00:00"))
-            remaining = int((expiry_dt - datetime.now(timezone.utc)).total_seconds() / 60)
-            expiry_text = f"⏳ آدرس تا <b>{remaining} دقیقه</b> دیگر معتبر است."
-        except Exception:
-            pass
+    expiry_dt = datetime.now(timezone.utc) + timedelta(minutes=10)
 
     cp = CryptoPayment(
         user_id=user.id,
@@ -133,21 +130,22 @@ async def cb_np_amount(cb: CallbackQuery, user: User, session: AsyncSession):
     await session.flush()
 
     caption = (
-        f"💎 <b>آدرس واریز کریپتو</b>\n\n"
-        f"💵 مبلغ: <b>{amount_usd}$</b>\n"
-        f"💰 معادل: <b>{amount_irt:,.0f} تومان</b>\n\n"
-        f"⛓ شبکه: <b>TRON (TRC20)</b>\n\n"
-        f"💸 مبلغ دقیق:\n"
+        f"<b>آدرس واریز کریپتو</b>\n\n"
+        f"مبلغ: <b>{amount_usd}$</b>\n"
+        f"معادل: <b>{amount_irt:,.0f} تومان</b>\n\n"
+        f"شبکه: <b>TRON (TRC20)</b>\n\n"
+        f"مبلغ دقیق:\n"
         f"<code>{pay_amount} {pay_currency}</code>\n\n"
-        f"📬 آدرس واریز:\n"
+        f"آدرس واریز:\n"
         f"<code>{pay_address}</code>\n\n"
-        f"{expiry_text}\n\n"
+        f"شماره فاکتور: <code>{payment_id}</code>\n\n"
+        f"⏳ تا 10 دقیقه معتبره.\n\n"
         f"⚠️ <b>دقیقاً همین مبلغ را ارسال کنید.</b>\n"
         f"پس از تأیید شبکه، موجودی به‌صورت خودکار شارژ می‌شود."
     )
 
     back_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 بازگشت به کیف پول", callback_data="wallet")]
+        [InlineKeyboardButton(text="بازگشت به کیف پول", callback_data="wallet", **{"icon_custom_emoji_id": "5933748020960038714"})]
     ])
 
     try:

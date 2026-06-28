@@ -7,11 +7,13 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.database.models import BillingType, Server, ServerStatus
 
 
-def _btn(text: str, cbd: str, style: str | None = None) -> InlineKeyboardButton:
-    """Create an InlineKeyboardButton with optional Telegram style (success/danger/primary)."""
+def _btn(text: str, cbd: str, style: str | None = None, icon: str | None = None) -> InlineKeyboardButton:
+    kwargs: dict = {}
     if style:
-        return InlineKeyboardButton(text=text, callback_data=cbd, **{"style": style})
-    return InlineKeyboardButton(text=text, callback_data=cbd)
+        kwargs["style"] = style
+    if icon:
+        kwargs["icon_custom_emoji_id"] = icon
+    return InlineKeyboardButton(text=text, callback_data=cbd, **kwargs)
 
 
 def status_dot(server: Server) -> str:
@@ -47,39 +49,38 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
 
     if server.status == ServerStatus.ACTIVE:
-        # Always show both power buttons — start (green) and stop (red)
         rows.append([
-            _btn("▶️ روشن", f"srv_action:{sid}:start", "success"),
-            _btn("⏹ خاموش", f"srv_action:{sid}:stop", "danger"),
+            _btn("روشن", f"srv_action:{sid}:start", "success", "5913241115489734452"),
+            _btn("خاموش", f"srv_action:{sid}:stop", "danger", "5915991999093149658"),
         ])
         rows.append([
-            _btn("🔄 ریبوت", f"srv_action:{sid}:restart_confirm", "primary"),
-            _btn("🔁 ریبیلد", f"srv_action:{sid}:rebuild_menu", "primary"),
+            _btn("ریبوت", f"srv_action:{sid}:restart_confirm", "primary", "5346320297299560938"),
+            _btn("ریبیلد", f"srv_action:{sid}:rebuild_menu", "primary", "5346269127059196142"),
         ])
         rows.append([
-            _btn("🌐 تغییر IP", f"srv_changeip:{sid}"),
-            _btn("🔑 تغییر رمز", f"srv_chpass:{sid}"),
+            _btn("تغییر IP", f"srv_changeip:{sid}", icon="6030867032637967807"),
+            _btn("تغییر رمز", f"srv_chpass:{sid}", icon="4904500559203009298"),
         ])
         if is_hourly:
-            rows.append([_btn("🗑 حذف سرور", f"srv_action:{sid}:delete_confirm", "danger")])
+            rows.append([_btn("حذف سرور", f"srv_action:{sid}:delete_confirm", "danger", "5258130763148172425")])
 
     elif server.status == ServerStatus.SUSPENDED:
         rows.append([
-            _btn("▶️ فعال‌سازی", f"srv_action:{sid}:unsuspend", "success"),
+            _btn("فعال‌سازی", f"srv_action:{sid}:unsuspend", "success", "5913241115489734452"),
         ])
         if is_hourly:
-            rows[-1].append(_btn("🗑 حذف سرور", f"srv_action:{sid}:delete_confirm", "danger"))
+            rows[-1].append(_btn("حذف سرور", f"srv_action:{sid}:delete_confirm", "danger", "5258130763148172425"))
 
     elif server.status != ServerStatus.DELETED:
         rows.append([
-            _btn("▶️ روشن کردن", f"srv_action:{sid}:start", "success"),
-            _btn("🔁 ریبیلد", f"srv_action:{sid}:rebuild_menu", "primary"),
+            _btn("روشن کردن", f"srv_action:{sid}:start", "success", "5913241115489734452"),
+            _btn("ریبیلد", f"srv_action:{sid}:rebuild_menu", "primary", "5346269127059196142"),
         ])
         rows.append([_btn("🔄 بررسی وضعیت", f"srv_refresh:{sid}")])
         if is_hourly:
-            rows[-1].append(_btn("🗑 حذف سرور", f"srv_action:{sid}:delete_confirm", "danger"))
+            rows[-1].append(_btn("حذف سرور", f"srv_action:{sid}:delete_confirm", "danger", "5258130763148172425"))
 
-    rows.append([_btn("🔙 بازگشت به لیست", "my_servers")])
+    rows.append([_btn("بازگشت به لیست", "my_servers", icon="5258236805890710909")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

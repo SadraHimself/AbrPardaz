@@ -251,14 +251,9 @@ async def msg_support(message: Message, session: AsyncSession):
 
 async def _build_welcome_text(user: User, session: AsyncSession) -> str:
     name = user.first_name or "کاربر"
-    verify_status = "✅ تأیید شده" if user.is_phone_verified else "⚠️ تأیید نشده"
     return (
-        f'<tg-emoji emoji-id="5472055112702629499">👋</tg-emoji> سلام {name} عزیز!\n\n'
-        f"به ربات <b>Abr Pardaz</b> خوش آمدید.\n"
-        f"با این ربات می‌توانید سرور مجازی ایران و خارج را به صورت ساعتی یا ماهیانه تهیه و مدیریت کنید.\n\n"
-        f"📱 وضعیت احراز هویت: {verify_status}\n"
-        f"💰 موجودی: {user.balance:,.0f} تومان\n\n"
-        "از منوی زیر استفاده کنید:"
+        f'سلام {name} عزیز! <tg-emoji emoji-id="5472055112702629499">👋</tg-emoji>\n\n'
+        "به ربات ابر پرداز خوش اومدی، از منوی زیر استفاده کن:"
     )
 
 

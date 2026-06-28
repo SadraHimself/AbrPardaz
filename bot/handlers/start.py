@@ -222,15 +222,12 @@ async def cb_cancel(cb: CallbackQuery, user: User, session: AsyncSession, state=
 
 
 async def _render_support(target_msg, session: AsyncSession):
-    support_text = (
-        "🆘 <b>پشتیبانی</b>\n\n"
-        "برای ارتباط با پشتیبانی از طریق تلگرام اقدام کنید."
-    )
+    support_text = "برای ارتباط با پشتیبانی میتونید با ایدی زیر در ارتباط باشید @AskAfagh"
     support_id = await _get_setting_opt(session, "support_id")
     buttons = []
     if support_id:
         buttons.append([InlineKeyboardButton(text="💬 پشتیبانی", url=f"https://t.me/{support_id.lstrip('@')}")])
-    buttons.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data="main_menu")])
+    buttons.append([InlineKeyboardButton(text="بازگشت", callback_data="main_menu", **{"icon_custom_emoji_id": "5933748020960038714"})])
     await target_msg.edit_text(support_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 
@@ -284,21 +281,21 @@ async def _render_profile(target_msg, user: User, session: AsyncSession):
     phone = user.phone_number or "ثبت نشده"
     kyc = "✅ تأیید شده" if user.is_kyc_verified else "❌ تأیید نشده"
     text = (
-        f"👤 <b>{name}</b>\n\n"
+        f'<tg-emoji emoji-id="6030393645637570247">👤</tg-emoji> <b>{name}</b>\n\n'
         f"آیدی عددی: <code>{user.telegram_id}</code>\n"
         f"شماره تلفن: <code>{phone}</code>\n"
         f"احراز هویت: {kyc}\n\n"
-        f"🖥 سرور‌های فعال: <b>{active_count}</b>\n"
-        f"🔢 لیمیت سرور ساعتی: <b>{hourly_limit}</b>\n\n"
+        f'<tg-emoji emoji-id="5348263477943222701">📑</tg-emoji> سرور‌های فعال: <b>{active_count}</b>\n'
+        f'<tg-emoji emoji-id="5258477770735885832">📄</tg-emoji> لیمیت سرور ساعتی: <b>{hourly_limit}</b>\n\n'
         f"💰 موجودی کیف پول: <b>{user.balance:,.0f} تومان</b>"
     )
     await target_msg.edit_text(
         text,
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💰 شارژ کیف پول", callback_data="wallet")],
-            [InlineKeyboardButton(text="📜 تاریخچه تراکنش‌ها", callback_data="tx_history")],
-            [InlineKeyboardButton(text="🔙 بازگشت", callback_data="main_menu")],
+            [InlineKeyboardButton(text="شارژ کیف پول", callback_data="wallet", **{"icon_custom_emoji_id": "5987880246865565644"})],
+            [InlineKeyboardButton(text="تاریخچه تراکنش‌ها", callback_data="tx_history", **{"icon_custom_emoji_id": "5956561916573782596"})],
+            [InlineKeyboardButton(text="بازگشت", callback_data="main_menu", **{"icon_custom_emoji_id": "5933748020960038714"})],
         ]),
     )
 

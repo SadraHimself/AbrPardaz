@@ -16,7 +16,6 @@ def admin_menu_kb() -> InlineKeyboardMarkup:
     builder.button(text="⚙️ تنظیمات ربات", callback_data="admin:settings")
     builder.button(text="💰 مالی", callback_data="admin:finance")
     builder.button(text="📋 تاپیک اطلاعات", callback_data="admin:log_group")
-    builder.button(text="💎 NOWPayments", callback_data="admin:np")
     builder.button(text="🔙 بازگشت", callback_data="main_menu")
     builder.adjust(2)
     return builder.as_markup()
@@ -195,13 +194,8 @@ def stats_kb() -> InlineKeyboardMarkup:
 
 def settings_menu_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="📝 متن خوش‌آمدگویی", callback_data="admin:setting:welcome_text")
-    builder.button(text="🖼 استیکر خوش‌آمدگویی", callback_data="admin:setting:welcome_sticker_id")
-    builder.button(text="🆘 متن پشتیبانی", callback_data="admin:setting:support_text")
     builder.button(text="📌 آیدی پشتیبان", callback_data="admin:setting:support_id")
-    builder.button(text="🌐 لینک سایت", callback_data="admin:setting:website_url")
     builder.button(text="📋 شرایط پذیرش", callback_data="admin:setting:terms_text")
-    builder.button(text="📃 قوانین منو", callback_data="admin:setting:rules_text")
     builder.button(text="📢 کانال‌های اجباری", callback_data="admin:channels")
     builder.button(text="🔙 بازگشت", callback_data="admin_panel")
     builder.adjust(2)
@@ -224,6 +218,7 @@ def finance_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="💰 شارژ همه کاربران", callback_data="admin:finance_bulk_credit")
     builder.button(text="📈 تغییر قیمت محصولات", callback_data="admin:finance_price_adj")
+    builder.button(text="💎 NOWPayments", callback_data="admin:np")
     builder.button(text="🔙 بازگشت", callback_data="admin_panel")
     builder.adjust(1)
     return builder.as_markup()
@@ -350,7 +345,7 @@ def np_gateway_kb() -> InlineKeyboardMarkup:
     builder.button(text="🔌 تست اتصال", callback_data="admin:np_test")
     builder.button(text="💱 تنظیم نرخ $/T", callback_data="admin:np_rate")
     builder.button(text="🌐 تنظیم Webhook URL", callback_data="admin:np_wh")
-    builder.button(text="🔙 بازگشت", callback_data="admin_panel")
+    builder.button(text="🔙 بازگشت", callback_data="admin:finance")
     builder.adjust(2)
     return builder.as_markup()
 

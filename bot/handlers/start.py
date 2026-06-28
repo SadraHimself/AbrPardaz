@@ -222,20 +222,14 @@ async def cb_cancel(cb: CallbackQuery, user: User, session: AsyncSession, state=
 
 
 async def _render_support(target_msg, session: AsyncSession):
-    support_text = await _get_setting(
-        session, "support_text",
-        default=(
-            "🆘 <b>پشتیبانی</b>\n\n"
-            "برای ارتباط با پشتیبانی از طریق تلگرام اقدام کنید."
-        ),
+    support_text = (
+        "🆘 <b>پشتیبانی</b>\n\n"
+        "برای ارتباط با پشتیبانی از طریق تلگرام اقدام کنید."
     )
     support_id = await _get_setting_opt(session, "support_id")
-    website = await _get_setting_opt(session, "website_url")
     buttons = []
     if support_id:
         buttons.append([InlineKeyboardButton(text="💬 پشتیبانی", url=f"https://t.me/{support_id.lstrip('@')}")])
-    if website:
-        buttons.append([InlineKeyboardButton(text="🌐 وبسایت", url=website)])
     buttons.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data="main_menu")])
     await target_msg.edit_text(support_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
@@ -258,18 +252,8 @@ async def msg_support(message: Message, session: AsyncSession):
 async def _build_welcome_text(user: User, session: AsyncSession) -> str:
     name = user.first_name or "کاربر"
     verify_status = "✅ تأیید شده" if user.is_phone_verified else "⚠️ تأیید نشده"
-
-    custom_text = await _get_setting_opt(session, "welcome_text")
-    if custom_text:
-        return (
-            custom_text
-            .replace("{name}", name)
-            .replace("{balance}", f"{user.balance:,.0f}")
-            .replace("{status}", verify_status)
-        )
-
     return (
-        f"سلام {name} عزیز! 👋\n\n"
+        f'<tg-emoji emoji-id="5472055112702629499">👋</tg-emoji> سلام {name} عزیز!\n\n'
         f"به ربات <b>Abr Pardaz</b> خوش آمدید.\n"
         f"با این ربات می‌توانید سرور مجازی ایران و خارج را به صورت ساعتی یا ماهیانه تهیه و مدیریت کنید.\n\n"
         f"📱 وضعیت احراز هویت: {verify_status}\n"
@@ -281,17 +265,8 @@ async def _build_welcome_text(user: User, session: AsyncSession) -> str:
 async def _send_welcome(msg: Message, user: User, session: AsyncSession,
                         is_cb: bool = False, bot=None, chat_id: int = None):
     welcome_text = await _build_welcome_text(user, session)
-    sticker_id = await _get_setting_opt(session, "welcome_sticker_id")
-
     target_chat = chat_id or msg.chat.id
     target_bot = bot or msg.bot
-
-    if sticker_id:
-        try:
-            await target_bot.send_sticker(target_chat, sticker_id)
-        except Exception:
-            pass
-
     await target_bot.send_message(
         target_chat,
         welcome_text,
@@ -347,14 +322,11 @@ async def msg_user_profile(message: Message, user: User, session: AsyncSession):
 
 
 async def _render_rules(target_msg, session: AsyncSession):
-    rules_text = await _get_setting(
-        session, "rules_text",
-        default=(
-            "📃 <b>قوانین استفاده از سرویس</b>\n\n"
-            "• استفاده از سرویس برای فعالیت‌های غیرقانونی ممنوع است.\n"
-            "• ربات هر زمان می‌تواند سرویس را مطابق قوانین تعلیق کند.\n"
-            "• با استفاده از سرویس، موافقت خود را با این قوانین اعلام می‌کنید."
-        ),
+    rules_text = (
+        "📃 <b>قوانین استفاده از سرویس</b>\n\n"
+        "• استفاده از سرویس برای فعالیت‌های غیرقانونی ممنوع است.\n"
+        "• ربات هر زمان می‌تواند سرویس را مطابق قوانین تعلیق کند.\n"
+        "• با استفاده از سرویس، موافقت خود را با این قوانین اعلام می‌کنید."
     )
     await target_msg.edit_text(
         rules_text,

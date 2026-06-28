@@ -197,11 +197,11 @@ async def _render_tx_page(target_msg, user: User, session: AsyncSession, page: i
     buttons.append([
         InlineKeyboardButton(text="📄 فاکتور XML", callback_data="invoice_xml", **{"style": "primary"}),
     ])
-    buttons.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data="user_profile")])
+    buttons.append([InlineKeyboardButton(text="بازگشت", callback_data="user_profile", **{"icon_custom_emoji_id": "5933748020960038714"})])
 
     await target_msg.edit_text(
-        f"📜 <b>تاریخچه تراکنش‌ها</b>  {page + 1}/{total_pages}\n\n"
-        f"<i>⚠️ تراکنش‌ها هر {_CLEANUP_HOURS} ساعت پاک می‌شوند.</i>",
+        f"<b>تاریخچه تراکنش‌ها</b>  {page + 1}/{total_pages}\n\n"
+        f'<i><tg-emoji emoji-id="6008233706039284019">⚠️</tg-emoji> تراکنش‌ها هر {_CLEANUP_HOURS} ساعت پاک می‌شوند.</i>',
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
     )

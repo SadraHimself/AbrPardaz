@@ -145,7 +145,7 @@ async def cb_np_amount(cb: CallbackQuery, user: User, session: AsyncSession):
     )
 
     back_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="بازگشت به کیف پول", callback_data="wallet", **{"icon_custom_emoji_id": "5933748020960038714"})]
+        [InlineKeyboardButton(text="بازگشت به منو", callback_data=f"np_cancel:{cp.id}", **{"icon_custom_emoji_id": "5933748020960038714"})]
     ])
 
     try:
@@ -161,3 +161,27 @@ async def cb_np_amount(cb: CallbackQuery, user: User, session: AsyncSession):
     except Exception:
         # fallback: show as text if QR generation fails
         await cb.message.edit_text(caption, parse_mode="HTML", reply_markup=back_kb)
+
+
+@router.callback_query(F.data.startswith("np_cancel:"))
+async def cb_np_cancel(cb: CallbackQuery, user: User, session: AsyncSession):
+    cp_id = int(cb.data.split(":")[1])
+    cp = await session.get(CryptoPayment, cp_id)
+
+    invoice_ref = None
+    if cp and cp.user_id == user.id and not cp.activated and cp.status not in ("finished", "expired", "cancelled"):
+        invoice_ref = cp.payment_id or cp.order_id
+        cp.status = "cancelled"
+        await session.flush()
+
+    await cb.answer()
+    try:
+        await cb.message.delete()
+    except Exception:
+        pass
+
+    if invoice_ref:
+        await cb.message.answer(
+            f'<tg-emoji emoji-id="6026320431798030131">❌</tg-emoji> فاکتور <code>{invoice_ref}</code> نیز کنسل شد',
+            parse_mode="HTML",
+        )

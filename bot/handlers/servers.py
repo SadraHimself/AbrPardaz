@@ -105,7 +105,7 @@ async def cb_server_detail(cb: CallbackQuery, user: User, session: AsyncSession)
     is_running = str(extra_data.get("machine_status", "1")) == "1"
 
     if server.status == ServerStatus.ACTIVE and not is_running:
-        status_label = "⚫ خاموش"
+        status_label = "🔴 خاموش"
     else:
         status_label = {
             ServerStatus.ACTIVE: "🟢 فعال",
@@ -243,9 +243,22 @@ async def cb_server_action(cb: CallbackQuery, user: User, session: AsyncSession)
         ok = await svc.perform_action(server, action, **kwargs)
         label = labels.get(action, action)
         if ok:
-            msg = f"✅ {label} با موفقیت انجام شد."
-            if action == "change_ip":
+            if action == "start":
+                msg = '<tg-emoji emoji-id="5895403643863043222">🫥</tg-emoji> سرور با موفقیت روشن شد.'
+                _extra = dict(server.extra_data or {})
+                _extra["machine_status"] = "1"
+                server.extra_data = _extra
+                await session.flush()
+            elif action == "stop":
+                msg = '<tg-emoji emoji-id="5927031220390072917">🔴</tg-emoji> سرور با موفقیت خاموش شد.'
+                _extra = dict(server.extra_data or {})
+                _extra["machine_status"] = "0"
+                server.extra_data = _extra
+                await session.flush()
+            elif action == "change_ip":
                 msg = f"✅ IP جدید: <code>{server.ip_address}</code>"
+            else:
+                msg = f"✅ {label} با موفقیت انجام شد."
             await cb.message.answer(msg, parse_mode="HTML")
             await LogService(cb.bot, session).log_server_action(user, server, action)
         else:

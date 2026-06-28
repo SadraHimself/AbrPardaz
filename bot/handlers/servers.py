@@ -59,7 +59,7 @@ async def _show_server_list(target_msg, user: User, session: AsyncSession):
         )
     else:
         await target_msg.edit_text(
-            f"🖥 <b>سرور‌های شما</b> ({len(servers)} سرور):",
+            f'<tg-emoji emoji-id="5345837435601305335">◼</tg-emoji> <b>سرور‌های شما</b> ({len(servers)} سرور):',
             parse_mode="HTML",
             reply_markup=server_list_kb(servers),
         )
@@ -120,23 +120,21 @@ async def cb_server_detail(cb: CallbackQuery, user: User, session: AsyncSession)
     traffic_text = ""
     if server.traffic_limit_gb:
         pct = int(server.traffic_used_gb / server.traffic_limit_gb * 100)
-        traffic_text = f"\n📊 ترافیک: {server.traffic_used_gb:.1f}/{server.traffic_limit_gb:.0f} GB ({pct}%)"
+        traffic_text = f"\n• ترافیک: {server.traffic_used_gb:.1f}/{server.traffic_limit_gb:.0f} GB ({pct}%)"
 
     billing_label = "ساعتی" if server.billing_type == BillingType.HOURLY else "ماهیانه"
     price = server.price_hourly if server.billing_type == BillingType.HOURLY else server.price_monthly
     price_unit = "تومان/ساعت" if server.billing_type == BillingType.HOURLY else "تومان/ماه"
 
-    hostname = server.hostname or server.name
     await cb.message.edit_text(
-        f"💻 <b>نام سرور:</b> {server.name}\n"
-        f"🖥 هاست: <code>{hostname}</code>\n\n"
-        f"🌐 آیپی: <code>{server.ip_address or 'در حال تخصیص'}</code>\n"
-        f"📍 موقعیت: {server.location or 'نامشخص'}\n"
-        f"⚡ وضعیت: {status_label}\n\n"
-        f"💾 رم: {server.ram} MB | پردازنده: {server.cpu} | دیسک: {server.disk} GB"
+        f'<tg-emoji emoji-id="5348332751470739727">📃</tg-emoji> <b>نام سرور:</b> {server.name}\n\n'
+        f"آیپی: <code>{server.ip_address or 'در حال تخصیص'}</code>\n"
+        f"موقعیت: {server.location or 'نامشخص'}\n"
+        f"وضعیت: {status_label}\n\n"
+        f"• رم: {server.ram} MB | پردازنده: {server.cpu} | دیسک: {server.disk} GB"
         f"{traffic_text}\n"
-        f"💳 {billing_label} — {price:,.0f} {price_unit}\n"
-        f"🕐 ساخته شده: {server.created_at.strftime('%Y/%m/%d')}",
+        f"• {billing_label} — {price:,.0f} {price_unit}\n"
+        f"• ساخته شده: {server.created_at.strftime('%Y/%m/%d')}",
         parse_mode="HTML",
         reply_markup=server_actions_kb(server),
     )

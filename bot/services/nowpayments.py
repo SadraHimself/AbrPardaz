@@ -1,9 +1,13 @@
 """NOWPayments API client."""
 from __future__ import annotations
 
+import logging
+
 import aiohttp
 
 from bot.config import settings
+
+logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://api.nowpayments.io/v1"
 
@@ -80,14 +84,16 @@ class NOWPaymentsClient:
         ipn_callback_url: str,
         pay_currency: str | None = None,
     ) -> dict:
-        return await self._post("/payment", {
+        payload = {
             "price_amount": amount_usd,
             "price_currency": settings.NP_PRICE_CURRENCY,
             "pay_currency": pay_currency or settings.NP_OUTCOME_CURRENCY,
             "order_id": order_id,
             "order_description": description,
             "ipn_callback_url": ipn_callback_url,
-        })
+        }
+        logger.info("create_payment: order=%s ipn_callback_url=%r pay_currency=%s", order_id, ipn_callback_url, payload["pay_currency"])
+        return await self._post("/payment", payload)
 
     async def get_payment_status(self, payment_id: str) -> dict:
         return await self._get(f"/payment/{payment_id}")

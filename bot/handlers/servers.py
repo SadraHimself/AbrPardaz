@@ -54,7 +54,7 @@ async def _show_server_list(target_msg, user: User, session: AsyncSession):
     servers = await svc.get_user_servers(user.id)
     if not servers:
         await target_msg.edit_text(
-            "📭 شما هیچ سروری ندارید.\nبرای خرید از منوی زیر استفاده کنید:",
+            "شما هیچ سروری ندارید.\nبرای خرید از منوی زیر استفاده کنید:",
             reply_markup=server_list_kb([]),
         )
     else:

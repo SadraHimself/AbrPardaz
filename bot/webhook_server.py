@@ -57,6 +57,7 @@ def _verify_hmac(raw_body: bytes, received_sig: str) -> bool:
 async def _handle_ipn(request: web.Request) -> web.Response:
     raw_body = await request.read()
     sig = request.headers.get("x-nowpayments-sig", "")
+    logger.info("IPN POST received from %s body_len=%d has_sig=%s", request.remote, len(raw_body), bool(sig))
 
     if not _verify_hmac(raw_body, sig):
         logger.warning("IPN rejected from %s", request.remote)

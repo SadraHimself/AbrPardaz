@@ -65,9 +65,9 @@ _CURRENCY_ICONS: dict[str, str] = {
     "ltc":       "5829979991886011025",
     "ton":       "5832365227743646230",
     "trx":       "5832692572971077565",
-    "usdtbsc":   "5023816584636924741",
+    "usdtbsc":   "5458525793921546124",
     "usdtton":   "5188672371648634636",
-    "usdttrc20": "5188672371648634636",
+    "usdttrc20": "5397915949879801627",
 }
 
 # Network display name per currency code (shown on address page)

@@ -58,6 +58,18 @@ _CURRENCY_PRIORITY = [
     "usdcerc20", "usdcbsc", "usdtpolygon", "usdcpolygon",
 ]
 
+# icon_custom_emoji_id per currency (only one ID allowed per button)
+_CURRENCY_ICONS: dict[str, str] = {
+    "bnbbsc":    "5152587319148020582",
+    "btc":       "5829938927703691622",
+    "ltc":       "5829979991886011025",
+    "ton":       "5832365227743646230",
+    "trx":       "5832692572971077565",
+    "usdtbsc":   "5023816584636924741",
+    "usdtton":   "5188672371648634636",
+    "usdttrc20": "5188672371648634636",
+}
+
 # Network display name per currency code (shown on address page)
 _NETWORK_DISPLAY: dict[str, str] = {
     "btc": "Bitcoin",
@@ -100,13 +112,17 @@ def _amount_kb() -> InlineKeyboardMarkup:
 def _currency_kb(amount_usd: int, coins: list[str]) -> InlineKeyboardMarkup:
     priority_map = {c: i for i, c in enumerate(_CURRENCY_PRIORITY)}
     sorted_coins = sorted(coins, key=lambda c: (priority_map.get(c, 999), c))
-    rows = [
-        [InlineKeyboardButton(
+    rows = []
+    for c in sorted_coins:
+        kwargs: dict = {}
+        icon = _CURRENCY_ICONS.get(c)
+        if icon:
+            kwargs["icon_custom_emoji_id"] = icon
+        rows.append([InlineKeyboardButton(
             text=_CURRENCY_NAMES.get(c, c.upper()),
             callback_data=f"np_cur:{amount_usd}:{c}",
-        )]
-        for c in sorted_coins
-    ]
+            **kwargs,
+        )])
     rows.append([InlineKeyboardButton(
         text="بازگشت",
         callback_data="crypto_pay",
@@ -147,7 +163,7 @@ async def cb_np_amount(cb: CallbackQuery, session: AsyncSession):
 
     client = NOWPaymentsClient()
     try:
-        coins = await client.get_merchant_coins()
+        coins = [c.lower() for c in await client.get_merchant_coins()]
     except Exception:
         coins = []
 

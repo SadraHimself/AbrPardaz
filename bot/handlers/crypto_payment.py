@@ -109,20 +109,47 @@ def _amount_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+_CURRENCY_PAIRS = [
+    ("usdttrc20", "trx"),
+    ("usdtton",   "ton"),
+    ("usdtbsc",   "bnbbsc"),
+    ("ltc",       "btc"),
+]
+
+
+def _btn(coin: str, amount_usd: int) -> InlineKeyboardButton:
+    kwargs: dict = {}
+    icon = _CURRENCY_ICONS.get(coin)
+    if icon:
+        kwargs["icon_custom_emoji_id"] = icon
+    return InlineKeyboardButton(
+        text=_CURRENCY_NAMES.get(coin, coin.upper()),
+        callback_data=f"np_cur:{amount_usd}:{coin}",
+        **kwargs,
+    )
+
+
 def _currency_kb(amount_usd: int, coins: list[str]) -> InlineKeyboardMarkup:
-    priority_map = {c: i for i, c in enumerate(_CURRENCY_PRIORITY)}
-    sorted_coins = sorted(coins, key=lambda c: (priority_map.get(c, 999), c))
+    coins_set = set(coins)
+    used: set[str] = set()
     rows = []
-    for c in sorted_coins:
-        kwargs: dict = {}
-        icon = _CURRENCY_ICONS.get(c)
-        if icon:
-            kwargs["icon_custom_emoji_id"] = icon
-        rows.append([InlineKeyboardButton(
-            text=_CURRENCY_NAMES.get(c, c.upper()),
-            callback_data=f"np_cur:{amount_usd}:{c}",
-            **kwargs,
-        )])
+
+    for left, right in _CURRENCY_PAIRS:
+        row = []
+        if left in coins_set:
+            row.append(_btn(left, amount_usd))
+            used.add(left)
+        if right in coins_set:
+            row.append(_btn(right, amount_usd))
+            used.add(right)
+        if row:
+            rows.append(row)
+
+    # هر ارز اضافه‌ای که تو جفت‌ها نبود، تک‌تک پایین اضافه می‌شه
+    for coin in coins:
+        if coin not in used:
+            rows.append([_btn(coin, amount_usd)])
+
     rows.append([InlineKeyboardButton(
         text="بازگشت",
         callback_data="crypto_pay",

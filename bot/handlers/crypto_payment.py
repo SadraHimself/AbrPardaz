@@ -27,6 +27,61 @@ _BACK_KB = InlineKeyboardMarkup(inline_keyboard=[[
     InlineKeyboardButton(text="بازگشت به کیف پول", callback_data="wallet", **{"icon_custom_emoji_id": "5933748020960038714"})
 ]])
 
+# Display names for NOWPayments currency codes
+_CURRENCY_NAMES: dict[str, str] = {
+    "btc": "BTC",
+    "eth": "ETH",
+    "ltc": "LTC",
+    "trx": "TRX",
+    "ton": "TON",
+    "bnbbsc": "BNB (BSC)",
+    "usdttrc20": "USDT (TRC20)",
+    "usdterc20": "USDT (ETH)",
+    "usdtton": "USDT (TON)",
+    "usdcbsc": "USDC (BSC)",
+    "usdcerc20": "USDC (ETH)",
+    "usdtbsc": "USDT (BSC)",
+    "usdtpolygon": "USDT (Polygon)",
+    "usdcpolygon": "USDC (Polygon)",
+    "usdtsolana": "USDT (Solana)",
+    "usdcsolana": "USDC (Solana)",
+    "usdcarbitrum": "USDC (Arbitrum)",
+    "usdtarbitrum": "USDT (Arbitrum)",
+    "usdtop": "USDT (Optimism)",
+    "usdcop": "USDC (Optimism)",
+}
+
+# Sort priority for currency list (most common first)
+_CURRENCY_PRIORITY = [
+    "usdttrc20", "usdtton", "usdterc20", "usdtbsc",
+    "trx", "ton", "btc", "eth", "ltc", "bnbbsc",
+    "usdcerc20", "usdcbsc", "usdtpolygon", "usdcpolygon",
+]
+
+# Network display name per currency code (shown on address page)
+_NETWORK_DISPLAY: dict[str, str] = {
+    "btc": "Bitcoin",
+    "eth": "Ethereum (ERC20)",
+    "ltc": "Litecoin",
+    "trx": "TRON (TRC20)",
+    "ton": "TON",
+    "bnbbsc": "BNB Smart Chain (BSC)",
+    "usdttrc20": "TRON (TRC20)",
+    "usdterc20": "Ethereum (ERC20)",
+    "usdtton": "TON",
+    "usdcbsc": "BNB Smart Chain (BSC)",
+    "usdcerc20": "Ethereum (ERC20)",
+    "usdtbsc": "BNB Smart Chain (BSC)",
+    "usdtpolygon": "Polygon",
+    "usdcpolygon": "Polygon",
+    "usdtsolana": "Solana",
+    "usdcsolana": "Solana",
+    "usdtarbitrum": "Arbitrum",
+    "usdcarbitrum": "Arbitrum",
+    "usdtop": "Optimism",
+    "usdcop": "Optimism",
+}
+
 
 async def _get_setting(session: AsyncSession, key: str) -> str | None:
     row = await session.get(BotSettings, key)
@@ -34,7 +89,6 @@ async def _get_setting(session: AsyncSession, key: str) -> str | None:
 
 
 def _amount_kb() -> InlineKeyboardMarkup:
-    # largest amount at top, smallest at bottom
     rows = [
         [InlineKeyboardButton(text=f"{a}$", callback_data=f"np_amount:{a}", **{"icon_custom_emoji_id": _AMOUNT_ICONS[a]})]
         for a in reversed(_USD_AMOUNTS)
@@ -43,8 +97,26 @@ def _amount_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _currency_kb(amount_usd: int, coins: list[str]) -> InlineKeyboardMarkup:
+    priority_map = {c: i for i, c in enumerate(_CURRENCY_PRIORITY)}
+    sorted_coins = sorted(coins, key=lambda c: (priority_map.get(c, 999), c))
+    rows = [
+        [InlineKeyboardButton(
+            text=_CURRENCY_NAMES.get(c, c.upper()),
+            callback_data=f"np_cur:{amount_usd}:{c}",
+        )]
+        for c in sorted_coins
+    ]
+    rows.append([InlineKeyboardButton(
+        text="بازگشت",
+        callback_data="crypto_pay",
+        **{"icon_custom_emoji_id": "5933748020960038714"},
+    )])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def _make_qr_bytes(data: str) -> bytes:
-    import qrcode  # lazy import — only used when payment is created
+    import qrcode
     qr = qrcode.QRCode(version=1, box_size=10, border=4)
     qr.add_data(data)
     qr.make(fit=True)
@@ -60,9 +132,6 @@ async def cb_crypto_pay(cb: CallbackQuery, session: AsyncSession):
         await cb.answer("درگاه کریپتو فعال نیست.", show_alert=True)
         return
 
-    rate_str = await _get_setting(session, "np_usd_to_irt_rate") or "60000"
-    rate = float(rate_str)
-
     lines = [
         '<tg-emoji emoji-id="5769403330761593044">👛</tg-emoji> <b>شارژ کیف پول با کریپتو</b>\n',
         "مبلغ دلاری را انتخاب کنید:",
@@ -72,8 +141,33 @@ async def cb_crypto_pay(cb: CallbackQuery, session: AsyncSession):
 
 
 @router.callback_query(F.data.startswith("np_amount:"))
-async def cb_np_amount(cb: CallbackQuery, user: User, session: AsyncSession):
+async def cb_np_amount(cb: CallbackQuery, session: AsyncSession):
     amount_usd = int(cb.data.split(":")[1])
+    await cb.answer("⏳ در حال دریافت ارزهای موجود...")
+
+    client = NOWPaymentsClient()
+    try:
+        coins = await client.get_merchant_coins()
+    except Exception:
+        coins = []
+
+    if not coins:
+        coins = list(_CURRENCY_PRIORITY)
+
+    await cb.message.edit_text(
+        f'<tg-emoji emoji-id="5769403330761593044">👛</tg-emoji> <b>شارژ کیف پول با کریپتو</b>\n\n'
+        f"مبلغ: <b>{amount_usd}$</b>\n\n"
+        f"ارز پرداختی را انتخاب کنید:",
+        parse_mode="HTML",
+        reply_markup=_currency_kb(amount_usd, coins),
+    )
+
+
+@router.callback_query(F.data.startswith("np_cur:"))
+async def cb_np_currency(cb: CallbackQuery, user: User, session: AsyncSession):
+    parts = cb.data.split(":", 2)
+    amount_usd = int(parts[1])
+    currency = parts[2]
 
     rate_str = await _get_setting(session, "np_usd_to_irt_rate") or "60000"
     rate = float(rate_str)
@@ -97,6 +191,7 @@ async def cb_np_amount(cb: CallbackQuery, user: User, session: AsyncSession):
             order_id=order_id,
             description=f"شارژ کیف پول {amount_usd}$ — کاربر {user.telegram_id}",
             ipn_callback_url=ipn_url,
+            pay_currency=currency,
         )
     except NOWPaymentsError as exc:
         await cb.message.edit_text(
@@ -108,8 +203,10 @@ async def cb_np_amount(cb: CallbackQuery, user: User, session: AsyncSession):
 
     pay_address = payment.get("pay_address", "")
     pay_amount = float(payment.get("pay_amount") or 0)
-    pay_currency = (payment.get("pay_currency") or settings.NP_OUTCOME_CURRENCY).upper()
+    pay_currency_raw = (payment.get("pay_currency") or currency).lower()
+    pay_currency_display = (payment.get("pay_currency") or currency).upper()
     payment_id = str(payment.get("payment_id", ""))
+    network = _NETWORK_DISPLAY.get(pay_currency_raw, pay_currency_display)
     expiry_dt = datetime.now(timezone.utc) + timedelta(minutes=10)
 
     cp = CryptoPayment(
@@ -121,7 +218,7 @@ async def cb_np_amount(cb: CallbackQuery, user: User, session: AsyncSession):
         amount_irt=amount_irt,
         pay_address=pay_address,
         pay_amount=pay_amount,
-        pay_currency=pay_currency.lower(),
+        pay_currency=pay_currency_raw,
         expires_at=expiry_dt,
         status="waiting",
         activated=False,
@@ -133,9 +230,9 @@ async def cb_np_amount(cb: CallbackQuery, user: User, session: AsyncSession):
         f"<b>آدرس واریز کریپتو</b>\n\n"
         f"مبلغ: <b>{amount_usd}$</b>\n"
         f"معادل: <b>{amount_irt:,.0f} تومان</b>\n\n"
-        f"شبکه: <b>TRON (TRC20)</b>\n\n"
+        f"شبکه: <b>{network}</b>\n\n"
         f"مبلغ دقیق:\n"
-        f"<code>{pay_amount} {pay_currency}</code>\n\n"
+        f"<code>{pay_amount} {pay_currency_display}</code>\n\n"
         f"آدرس واریز:\n"
         f"<code>{pay_address}</code>\n\n"
         f"شماره فاکتور: <code>{payment_id}</code>\n\n"
@@ -159,7 +256,6 @@ async def cb_np_amount(cb: CallbackQuery, user: User, session: AsyncSession):
         )
         await cb.message.delete()
     except Exception:
-        # fallback: show as text if QR generation fails
         await cb.message.edit_text(caption, parse_mode="HTML", reply_markup=back_kb)
 
 

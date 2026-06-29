@@ -37,8 +37,8 @@ def server_list_kb(servers: list[Server]) -> InlineKeyboardMarkup:
         icon = status_dot(s)
         builder.button(text=f"{icon} {s.name} ({s.ip_address or 'بدون IP'})",
                        callback_data=f"server:{s.id}")
-    builder.button(text="خرید سرور جدید", callback_data="buy_server", **{"icon_custom_emoji_id": "5406683434124859552"})
-    builder.button(text="بازگشت", callback_data="main_menu", **{"icon_custom_emoji_id": "5933748020960038714"})
+    builder.button(text="خرید سرور جدید", callback_data="buy_server", **{"icon_custom_emoji_id": "5348183286608840968"})
+    builder.button(text="بازگشت", callback_data="main_menu", **{"icon_custom_emoji_id": "5258236805890710909"})
     builder.adjust(1)
     return builder.as_markup()
 

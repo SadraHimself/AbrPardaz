@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -14,6 +15,7 @@ from bot.database.models import BotSettings, CryptoPayment, User
 from bot.services.nowpayments import NOWPaymentsClient, NOWPaymentsError
 
 router = Router(name="crypto_payment")
+logger = logging.getLogger(__name__)
 
 _USD_AMOUNTS = [3, 10, 20, 50, 100]
 _AMOUNT_ICONS = {
@@ -216,7 +218,8 @@ async def cb_np_currency(cb: CallbackQuery, user: User, session: AsyncSession):
     rate = float(rate_str)
     amount_irt = amount_usd * rate
 
-    ipn_url = await _get_setting(session, "np_webhook_url") or ""
+    ipn_url = (await _get_setting(session, "np_webhook_url") or "").strip()
+    logger.info("crypto_payment: ipn_url=%r for order by user %s", ipn_url, user.telegram_id)
     if not ipn_url:
         await cb.answer(
             "❌ آدرس webhook تنظیم نشده.\nادمین باید np_webhook_url را از پنل ادمین ست کند.",

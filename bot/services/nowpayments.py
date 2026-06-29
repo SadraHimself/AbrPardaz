@@ -78,11 +78,12 @@ class NOWPaymentsClient:
         order_id: str,
         description: str,
         ipn_callback_url: str,
+        pay_currency: str | None = None,
     ) -> dict:
         return await self._post("/payment", {
             "price_amount": amount_usd,
             "price_currency": settings.NP_PRICE_CURRENCY,
-            "pay_currency": settings.NP_OUTCOME_CURRENCY,
+            "pay_currency": pay_currency or settings.NP_OUTCOME_CURRENCY,
             "order_id": order_id,
             "order_description": description,
             "ipn_callback_url": ipn_callback_url,

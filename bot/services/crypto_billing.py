@@ -42,10 +42,9 @@ async def activate_crypto_payment(cp: CryptoPayment, session: AsyncSession, bot)
     try:
         await bot.send_message(
             cp.chat_id,
-            f"✅ <b>پرداخت کریپتو تأیید شد!</b>\n\n"
-            f"💵 مبلغ: <b>{cp.amount_usd:.0f}$</b>\n"
-            f"💰 <b>{cp.amount_irt:,.0f} تومان</b> به کیف پول شما اضافه شد.\n\n"
-            f"🔑 شناسه: <code>{cp.order_id}</code>",
+            f'<tg-emoji emoji-id="5021905410089550576">✅</tg-emoji> <b>پرداخت کریپتو تأیید شد!</b>\n\n'
+            f"مبلغ: <b>{cp.amount_usd:.0f}$</b>\n"
+            f"<b>{cp.amount_irt:,.0f} تومان</b> به کیف پول شما اضافه شد.",
             parse_mode="HTML",
         )
     except Exception as exc:

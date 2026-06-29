@@ -115,7 +115,7 @@ def handle_balance_empty(user_id: int):
                     await session.commit()
                     await bot.send_message(
                         user.telegram_id,
-                        '<tg-emoji emoji-id="5900209106676879662">🔔</tg-emoji> کاربر عزیز موجودی شما به اتمام رسیده برای جلوگیری از حذف شدن سرویس ها، موجودی خود را شارژ کنید',
+                        '<tg-emoji emoji-id="4956611513369494230">⚠️</tg-emoji> کاربر گرامی موجودی شما به اتمام رسیده برای جلوگیری از حذف شدن سرویس ها موجودی خود را شارژ کنید',
                         parse_mode="HTML",
                     )
                     return
@@ -151,7 +151,7 @@ def handle_balance_empty(user_id: int):
                     await session.commit()
                     await bot.send_message(
                         user.telegram_id,
-                        '<tg-emoji emoji-id="5258093637450866522">🤖</tg-emoji> کاربر عزیز، سرویس های فعال شما به دلیل عدم شارژ کیف پول، حذف شدند',
+                        '<tg-emoji emoji-id="5258093637450866522">🤖</tg-emoji> کاربر عزیز سرویس های فعال شما به دلیل عدم شارژ کیف پول حذف شدند',
                         parse_mode="HTML",
                     )
 
@@ -161,7 +161,7 @@ def handle_balance_empty(user_id: int):
                     await session.commit()
                     await bot.send_message(
                         user.telegram_id,
-                        '<tg-emoji emoji-id="6008233706039284019">⚠️</tg-emoji> 2/3 کاربر عزیز، جهت جلوگیری از حذف شدن سرویس های خود اقدام به شارژ کیف پول کنید',
+                        '<tg-emoji emoji-id="6008233706039284019">⚠️</tg-emoji> 2/3 کاربر گرامی جهت جلوگیری از حذف شدن سرویس های خود اقدام به شارژ کیف پول کنید',
                         parse_mode="HTML",
                     )
 
@@ -171,7 +171,7 @@ def handle_balance_empty(user_id: int):
                     await session.commit()
                     await bot.send_message(
                         user.telegram_id,
-                        '<tg-emoji emoji-id="6008233706039284019">⚠️</tg-emoji> 1/3 کاربر عزیز، جهت جلوگیری از حذف شدن سرویس های خود، اقدام به شارژ کیف پول کنید',
+                        '<tg-emoji emoji-id="6008233706039284019">⚠️</tg-emoji> 1/3 کاربر گرامی جهت جلوگیری از حذف شدن سرویس های خود اقدام به شارژ کیف پول کنید',
                         parse_mode="HTML",
                     )
 

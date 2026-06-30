@@ -176,7 +176,7 @@ async def cb_server_action(cb: CallbackQuery, user: User, session: AsyncSession)
 
     if action == "delete_confirm":
         await cb.message.edit_text(
-            f"⚠️ آیا سرور <b>{server.name}</b> حذف شود?\nاین عمل قابل بازگشت نیست!",
+            f"آیا سرور <b>{server.name}</b> حذف شود؟\nاین عمل قابل بازگشت نیست!",
             parse_mode="HTML",
             reply_markup=server_delete_confirm_kb(server_id),
         )
@@ -185,7 +185,7 @@ async def cb_server_action(cb: CallbackQuery, user: User, session: AsyncSession)
 
     if action == "restart_confirm":
         await cb.message.edit_text(
-            f"آیا از ریبوت سرور <b>{server.name}</b> مطمئن هستید?\nسرور چند ثانیه از دسترس خارج می‌شود.",
+            f"آیا از ریبوت سرور <b>{server.name}</b> مطمئن هستید؟\nسرور به مدت چند ثانیه از دسترس خارج می‌شود.",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="بله، ریبوت شود", callback_data=f"srv_action:{server_id}:restart", **{"style": "success"}),
@@ -921,7 +921,7 @@ async def cb_change_ip_confirm(cb: CallbackQuery, user: User, session: AsyncSess
 
     fee_text = f"{fee:,.0f} تومان" if fee > 0 else "رایگان"
     await cb.message.edit_text(
-        f'<tg-emoji emoji-id="5895403643863043222">🫥</tg-emoji> <b>تأیید تغییر IP</b>\n\n'
+        f'<tg-emoji emoji-id="5895403643863043222">🫥</tg-emoji> <b>تأیید تغییر آیپی</b>\n\n'
         f"آیپی فعلی = <code>{server.ip_address or 'نامشخص'}</code>\n"
         f"هزینه: <b>{fee_text}</b>\n\n"
         "سرور پس از تغییر IP ریبوت خواهد شد.",

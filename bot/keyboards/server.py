@@ -87,8 +87,8 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
 def server_delete_confirm_kb(server_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            _btn("✅ بله، حذف شود", f"srv_action:{server_id}:delete", "danger"),
-            _btn("❌ خیر", f"server:{server_id}", "success"),
+            _btn("بله، حذف شود", f"srv_action:{server_id}:delete"),
+            _btn("خیر", f"server:{server_id}"),
         ]
     ])
 

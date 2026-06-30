@@ -185,11 +185,11 @@ async def cb_server_action(cb: CallbackQuery, user: User, session: AsyncSession)
 
     if action == "restart_confirm":
         await cb.message.edit_text(
-            f"🔄 <b>تأیید ریبوت</b>\n\nآیا از ریبوت سرور <b>{server.name}</b> مطمئن هستید?\nسرور چند ثانیه از دسترس خارج می‌شود.",
+            f"آیا از ریبوت سرور <b>{server.name}</b> مطمئن هستید?\nسرور چند ثانیه از دسترس خارج می‌شود.",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="✅ بله، ریبوت شود", callback_data=f"srv_action:{server_id}:restart"),
-                InlineKeyboardButton(text="❌ انصراف", callback_data=f"server:{server_id}"),
+                InlineKeyboardButton(text="بله، ریبوت شود", callback_data=f"srv_action:{server_id}:restart", **{"style": "success"}),
+                InlineKeyboardButton(text="انصراف", callback_data=f"server:{server_id}", **{"style": "danger"}),
             ]]),
         )
         await cb.answer()
@@ -921,15 +921,14 @@ async def cb_change_ip_confirm(cb: CallbackQuery, user: User, session: AsyncSess
 
     fee_text = f"{fee:,.0f} تومان" if fee > 0 else "رایگان"
     await cb.message.edit_text(
-        f"🌐 <b>تأیید تغییر IP</b>\n\n"
-        f"سرور: <b>{server.name}</b>\n"
-        f"IP فعلی: <code>{server.ip_address or 'نامشخص'}</code>\n"
+        f'<tg-emoji emoji-id="5895403643863043222">🫥</tg-emoji> <b>تأیید تغییر IP</b>\n\n'
+        f"آیپی فعلی = <code>{server.ip_address or 'نامشخص'}</code>\n"
         f"هزینه: <b>{fee_text}</b>\n\n"
-        "⚠️ سرور پس از تغییر IP ریبوت خواهد شد.",
+        "سرور پس از تغییر IP ریبوت خواهد شد.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="✅ تأیید تغییر IP", callback_data=f"srv_changeip_do:{server_id}"),
-            InlineKeyboardButton(text="❌ انصراف", callback_data=f"server:{server_id}"),
+            InlineKeyboardButton(text="تأیید تغییر IP", callback_data=f"srv_changeip_do:{server_id}", **{"style": "success"}),
+            InlineKeyboardButton(text="انصراف", callback_data=f"server:{server_id}", **{"style": "danger"}),
         ]]),
     )
     await cb.answer()
@@ -982,13 +981,13 @@ async def cb_change_ip_do(cb: CallbackQuery, user: User, session: AsyncSession):
 
         fee_text = f"\n💸 هزینه کسر شد: {fee:,.0f} تومان" if fee > 0 else ""
         await wait.edit_text(
-            f"✅ <b>IP تغییر کرد!</b>\n\n"
-            f"🖥 سرور: {server.name}\n"
-            f"⬅️ IP قدیم: <code>{old_ip or 'نامشخص'}</code>\n"
-            f"➡️ IP جدید: <code>{new_ip}</code>{fee_text}\n\n"
-            "🔄 سرور در حال ریبوت است.",
+            f'<tg-emoji emoji-id="5206607081334906820">✔️</tg-emoji> <b>آیپی تغییر کرد</b>\n\n'
+            f"• آیپی قبلی: <code>{old_ip or 'نامشخص'}</code>\n"
+            f"• آیپی جدید: <code>{new_ip}</code>{fee_text}",
             parse_mode="HTML",
-            reply_markup=back_kb(f"server:{server_id}"),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="بازگشت", callback_data=f"server:{server_id}", **{"icon_custom_emoji_id": "5258236805890710909"}),
+            ]]),
         )
         await LogService(cb.bot, session).log_ip_change(user, server, old_ip, new_ip)
     except Exception as e:
@@ -1103,15 +1102,13 @@ async def cb_change_password_confirm(cb: CallbackQuery, user: User, session: Asy
         await cb.answer("سرور باید فعال باشد.", show_alert=True)
         return
     await cb.message.edit_text(
-        f"🔑 <b>تغییر رمز root</b>\n\n"
-        f"سرور: <b>{server.name}</b>\n\n"
-        "⚠️ رمز جدید به صورت خودکار ایجاد می‌شود.\n"
+        '<tg-emoji emoji-id="5256248974767046755">🔒</tg-emoji> رمز جدید به صورت خودکار ایجاد می‌شود.\n'
         "سرور پس از تغییر رمز ریبوت خواهد شد.\n\n"
         "آیا مطمئن هستید؟",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="✅ بله، رمز تغییر شود", callback_data=f"srv_chpass_do:{server_id}"),
-            InlineKeyboardButton(text="❌ انصراف", callback_data=f"server:{server_id}"),
+            InlineKeyboardButton(text="بله، رمز تغییر شود", callback_data=f"srv_chpass_do:{server_id}", **{"style": "success"}),
+            InlineKeyboardButton(text="انصراف", callback_data=f"server:{server_id}", **{"style": "danger"}),
         ]]),
     )
     await cb.answer()
@@ -1139,7 +1136,7 @@ async def cb_change_password_do(cb: CallbackQuery, user: User, session: AsyncSes
         await cb.message.delete()
     except Exception:
         pass
-    wait = await cb.message.answer("⏳ در حال تغییر رمز root...")
+    wait = await cb.message.answer('<tg-emoji emoji-id="5427181942934088912">💬</tg-emoji> در حال تغییر رمز root...', parse_mode="HTML")
     try:
         svc = ServerService(session)
         ok = await svc.perform_action(server, "change_password", password=new_password)
@@ -1152,13 +1149,13 @@ async def cb_change_password_do(cb: CallbackQuery, user: User, session: AsyncSes
                 except Exception:
                     pass
             await wait.edit_text(
-                f"✅ <b>رمز root تغییر کرد!</b>\n\n"
-                f"🖥 سرور: <b>{server.name}</b>\n"
-                f"🔑 رمز جدید: <code>{new_password}</code>\n\n"
-                "⚠️ این رمز را در جای امنی ذخیره کنید.\n"
-                "🔄 سرور در حال ریبوت است.",
+                f"<b>رمز root تغییر کرد</b>\n\n"
+                f'<tg-emoji emoji-id="5256248974767046755">🔒</tg-emoji> رمز جدید: <code>{new_password}</code>\n\n'
+                "سرور در حال ریبوت است.",
                 parse_mode="HTML",
-                reply_markup=back_kb(f"server:{server_id}"),
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="بازگشت", callback_data=f"server:{server_id}", **{"icon_custom_emoji_id": "5258236805890710909"}),
+                ]]),
             )
             await LogService(cb.bot, session).log_server_action(user, server, "change_password")
         else:

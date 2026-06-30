@@ -328,12 +328,7 @@ async def cb_invoice_xml(cb: CallbackQuery, user: User, session: AsyncSession):
     filename = f"invoice_{user.telegram_id}_{datetime.utcnow().strftime('%Y%m%d')}.xml"
     await cb.message.answer_document(
         BufferedInputFile(xml_bytes, filename=filename),
-        caption=(
-            f"📄 <b>فاکتور تراکنش‌ها</b>\n"
-            f"👤 {user.first_name or ''}\n"
-            f"📅 {datetime.utcnow().strftime('%Y/%m/%d')}\n"
-            f"🔢 تعداد: {len(txs)} تراکنش"
-        ),
+        caption='<tg-emoji emoji-id="6334448145891592172">🧾</tg-emoji> <b>فاکتور تراکنش‌ها</b>',
         parse_mode="HTML",
     )
 

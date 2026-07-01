@@ -536,12 +536,13 @@ async def cb_price_adj_do(cb: CallbackQuery, state: FSMContext, session: AsyncSe
 # ══════════════════════════════════════════════════════════════════════════════
 
 _LOG_TOPIC_NAMES = {
-    "log_topic_finance":      "💰 گزارش مالی",
-    "log_topic_new_user":     "👤 کاربران جدید",
-    "log_topic_purchase":     "🛒 گزارش خرید",
-    "log_topic_server":       "🖥 لاگ سرور",
-    "log_topic_backup":       "💾 بکاپ",
-    "log_topic_moderation":   "🔨 مودریشن",
+    "log_topic_finance":        "💰 گزارش مالی",
+    "log_topic_new_user":       "👤 کاربران جدید",
+    "log_topic_purchase":       "🛒 گزارش خرید",
+    "log_topic_server":         "🖥 لاگ سرور",
+    "log_topic_backup":         "💾 بکاپ",
+    "log_topic_moderation":     "🔨 مودریشن",
+    "log_topic_exchange_rate":  "💱 نرخ ارز",
 }
 
 

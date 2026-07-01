@@ -61,7 +61,7 @@ async def _fetch_rate_toman() -> float | None:
         return None
 
     # Extract all Persian/ASCII price-like numbers from the next 400 chars
-    snippet = html[idx: idx + 400]
+    snippet = html[idx: idx + 800]
     candidates = re.findall(r"[۰-۹\d]{2,3}(?:[,،][۰-۹\d]{3})+", snippet)
     prices = [p for raw in candidates if (p := _parse_price(raw)) and _MIN_TOMAN <= p <= _MAX_TOMAN]
 

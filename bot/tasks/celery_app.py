@@ -68,10 +68,10 @@ app.conf.update(
             "task": "bot.tasks.crypto_polling.poll_crypto_payments",
             "schedule": crontab(minute="*/5"),
         },
-        # هر ساعت نرخ دلار از tgju.org گرفته و np_usd_to_irt_rate آپدیت می‌شود
+        # هر ۳۰ دقیقه نرخ دلار از alanchand.com گرفته و np_usd_to_irt_rate آپدیت می‌شود
         "exchange-rate-update": {
             "task": "bot.tasks.exchange_rate.update_exchange_rate",
-            "schedule": crontab(minute=0),
+            "schedule": crontab(minute="0,30"),
         },
     },
 )

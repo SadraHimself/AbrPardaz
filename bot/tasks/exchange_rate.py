@@ -48,15 +48,11 @@ async def _fetch_rate_toman() -> float | None:
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json(content_type=None)
-                    # Response may be a list directly or {"data": [...]}
-                    if isinstance(data, list):
-                        rows = data
-                    elif isinstance(data, dict):
-                        rows = data.get("data") or []
-                    else:
-                        rows = []
-                    if rows:
-                        p_str = str(rows[0].get("p", "")).replace(",", "")
+                    # Response: {"data": [["1,716,950", low, high, open, ...], ...]}
+                    # Each row is a list; index 0 = close price in Rial
+                    table = (data.get("data") or []) if isinstance(data, dict) else (data or [])
+                    if table and isinstance(table[0], (list, tuple)) and table[0]:
+                        p_str = str(table[0][0]).replace(",", "")
                         if p_str.isdigit():
                             rial = float(p_str)
                             if _MIN_RIAL <= rial <= _MAX_RIAL:

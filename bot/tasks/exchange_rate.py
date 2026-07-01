@@ -27,11 +27,12 @@ _HEADERS = {
 _MIN_RIAL = 500_000
 _MAX_RIAL = 50_000_000
 
-# HTML fallback patterns (used only if API fails)
+# HTML fallback patterns — ordered from most specific to least
 _HTML_PATTERNS = [
-    r'"p"\s*:\s*"([\d,]+)"',
-    r'data-price=["\']?([\d,]+)["\']?',
-    r'class="info-price[^"]*"[^>]*>([\d,]+)<',
+    # tgju embeds market data as JS object: {p:"1,743,000", ...} — "p" is current price
+    r'\{[^}]*"p"\s*:\s*"([\d,]+)"',
+    r"'p'\s*:\s*'([\d,]+)'",
+    r'data-value=["\']?([\d,]+)["\']?',
 ]
 
 
@@ -47,8 +48,13 @@ async def _fetch_rate_toman() -> float | None:
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json(content_type=None)
-                    # Response: {"data": [{"p": "1,743,000", ...}, ...]}
-                    rows = (data or {}).get("data") or []
+                    # Response may be a list directly or {"data": [...]}
+                    if isinstance(data, list):
+                        rows = data
+                    elif isinstance(data, dict):
+                        rows = data.get("data") or []
+                    else:
+                        rows = []
                     if rows:
                         p_str = str(rows[0].get("p", "")).replace(",", "")
                         if p_str.isdigit():

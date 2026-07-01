@@ -1,4 +1,4 @@
-"""Hourly USD/IRR rate updater — scrapes tgju.org and updates np_usd_to_irt_rate."""
+"""Hourly USD/IRT rate updater — scrapes alanchand.com and updates np_usd_to_irt_rate."""
 from __future__ import annotations
 
 import asyncio
@@ -12,83 +12,67 @@ from bot.tasks.celery_app import app
 
 logger = logging.getLogger(__name__)
 
-_TGJU_API_URL = "https://api.tgju.org/v1/market/indicator/summary-table-data/price_dollar_rl"
-_TGJU_HTML_URL = "https://www.tgju.org/profile/price_dollar_rl"
+_ALANCHAND_URL = "https://alanchand.com/"
 _HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/120.0.0.0 Safari/537.36"
     ),
-    "Accept": "application/json, text/html",
+    "Accept": "text/html,application/xhtml+xml",
+    "Accept-Language": "fa-IR,fa;q=0.9,en;q=0.8",
 }
 
-# Sanity range for USD/Rial: 500,000 – 50,000,000
-_MIN_RIAL = 500_000
-_MAX_RIAL = 50_000_000
+# alanchand.com shows prices in Toman directly
+_MIN_TOMAN = 50_000
+_MAX_TOMAN = 1_000_000
 
-# HTML fallback patterns — ordered from most specific to least
-_HTML_PATTERNS = [
-    # tgju embeds market data as JS object: {p:"1,743,000", ...} — "p" is current price
-    r'\{[^}]*"p"\s*:\s*"([\d,]+)"',
-    r"'p'\s*:\s*'([\d,]+)'",
-    r'data-value=["\']?([\d,]+)["\']?',
-]
+_PERSIAN_TRANS = str.maketrans("۰۱۲۳۴۵۶۷۸۹،", "0123456789,")
+
+
+def _parse_price(s: str) -> float | None:
+    cleaned = s.translate(_PERSIAN_TRANS).replace(",", "").strip()
+    return float(cleaned) if cleaned.isdigit() else None
 
 
 async def _fetch_rate_toman() -> float | None:
-    """Return USD price in Toman from tgju.org (tries JSON API first, HTML fallback)."""
-    async with aiohttp.ClientSession() as session:
-        # --- Try JSON API (more reliable) ---
-        try:
+    """Return USD sell price in Toman from alanchand.com."""
+    try:
+        async with aiohttp.ClientSession() as session:
             async with session.get(
-                _TGJU_API_URL,
-                headers=_HEADERS,
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json(content_type=None)
-                    # Response: {"data": [["1,716,950", low, high, open, ...], ...]}
-                    # Each row is a list; index 0 = close price in Rial
-                    table = (data.get("data") or []) if isinstance(data, dict) else (data or [])
-                    if table and isinstance(table[0], (list, tuple)) and table[0]:
-                        p_str = str(table[0][0]).replace(",", "")
-                        if p_str.isdigit():
-                            rial = float(p_str)
-                            if _MIN_RIAL <= rial <= _MAX_RIAL:
-                                logger.info("exchange_rate: API→ %s Rial", rial)
-                                return rial / 10
-                            logger.warning("exchange_rate: API value %s out of range", rial)
-        except Exception as exc:
-            logger.warning("exchange_rate: API fetch error: %s", exc)
-
-        # --- HTML fallback ---
-        try:
-            async with session.get(
-                _TGJU_HTML_URL,
+                _ALANCHAND_URL,
                 headers=_HEADERS,
                 timeout=aiohttp.ClientTimeout(total=20),
             ) as resp:
                 if resp.status != 200:
-                    logger.warning("exchange_rate: HTML fallback HTTP %s", resp.status)
+                    logger.warning("exchange_rate: alanchand HTTP %s", resp.status)
                     return None
                 html = await resp.text()
-        except Exception as exc:
-            logger.error("exchange_rate: HTML fetch error: %s", exc)
-            return None
+    except Exception as exc:
+        logger.error("exchange_rate: fetch error: %s", exc)
+        return None
 
-    for pattern in _HTML_PATTERNS:
-        m = re.search(pattern, html)
-        if m:
-            price_str = m.group(1).replace(",", "")
-            if not price_str.isdigit():
-                continue
-            rial = float(price_str)
-            if _MIN_RIAL <= rial <= _MAX_RIAL:
-                logger.info("exchange_rate: HTML→ %s Rial (pattern=%s)", rial, pattern[:20])
-                return rial / 10
-    logger.warning("exchange_rate: no valid price found in HTML")
-    return None
+    # Find the HTML section containing دلار (dollar)
+    idx = html.find("دلار آمریکا")
+    if idx == -1:
+        idx = html.find("دلار")
+    if idx == -1:
+        logger.warning("exchange_rate: 'دلار' not found in page")
+        return None
+
+    # Extract all Persian/ASCII price-like numbers from the next 400 chars
+    snippet = html[idx: idx + 400]
+    candidates = re.findall(r"[۰-۹\d]{2,3}(?:[,،][۰-۹\d]{3})+", snippet)
+    prices = [p for raw in candidates if (p := _parse_price(raw)) and _MIN_TOMAN <= p <= _MAX_TOMAN]
+
+    if not prices:
+        logger.warning("exchange_rate: no valid price in snippet: %r", snippet[:120])
+        return None
+
+    # Use the highest price found (sell rate)
+    sell = max(prices)
+    logger.info("exchange_rate: alanchand→ sell=%s Toman (candidates=%s)", sell, prices)
+    return sell
 
 
 async def _do_update() -> None:

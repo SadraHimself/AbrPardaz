@@ -12,50 +12,81 @@ from bot.tasks.celery_app import app
 
 logger = logging.getLogger(__name__)
 
-_TGJU_URL = "https://www.tgju.org/profile/price_dollar_rl"
+_TGJU_API_URL = "https://api.tgju.org/v1/market/indicator/summary-table-data/price_dollar_rl"
+_TGJU_HTML_URL = "https://www.tgju.org/profile/price_dollar_rl"
 _HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/120.0.0.0 Safari/537.36"
-    )
+    ),
+    "Accept": "application/json, text/html",
 }
 
-# Multiple regex patterns to handle page layout changes
-_PRICE_PATTERNS = [
-    r'"p"\s*:\s*"([\d,]+)"',           # JSON embedded: "p":"588,000"
-    r'data-price=["\']?([\d,]+)["\']?', # data-price="588000"
-    r'class="info-price[^"]*"[^>]*>([\d,]+)<',  # <span class="info-price">588,000</span>
-    r'class="price[^"]*"[^>]*>([\d,]+)<',        # <span class="price">588,000</span>
+# Sanity range for USD/Rial: 500,000 – 50,000,000
+_MIN_RIAL = 500_000
+_MAX_RIAL = 50_000_000
+
+# HTML fallback patterns (used only if API fails)
+_HTML_PATTERNS = [
+    r'"p"\s*:\s*"([\d,]+)"',
+    r'data-price=["\']?([\d,]+)["\']?',
+    r'class="info-price[^"]*"[^>]*>([\d,]+)<',
 ]
 
 
 async def _fetch_rate_toman() -> float | None:
-    try:
-        async with aiohttp.ClientSession() as session:
+    """Return USD price in Toman from tgju.org (tries JSON API first, HTML fallback)."""
+    async with aiohttp.ClientSession() as session:
+        # --- Try JSON API (more reliable) ---
+        try:
             async with session.get(
-                _TGJU_URL,
+                _TGJU_API_URL,
+                headers=_HEADERS,
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json(content_type=None)
+                    # Response: {"data": [{"p": "1,743,000", ...}, ...]}
+                    rows = (data or {}).get("data") or []
+                    if rows:
+                        p_str = str(rows[0].get("p", "")).replace(",", "")
+                        if p_str.isdigit():
+                            rial = float(p_str)
+                            if _MIN_RIAL <= rial <= _MAX_RIAL:
+                                logger.info("exchange_rate: API→ %s Rial", rial)
+                                return rial / 10
+                            logger.warning("exchange_rate: API value %s out of range", rial)
+        except Exception as exc:
+            logger.warning("exchange_rate: API fetch error: %s", exc)
+
+        # --- HTML fallback ---
+        try:
+            async with session.get(
+                _TGJU_HTML_URL,
                 headers=_HEADERS,
                 timeout=aiohttp.ClientTimeout(total=20),
             ) as resp:
                 if resp.status != 200:
-                    logger.warning("exchange_rate: tgju.org returned HTTP %s", resp.status)
+                    logger.warning("exchange_rate: HTML fallback HTTP %s", resp.status)
                     return None
                 html = await resp.text()
+        except Exception as exc:
+            logger.error("exchange_rate: HTML fetch error: %s", exc)
+            return None
 
-        for pattern in _PRICE_PATTERNS:
-            m = re.search(pattern, html)
-            if m:
-                price_str = m.group(1).replace(",", "")
-                price_rial = float(price_str)
-                # tgju.org shows price in Rial — divide by 10 for Toman
-                if price_rial > 10_000:  # sanity check (must be > 1000 Toman)
-                    return price_rial / 10
-        logger.warning("exchange_rate: no price pattern matched on tgju.org")
-        return None
-    except Exception as exc:
-        logger.error("exchange_rate: fetch error: %s", exc)
-        return None
+    for pattern in _HTML_PATTERNS:
+        m = re.search(pattern, html)
+        if m:
+            price_str = m.group(1).replace(",", "")
+            if not price_str.isdigit():
+                continue
+            rial = float(price_str)
+            if _MIN_RIAL <= rial <= _MAX_RIAL:
+                logger.info("exchange_rate: HTML→ %s Rial (pattern=%s)", rial, pattern[:20])
+                return rial / 10
+    logger.warning("exchange_rate: no valid price found in HTML")
+    return None
 
 
 async def _do_update() -> None:

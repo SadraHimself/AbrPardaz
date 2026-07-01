@@ -63,17 +63,23 @@ app.conf.update(
             "task": "bot.tasks.billing.cleanup_old_transactions",
             "schedule": crontab(hour=4, minute=0, day_of_week="*/3"),
         },
-        # هر ۵ دقیقه پرداخت‌های کریپتوی معلق بررسی می‌شوند (fallback IPN)
+        # هر ۵ دقیقه پرداخت‌های کریپتوی معلق بررسی می‌شوند (fallback IPN + expiry check)
         "crypto-payment-poll": {
             "task": "bot.tasks.crypto_polling.poll_crypto_payments",
             "schedule": crontab(minute="*/5"),
+        },
+        # هر ساعت نرخ دلار از tgju.org گرفته و np_usd_to_irt_rate آپدیت می‌شود
+        "exchange-rate-update": {
+            "task": "bot.tasks.exchange_rate.update_exchange_rate",
+            "schedule": crontab(minute=0),
         },
     },
 )
 
 # Import tasks to register them
-import bot.tasks.backup   # noqa: F401, E402
-import bot.tasks.billing  # noqa: F401, E402
-import bot.tasks.server   # noqa: F401, E402
+import bot.tasks.backup          # noqa: F401, E402
+import bot.tasks.billing         # noqa: F401, E402
+import bot.tasks.server          # noqa: F401, E402
 import bot.tasks.stats           # noqa: F401, E402
 import bot.tasks.crypto_polling  # noqa: F401, E402
+import bot.tasks.exchange_rate   # noqa: F401, E402

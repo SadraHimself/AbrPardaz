@@ -10,12 +10,13 @@ from bot.database.models import BotSettings, Server, User
 
 
 _TOPIC_KEYS = {
-    "finance":     "log_topic_finance",
-    "new_user":    "log_topic_new_user",
-    "purchase":    "log_topic_purchase",
-    "server":      "log_topic_server",
-    "backup":      "log_topic_backup",
-    "moderation":  "log_topic_moderation",
+    "finance":       "log_topic_finance",
+    "new_user":      "log_topic_new_user",
+    "purchase":      "log_topic_purchase",
+    "server":        "log_topic_server",
+    "backup":        "log_topic_backup",
+    "moderation":    "log_topic_moderation",
+    "exchange_rate": "log_topic_exchange_rate",
 }
 
 

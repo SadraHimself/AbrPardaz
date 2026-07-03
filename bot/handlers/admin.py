@@ -95,7 +95,7 @@ async def cb_admin_panel(cb: CallbackQuery, state: FSMContext):
     await edit_loading(cb.message)
     await cb.answer()
     await cb.message.edit_text(
-        "⚙️ <b>پنل ادمین</b>\n\nیک بخش را انتخاب کنید:",
+        "<b>پنل ادمین</b>\n\nیک بخش را انتخاب کنید:",
         parse_mode="HTML",
         reply_markup=admin_menu_kb(),
     )
@@ -106,7 +106,7 @@ async def msg_admin_panel(message: Message, state: FSMContext):
     await state.clear()
     loading = await answer_loading(message)
     await loading.edit_text(
-        "⚙️ <b>پنل ادمین</b>\n\nیک بخش را انتخاب کنید:",
+        "<b>پنل ادمین</b>\n\nیک بخش را انتخاب کنید:",
         parse_mode="HTML",
         reply_markup=admin_menu_kb(),
     )
@@ -126,9 +126,9 @@ async def cb_admin_providers(cb: CallbackQuery, session: AsyncSession):
     providers = list(result.scalars().all())
     count = len(providers)
     text = (
-        f"🖥 <b>سرورهای ویرچولایزور</b>\n\nتعداد: {count} سرور\nیک سرور انتخاب کنید:"
+        f"<b>سرورهای ویرچولایزور</b>\n\nتعداد: {count} سرور\nیک سرور انتخاب کنید:"
         if count else
-        "🖥 <b>سرورهای ویرچولایزور</b>\n\nهیچ سروری اضافه نشده."
+        "<b>سرورهای ویرچولایزور</b>\n\nهیچ سروری اضافه نشده."
     )
     await cb.message.edit_text(text, parse_mode="HTML", reply_markup=providers_list_kb(providers))
     await cb.answer()
@@ -138,7 +138,7 @@ async def cb_admin_providers(cb: CallbackQuery, session: AsyncSession):
 async def cb_prov_add_start(cb: CallbackQuery, state: FSMContext):
     await state.set_state(ProviderFSM.add_name)
     await cb.message.edit_text(
-        "🖥 <b>اضافه کردن سرور ویرچولایزور</b>\n\n"
+        "<b>اضافه کردن سرور ویرچولایزور</b>\n\n"
         "مرحله ۱/۴ — نام سرور:\n<i>مثال: ایران DC1</i>",
         parse_mode="HTML",
         reply_markup=cancel_admin_kb(),
@@ -186,19 +186,19 @@ async def prov_add_pass(message: Message, state: FSMContext, session: AsyncSessi
     session.add(account)
     await session.flush()
 
-    test_msg = await message.answer("⏳ در حال تست اتصال...")
+    test_msg = await message.answer("در حال تست اتصال...")
     try:
         prov = VirtualizorProvider(data["url"], data["api_key"], account.api_secret)
         plans = await asyncio.wait_for(prov.list_plans(), timeout=10)
-        status = f"✅ اتصال موفق — {len(plans)} پلن یافت شد"
+        status = f"اتصال موفق — {len(plans)} پلن یافت شد"
     except asyncio.TimeoutError:
-        status = "⚠️ تایم‌اوت"
+        status = "تایم‌اوت"
     except Exception as e:
-        status = f"⚠️ {str(e)[:80]}"
+        status = f"{str(e)[:80]}"
 
     await test_msg.delete()
     await message.answer(
-        f"✅ <b>سرور اضافه شد!</b>\n\n🖥 {account.name}\n🌐 {account.api_endpoint}\n🔌 {status}",
+        f"<b>سرور اضافه شد!</b>\n\n{account.name}\n{account.api_endpoint}\n{status}",
         parse_mode="HTML",
         reply_markup=back_to_admin_kb("admin:providers"),
     )
@@ -210,14 +210,14 @@ async def _render_provider_detail(message, account, provider_id: int):
     change_ip_fee = float(extra.get("change_ip_fee", 0) or 0)
     fee_text = f"{change_ip_fee:,.0f} تومان" if change_ip_fee else "رایگان"
     await message.edit_text(
-        f"🖥 <b>{account.name}</b>\n\n"
-        f"🌐 URL: <code>{account.api_endpoint}</code>\n"
-        f"🔑 API Key: <code>{account.api_key}</code>\n"
-        f"🔒 API Pass: <code>{'*' * 8}</code>\n"
-        f"✅ وضعیت: {'فعال' if account.is_active else 'غیرفعال'}\n"
-        f"🔒 Strict KYC: {'روشن' if account.strict_kyc else 'خاموش'}\n"
-        f"💰 هزینه تغییر IP: {fee_text}\n"
-        f"🆔 ID: {account.id}",
+        f"<b>{account.name}</b>\n\n"
+        f"URL: <code>{account.api_endpoint}</code>\n"
+        f"API Key: <code>{account.api_key}</code>\n"
+        f"API Pass: <code>{'*' * 8}</code>\n"
+        f"وضعیت: {'فعال' if account.is_active else 'غیرفعال'}\n"
+        f"Strict KYC: {'روشن' if account.strict_kyc else 'خاموش'}\n"
+        f"هزینه تغییر IP: {fee_text}\n"
+        f"ID: {account.id}",
         parse_mode="HTML",
         reply_markup=provider_detail_kb(provider_id, account.is_active, account.strict_kyc, change_ip_fee),
     )
@@ -243,7 +243,7 @@ async def cb_prov_toggle(cb: CallbackQuery, session: AsyncSession):
         return
     account.is_active = not account.is_active
     await session.flush()
-    await cb.answer(f"{'✅ فعال' if account.is_active else '❌ غیرفعال'} شد.")
+    await cb.answer(f"{'فعال' if account.is_active else 'غیرفعال'} شد.")
     await _render_provider_detail(cb.message, account, provider_id)
 
 
@@ -272,7 +272,7 @@ async def cb_prov_edit_start(cb: CallbackQuery, state: FSMContext):
     await state.update_data(edit_provider_id=provider_id, edit_field=field)
     await state.set_state(ProviderFSM.edit_value)
     await cb.message.edit_text(
-        f"✏️ <b>ویرایش {labels.get(field, field)}</b>\n\nمقدار جدید:",
+        f"<b>ویرایش {labels.get(field, field)}</b>\n\nمقدار جدید:",
         parse_mode="HTML", reply_markup=cancel_admin_kb(),
     )
     await cb.answer()
@@ -300,13 +300,13 @@ async def prov_edit_value(message: Message, state: FSMContext, session: AsyncSes
         try:
             extra["change_ip_fee"] = float(value)
         except ValueError:
-            await message.answer("❌ مقدار باید عدد باشد.")
+            await message.answer("مقدار باید عدد باشد.")
             return
         account.extra_config = extra
     await session.flush()
     extra = account.extra_config or {}
     change_ip_fee = float(extra.get("change_ip_fee", 0) or 0)
-    await message.answer("✅ تغییر ذخیره شد.", reply_markup=provider_detail_kb(data["edit_provider_id"], account.is_active, account.strict_kyc, change_ip_fee))
+    await message.answer("تغییر ذخیره شد.", reply_markup=provider_detail_kb(data["edit_provider_id"], account.is_active, account.strict_kyc, change_ip_fee))
 
 
 @router.callback_query(F.data.startswith("admin:prov_test:"))
@@ -317,7 +317,7 @@ async def cb_prov_test(cb: CallbackQuery, session: AsyncSession):
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
     await cb.answer()
-    test_msg = await cb.message.answer("⏳ در حال تست اتصال...")
+    test_msg = await cb.message.answer("در حال تست اتصال...")
     try:
         prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
         plans = await asyncio.wait_for(prov.list_plans(), timeout=15)
@@ -328,7 +328,7 @@ async def cb_prov_test(cb: CallbackQuery, session: AsyncSession):
             if nodes:
                 node_lines = []
                 for n in nodes[:5]:
-                    status_icon = "✅" if n["online"] else "❌"
+                    status_icon = "" if n["online"] else ""
                     line = f"  {status_icon} <b>{n['name'] or 'بدون نام'}</b> | IP: <code>{n['ip']}</code>"
                     if n.get("os"):
                         line += f"\n     OS: <code>{n['os']}</code>"
@@ -341,28 +341,28 @@ async def cb_prov_test(cb: CallbackQuery, session: AsyncSession):
                         total = n["ram_total_mb"]
                         line += f"\n     RAM: <code>{used:.0f}/{total:.0f} MB</code>"
                     node_lines.append(line)
-                extra_info += "\n\n🖧 <b>سرورهای Virtualizor:</b>\n" + "\n".join(node_lines)
+                extra_info += "\n\n<b>سرورهای Virtualizor:</b>\n" + "\n".join(node_lines)
             else:
-                extra_info += "\n\n🖧 <b>سرورها:</b> هیچ سروری یافت نشد"
+                extra_info += "\n\n<b>سرورها:</b> هیچ سروری یافت نشد"
         except Exception as e:
-            extra_info += f"\n\n🖧 <b>سرورها — خطا:</b> <code>{e}</code>"
+            extra_info += f"\n\n<b>سرورها — خطا:</b> <code>{e}</code>"
         try:
             storages = await asyncio.wait_for(prov.list_storages(), timeout=8)
             if storages:
-                st_lines = [f"  {s['name']} ({s['free_gb']:.0f}GB آزاد) {'★' if s['is_primary'] else ''}" for s in storages[:3]]
-                extra_info += "\n\n💾 <b>استوریج‌ها:</b>\n" + "\n".join(st_lines)
+                st_lines = [f"  {s['name']} ({s['free_gb']:.0f}GB آزاد) {'' if s['is_primary'] else ''}" for s in storages[:3]]
+                extra_info += "\n\n<b>استوریج‌ها:</b>\n" + "\n".join(st_lines)
             else:
-                extra_info += "\n\n💾 <b>استوریج‌ها:</b> یافت نشد"
+                extra_info += "\n\n<b>استوریج‌ها:</b> یافت نشد"
         except Exception as e:
-            extra_info += f"\n\n💾 <b>استوریج‌ها — خطا:</b> <code>{e}</code>"
+            extra_info += f"\n\n<b>استوریج‌ها — خطا:</b> <code>{e}</code>"
         await test_msg.edit_text(
-            f"✅ <b>اتصال موفق!</b>\n🖥 {account.name}\n📦 {len(plans)} پلن{extra_info}",
+            f"<b>اتصال موفق!</b>\n{account.name}\n{len(plans)} پلن{extra_info}",
             parse_mode="HTML",
         )
     except asyncio.TimeoutError:
-        await test_msg.edit_text(f"⏱ <b>تایم‌اوت</b>\n🌐 {account.api_endpoint}", parse_mode="HTML")
+        await test_msg.edit_text(f"<b>تایم‌اوت</b>\n{account.api_endpoint}", parse_mode="HTML")
     except Exception as e:
-        await test_msg.edit_text(f"❌ <b>خطا:</b> {e}", parse_mode="HTML")
+        await test_msg.edit_text(f"<b>خطا:</b> {e}", parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("admin:prov_monitor:"))
@@ -373,47 +373,47 @@ async def cb_prov_monitor(cb: CallbackQuery, session: AsyncSession):
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
     await cb.answer()
-    mon_msg = await cb.message.answer("⏳ در حال خواندن اطلاعات سرور...")
+    mon_msg = await cb.message.answer("در حال خواندن اطلاعات سرور...")
     prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
     try:
         nodes = await asyncio.wait_for(prov.list_nodes(), timeout=15)
         if not nodes:
-            await mon_msg.edit_text("⚠️ هیچ سروری یافت نشد.\n\nاحتمالاً API key دسترسی <code>act=servers</code> ندارد.\nVirtualizor → Configuration → Admin API → ویرایش کلید → فعال کردن همه دسترسی‌ها", parse_mode="HTML")
+            await mon_msg.edit_text("هیچ سروری یافت نشد.\n\nاحتمالاً API key دسترسی <code>act=servers</code> ندارد.\nVirtualizor Configuration Admin API ویرایش کلید فعال کردن همه دسترسی‌ها", parse_mode="HTML")
             return
         lines = []
         for n in nodes:
-            status = "🟢 آنلاین" if n["online"] else "🔴 آفلاین"
+            status = "آنلاین" if n["online"] else "آفلاین"
             block = (
                 f"━━━━━━━━━━━━━━━━\n"
-                f"🖥 <b>{n['name'] or 'بدون نام'}</b>  {status}\n"
-                f"🌐 IP: <code>{n['ip']}</code>\n"
+                f"<b>{n['name'] or 'بدون نام'}</b>  {status}\n"
+                f"IP: <code>{n['ip']}</code>\n"
             )
             if n.get("os"):
-                block += f"🐧 OS: <code>{n['os']}</code>\n"
+                block += f"OS: <code>{n['os']}</code>\n"
             if n.get("cpu"):
-                block += f"⚡ CPU: <code>{str(n['cpu'])[:60]}</code>\n"
+                block += f"CPU: <code>{str(n['cpu'])[:60]}</code>\n"
             if n.get("cpu_load"):
-                block += f"📈 Load: <code>{n['cpu_load']}</code>\n"
+                block += f"Load: <code>{n['cpu_load']}</code>\n"
             if n.get("ram_total_mb"):
                 used = n.get("ram_used_mb", 0)
                 total = n["ram_total_mb"]
                 pct = (used / total * 100) if total else 0
-                block += f"🧠 RAM: <code>{used:.0f} / {total:.0f} MB  ({pct:.0f}%)</code>\n"
+                block += f"RAM: <code>{used:.0f} / {total:.0f} MB  ({pct:.0f}%)</code>\n"
             if n.get("hdd"):
-                block += f"💾 HDD: <code>{str(n['hdd'])[:60]}</code>\n"
+                block += f"HDD: <code>{str(n['hdd'])[:60]}</code>\n"
             if n.get("virt_type"):
-                block += f"🔧 Virt: <code>{n['virt_type']}</code>\n"
-            block += f"🆔 serid: <code>{n['serid']}</code>"
+                block += f"Virt: <code>{n['virt_type']}</code>\n"
+            block += f"serid: <code>{n['serid']}</code>"
             lines.append(block)
-        text = f"📊 <b>مانیتور — {account.name}</b>\n\n" + "\n\n".join(lines)
+        text = f"<b>مانیتور — {account.name}</b>\n\n" + "\n\n".join(lines)
         await mon_msg.edit_text(text, parse_mode="HTML")
     except asyncio.TimeoutError:
-        await mon_msg.edit_text("⏱ تایم‌اوت هنگام خواندن اطلاعات سرور.")
+        await mon_msg.edit_text("تایم‌اوت هنگام خواندن اطلاعات سرور.")
     except Exception as e:
         await mon_msg.edit_text(
-            f"❌ <b>خطا:</b> <code>{e}</code>\n\n"
+            f"<b>خطا:</b> <code>{e}</code>\n\n"
             "اگر خطا «access privileges» است:\n"
-            "Virtualizor → Configuration → Admin API → ویرایش کلید → فعال کردن همه دسترسی‌ها",
+            "Virtualizor Configuration Admin API ویرایش کلید فعال کردن همه دسترسی‌ها",
             parse_mode="HTML",
         )
 
@@ -426,7 +426,7 @@ async def cb_prov_del_confirm(cb: CallbackQuery, session: AsyncSession):
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
     await cb.message.edit_text(
-        f"⚠️ حذف سرور <b>{account.name}</b>؟",
+        f"حذف سرور <b>{account.name}</b>؟",
         parse_mode="HTML",
         reply_markup=confirm_kb(f"admin:prov_del_do:{provider_id}", "admin:providers"),
     )
@@ -445,7 +445,7 @@ async def cb_prov_del_do(cb: CallbackQuery, session: AsyncSession):
         )
         await session.delete(account)
         await session.flush()
-    await cb.message.edit_text("✅ سرور و محصولات مربوطه حذف شدند.", reply_markup=back_to_admin_kb("admin:providers"))
+    await cb.message.edit_text("سرور و محصولات مربوطه حذف شدند.", reply_markup=back_to_admin_kb("admin:providers"))
     await cb.answer()
 
 
@@ -458,9 +458,9 @@ async def cb_admin_plans(cb: CallbackQuery, session: AsyncSession):
     result = await session.execute(select(ServerPlan.category).distinct())
     categories = sorted({row[0] for row in result.all() if row[0]})
     text = (
-        f"📦 <b>محصولات</b>\n\n{len(categories)} دسته‌بندی:"
+        f"<b>محصولات</b>\n\n{len(categories)} دسته‌بندی:"
         if categories else
-        "📦 <b>محصولات</b>\n\nهیچ محصولی اضافه نشده."
+        "<b>محصولات</b>\n\nهیچ محصولی اضافه نشده."
     )
     await cb.message.edit_text(text, parse_mode="HTML", reply_markup=plans_categories_kb(categories))
     await cb.answer()
@@ -474,7 +474,7 @@ async def cb_admin_plans_cat(cb: CallbackQuery, session: AsyncSession):
     )
     plans = list(result.scalars().all())
     await cb.message.edit_text(
-        f"📁 <b>{category}</b>\n\n{len(plans)} محصول:",
+        f"<b>{category}</b>\n\n{len(plans)} محصول:",
         parse_mode="HTML",
         reply_markup=plans_in_category_kb(plans, category),
     )
@@ -491,9 +491,9 @@ async def cb_plan_detail(cb: CallbackQuery, session: AsyncSession):
 
     billing_lines = []
     if plan.price_hourly:
-        billing_lines.append(f"⏱ {plan.price_hourly:,.0f} T/ساعت")
+        billing_lines.append(f"{plan.price_hourly:,.0f} T/ساعت")
     if plan.price_monthly:
-        billing_lines.append(f"📅 {plan.price_monthly:,.0f} T/ماه")
+        billing_lines.append(f"{plan.price_monthly:,.0f} T/ماه")
 
     prov_name = "—"
     if plan.provider_account_id:
@@ -501,14 +501,14 @@ async def cb_plan_detail(cb: CallbackQuery, session: AsyncSession):
         prov_name = acc.name if acc else "—"
 
     await cb.message.edit_text(
-        f"📦 <b>{plan.display_name or plan.name}</b>\n\n"
-        f"📁 {plan.category or '—'}\n"
-        f"🖥 {prov_name}\n"
-        f"🆔 Plan ID: <code>{plan.provider_plan_id or '—'}</code>\n\n"
-        f"💾 {plan.ram} MB | {plan.cpu} CPU | {plan.disk} GB | {plan.bandwidth} GB BW\n"
-        f"📍 {plan.location or '—'}\n\n"
+        f"<b>{plan.display_name or plan.name}</b>\n\n"
+        f"{plan.category or '—'}\n"
+        f"{prov_name}\n"
+        f"Plan ID: <code>{plan.provider_plan_id or '—'}</code>\n\n"
+        f"{plan.ram} MB | {plan.cpu} CPU | {plan.disk} GB | {plan.bandwidth} GB BW\n"
+        f"{plan.location or '—'}\n\n"
         + "\n".join(billing_lines) + "\n\n"
-        + ("✅ فعال" if plan.is_active else "❌ غیرفعال"),
+        + ("فعال" if plan.is_active else "غیرفعال"),
         parse_mode="HTML",
         reply_markup=plan_detail_kb(plan_id, plan.is_active),
     )
@@ -521,7 +521,7 @@ async def cb_plan_detail(cb: CallbackQuery, session: AsyncSession):
 async def cb_plan_add_start(cb: CallbackQuery, state: FSMContext):
     await state.set_state(PlanFSM.add_category)
     await cb.message.edit_text(
-        "📦 <b>افزودن محصول</b>\n\nمرحله ۱ — دسته‌بندی:\n<i>مثال: سرور مجازی هلند</i>",
+        "<b>افزودن محصول</b>\n\nمرحله ۱ — دسته‌بندی:\n<i>مثال: سرور مجازی هلند</i>",
         parse_mode="HTML", reply_markup=cancel_admin_kb(),
     )
     await cb.answer()
@@ -560,7 +560,7 @@ async def plan_add_display_name(message: Message, state: FSMContext, session: As
     )
     providers = list(result.scalars().all())
     if not providers:
-        await message.answer("❌ ابتدا یک سرور ویرچولایزور اضافه کنید.", reply_markup=back_to_admin_kb("admin:providers"))
+        await message.answer("ابتدا یک سرور ویرچولایزور اضافه کنید.", reply_markup=back_to_admin_kb("admin:providers"))
         await state.clear()
         return
     await message.answer("مرحله ۴ — سرور ویرچولایزور:", reply_markup=providers_select_kb(providers))
@@ -573,7 +573,7 @@ async def plan_add_provider(cb: CallbackQuery, state: FSMContext, session: Async
 
     account = await session.get(ProviderAccount, provider_id)
     if account:
-        fetch_msg = await cb.message.edit_text("⏳ در حال خواندن پلن‌های Virtualizor...")
+        fetch_msg = await cb.message.edit_text("در حال خواندن پلن‌های Virtualizor...")
         try:
             prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
             virt_plans = await asyncio.wait_for(prov.list_plans(), timeout=15)
@@ -585,7 +585,7 @@ async def plan_add_provider(cb: CallbackQuery, state: FSMContext, session: Async
                     ram_label = f"{p.ram // 1024}GB" if p.ram >= 1024 else f"{p.ram}MB"
                     label = f"{p.name} | {ram_label}/{p.cpu}C/{p.disk}G"
                     builder.button(text=label, callback_data=f"admin:vplan:{p.provider_plan_id}")
-                builder.button(text="❌ انصراف", callback_data="admin_panel")
+                builder.button(text="انصراف", callback_data="admin_panel")
                 builder.adjust(1)
                 await fetch_msg.edit_text(
                     "مرحله ۵ — انتخاب پلن از Virtualizor:\n"
@@ -596,12 +596,12 @@ async def plan_add_provider(cb: CallbackQuery, state: FSMContext, session: Async
                 await cb.answer()
                 return
             else:
-                await fetch_msg.edit_text("⚠️ هیچ پلنی در Virtualizor یافت نشد. ابتدا پلن بسازید.")
+                await fetch_msg.edit_text("هیچ پلنی در Virtualizor یافت نشد. ابتدا پلن بسازید.")
                 await cb.answer()
                 return
         except Exception as e:
             await fetch_msg.edit_text(
-                f"⚠️ خطا در اتصال به Virtualizor: {e}\n\nPlan ID را دستی وارد کنید:",
+                f"خطا در اتصال به Virtualizor: {e}\n\nPlan ID را دستی وارد کنید:",
                 parse_mode="HTML",
                 reply_markup=cancel_admin_kb(),
             )
@@ -646,11 +646,11 @@ async def plan_select_virt_plan(cb: CallbackQuery, state: FSMContext, session: A
     await state.set_state(PlanFSM.confirm_autofetch)
     ram_label = f"{matched.ram // 1024}GB" if matched.ram >= 1024 else f"{matched.ram}MB"
     await cb.message.edit_text(
-        f"✅ <b>پلن انتخاب شد:</b> {matched.name}\n\n"
-        f"💾 RAM: {ram_label} ({matched.ram} MB)\n"
-        f"⚡ CPU: {matched.cpu} هسته\n"
-        f"💿 Disk: {matched.disk} GB\n"
-        f"🌐 Bandwidth: {matched.bandwidth} GB\n\n"
+        f"<b>پلن انتخاب شد:</b> {matched.name}\n\n"
+        f"RAM: {ram_label} ({matched.ram} MB)\n"
+        f"CPU: {matched.cpu} هسته\n"
+        f"Disk: {matched.disk} GB\n"
+        f"Bandwidth: {matched.bandwidth} GB\n\n"
         "آیا این مشخصات درست است؟",
         parse_mode="HTML",
         reply_markup=confirm_kb("admin:plan_autofetch_ok", "admin:plan_autofetch_no"),
@@ -666,7 +666,7 @@ async def plan_add_plan_id(message: Message, state: FSMContext, session: AsyncSe
     data = await state.get_data()
     account = await session.get(ProviderAccount, data["provider_account_id"])
     if account:
-        fetch_msg = await message.answer("⏳ در حال خواندن مشخصات از Virtualizor...")
+        fetch_msg = await message.answer("در حال خواندن مشخصات از Virtualizor...")
         try:
             prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
             virt_plans = await asyncio.wait_for(prov.list_plans(), timeout=15)
@@ -677,9 +677,9 @@ async def plan_add_plan_id(message: Message, state: FSMContext, session: AsyncSe
                     bandwidth=matched.bandwidth, autofetch=True,
                 )
                 await fetch_msg.edit_text(
-                    f"✅ <b>مشخصات خودکار خوانده شد:</b>\n\n"
-                    f"💾 RAM: {matched.ram} MB\n⚡ CPU: {matched.cpu} هسته\n"
-                    f"💿 Disk: {matched.disk} GB\n🌐 Bandwidth: {matched.bandwidth} GB\n\n"
+                    f"<b>مشخصات خودکار خوانده شد:</b>\n\n"
+                    f"RAM: {matched.ram} MB\nCPU: {matched.cpu} هسته\n"
+                    f"Disk: {matched.disk} GB\nBandwidth: {matched.bandwidth} GB\n\n"
                     "آیا این مشخصات درست است؟",
                     parse_mode="HTML",
                     reply_markup=confirm_kb("admin:plan_autofetch_ok", "admin:plan_autofetch_no"),
@@ -689,12 +689,12 @@ async def plan_add_plan_id(message: Message, state: FSMContext, session: AsyncSe
             else:
                 available = ", ".join(str(p.provider_plan_id) for p in virt_plans[:15])
                 await fetch_msg.edit_text(
-                    f"⚠️ Plan ID <code>{plan_id_str}</code> یافت نشد.\n"
+                    f"Plan ID <code>{plan_id_str}</code> یافت نشد.\n"
                     f"IDهای موجود: <code>{available or 'هیچ'}</code>",
                     parse_mode="HTML",
                 )
         except Exception as e:
-            await fetch_msg.edit_text(f"⚠️ خطا: {e}")
+            await fetch_msg.edit_text(f"خطا: {e}")
 
     await state.set_state(PlanFSM.add_ram)
     await message.answer("مرحله ۶ — RAM (مگابایت):", reply_markup=cancel_admin_kb())
@@ -814,16 +814,16 @@ async def _save_new_plan(msg, state: FSMContext, session: AsyncSession, location
 
     billing_lines = []
     if plan.price_hourly:
-        billing_lines.append(f"⏱ {plan.price_hourly:,.0f} T/ساعت")
+        billing_lines.append(f"{plan.price_hourly:,.0f} T/ساعت")
     if plan.price_monthly:
-        billing_lines.append(f"📅 {plan.price_monthly:,.0f} T/ماه")
+        billing_lines.append(f"{plan.price_monthly:,.0f} T/ماه")
 
-    autofetch_note = "\n✅ مشخصات از Virtualizor خوانده شد" if data.get("autofetch") else ""
+    autofetch_note = "\nمشخصات از Virtualizor خوانده شد" if data.get("autofetch") else ""
     await msg.answer(
-        f"✅ <b>محصول اضافه شد!</b>{autofetch_note}\n\n"
-        f"📦 {plan.display_name or plan.name}\n"
-        f"📁 {plan.category}\n"
-        f"💾 {plan.ram}MB | {plan.cpu}CPU | {plan.disk}GB\n"
+        f"<b>محصول اضافه شد!</b>{autofetch_note}\n\n"
+        f"{plan.display_name or plan.name}\n"
+        f"{plan.category}\n"
+        f"{plan.ram}MB | {plan.cpu}CPU | {plan.disk}GB\n"
         + "\n".join(billing_lines),
         parse_mode="HTML",
         reply_markup=back_to_admin_kb("admin:plans"),
@@ -847,7 +847,7 @@ async def cb_plan_edit_start(cb: CallbackQuery, state: FSMContext):
     await state.update_data(edit_plan_id=plan_id, edit_field=field)
     await state.set_state(PlanFSM.edit_value)
     await cb.message.edit_text(
-        f"✏️ <b>ویرایش {labels.get(field, field)}</b>\n\nمقدار جدید:",
+        f"<b>ویرایش {labels.get(field, field)}</b>\n\nمقدار جدید:",
         parse_mode="HTML", reply_markup=cancel_admin_kb(),
     )
     await cb.answer()
@@ -871,9 +871,9 @@ async def plan_edit_value(message: Message, state: FSMContext, session: AsyncSes
         else:
             setattr(plan, field, raw if raw not in ("-", "—", "none", "0") else None)
         await session.flush()
-        await message.answer("✅ ذخیره شد.", reply_markup=plan_detail_kb(data["edit_plan_id"], plan.is_active))
+        await message.answer("ذخیره شد.", reply_markup=plan_detail_kb(data["edit_plan_id"], plan.is_active))
     except ValueError:
-        await message.answer("❌ مقدار نامعتبر.")
+        await message.answer("مقدار نامعتبر.")
 
 
 @router.callback_query(F.data.startswith("admin:plan_toggle:"))
@@ -885,7 +885,7 @@ async def cb_plan_toggle(cb: CallbackQuery, session: AsyncSession):
         return
     plan.is_active = not plan.is_active
     await session.flush()
-    await cb.answer(f"{'✅ فعال' if plan.is_active else '❌ غیرفعال'} شد.")
+    await cb.answer(f"{'فعال' if plan.is_active else 'غیرفعال'} شد.")
     cb.data = f"admin:plan:{plan_id}"
     await cb_plan_detail(cb, session)
 
@@ -898,7 +898,7 @@ async def cb_plan_del_confirm(cb: CallbackQuery, session: AsyncSession):
         await cb.answer("محصول یافت نشد.", show_alert=True)
         return
     await cb.message.edit_text(
-        f"⚠️ حذف محصول <b>{plan.display_name or plan.name}</b>؟",
+        f"حذف محصول <b>{plan.display_name or plan.name}</b>؟",
         parse_mode="HTML",
         reply_markup=confirm_kb(f"admin:plan_del_do:{plan_id}", "admin:plans"),
     )
@@ -912,7 +912,7 @@ async def cb_plan_del_do(cb: CallbackQuery, session: AsyncSession):
     if plan:
         await session.delete(plan)
         await session.flush()
-    await cb.message.edit_text("✅ محصول حذف شد.", reply_markup=back_to_admin_kb("admin:plans"))
+    await cb.message.edit_text("محصول حذف شد.", reply_markup=back_to_admin_kb("admin:plans"))
     await cb.answer()
 
 
@@ -932,7 +932,7 @@ async def cb_subproducts(cb: CallbackQuery, session: AsyncSession):
     )
     subs = list(result.scalars().all())
     await cb.message.edit_text(
-        f"📦 <b>ریز-محصولات — {plan.display_name or plan.name}</b>\n\n"
+        f"<b>ریز-محصولات — {plan.display_name or plan.name}</b>\n\n"
         f"{len(subs)} ریز-محصول:",
         parse_mode="HTML",
         reply_markup=subproducts_kb(plan_id, subs),
@@ -950,11 +950,11 @@ async def cb_subprod_detail(cb: CallbackQuery, session: AsyncSession):
     type_label = "ترافیک" if sp.type == SubProductType.TRAFFIC else "IP اضافه"
     unit = "GB" if sp.type == SubProductType.TRAFFIC else "عدد"
     await cb.message.edit_text(
-        f"📦 <b>{sp.name}</b>\n\n"
+        f"<b>{sp.name}</b>\n\n"
         f"نوع: {type_label}\n"
         f"مقدار: {sp.value} {unit}\n"
         f"قیمت: {sp.price:,.0f} تومان\n"
-        f"وضعیت: {'✅ فعال' if sp.is_active else '❌ غیرفعال'}",
+        f"وضعیت: {'فعال' if sp.is_active else 'غیرفعال'}",
         parse_mode="HTML",
         reply_markup=subprod_detail_kb(sp_id, sp.plan_id, sp.is_active),
     )
@@ -967,7 +967,7 @@ async def cb_subprod_add_start(cb: CallbackQuery, state: FSMContext):
     await state.update_data(subprod_plan_id=plan_id)
     await state.set_state(SubProductFSM.select_type)
     await cb.message.edit_text(
-        "📦 <b>ریز-محصول جدید</b>\n\nنوع را انتخاب کنید:",
+        "<b>ریز-محصول جدید</b>\n\nنوع را انتخاب کنید:",
         parse_mode="HTML",
         reply_markup=subprod_type_kb(plan_id),
     )
@@ -1018,7 +1018,7 @@ async def subprod_add_value(message: Message, state: FSMContext, session: AsyncS
     session.add(sp)
     await session.flush()
     await message.answer(
-        f"✅ ریز-محصول <b>{sp.name}</b> اضافه شد!\nقیمت: {sp.price:,.0f} تومان",
+        f"ریز-محصول <b>{sp.name}</b> اضافه شد!\nقیمت: {sp.price:,.0f} تومان",
         parse_mode="HTML",
         reply_markup=back_to_admin_kb(f"admin:subproducts:{data['subprod_plan_id']}"),
     )
@@ -1032,7 +1032,7 @@ async def cb_subprod_edit(cb: CallbackQuery, state: FSMContext):
     await state.update_data(edit_sp_id=sp_id, edit_sp_field=field)
     await state.set_state(SubProductFSM.edit_value)
     await cb.message.edit_text(
-        f"✏️ <b>ویرایش {labels.get(field, field)}</b>\n\nمقدار جدید:",
+        f"<b>ویرایش {labels.get(field, field)}</b>\n\nمقدار جدید:",
         parse_mode="HTML", reply_markup=cancel_admin_kb(),
     )
     await cb.answer()
@@ -1053,9 +1053,9 @@ async def subprod_edit_value(message: Message, state: FSMContext, session: Async
         elif field in ("price", "value"):
             setattr(sp, field, float(raw))
         await session.flush()
-        await message.answer("✅ ذخیره شد.", reply_markup=subprod_detail_kb(sp.id, sp.plan_id, sp.is_active))
+        await message.answer("ذخیره شد.", reply_markup=subprod_detail_kb(sp.id, sp.plan_id, sp.is_active))
     except ValueError:
-        await message.answer("❌ مقدار نامعتبر.")
+        await message.answer("مقدار نامعتبر.")
 
 
 @router.callback_query(F.data.startswith("admin:subprod_toggle:"))
@@ -1067,7 +1067,7 @@ async def cb_subprod_toggle(cb: CallbackQuery, session: AsyncSession):
         return
     sp.is_active = not sp.is_active
     await session.flush()
-    await cb.answer(f"{'✅ فعال' if sp.is_active else '❌ غیرفعال'} شد.")
+    await cb.answer(f"{'فعال' if sp.is_active else 'غیرفعال'} شد.")
     cb.data = f"admin:subprod:{sp_id}"
     await cb_subprod_detail(cb, session)
 
@@ -1082,7 +1082,7 @@ async def cb_subprod_del(cb: CallbackQuery, session: AsyncSession):
     plan_id = sp.plan_id
     await session.delete(sp)
     await session.flush()
-    await cb.message.edit_text("✅ حذف شد.", reply_markup=back_to_admin_kb(f"admin:subproducts:{plan_id}"))
+    await cb.message.edit_text("حذف شد.", reply_markup=back_to_admin_kb(f"admin:subproducts:{plan_id}"))
     await cb.answer()
 
 
@@ -1095,7 +1095,7 @@ async def cb_admin_discounts(cb: CallbackQuery, session: AsyncSession):
     result = await session.execute(select(DiscountCode).order_by(DiscountCode.created_at.desc()))
     codes = list(result.scalars().all())
     await cb.message.edit_text(
-        f"🏷 <b>کدهای تخفیف</b>\n\nتعداد: {len(codes)}",
+        f"<b>کدهای تخفیف</b>\n\nتعداد: {len(codes)}",
         parse_mode="HTML",
         reply_markup=discounts_list_kb(codes),
     )
@@ -1106,7 +1106,7 @@ async def cb_admin_discounts(cb: CallbackQuery, session: AsyncSession):
 async def cb_disc_add_start(cb: CallbackQuery, state: FSMContext):
     await state.set_state(DiscountFSM.add_code)
     await cb.message.edit_text(
-        "🏷 <b>کد تخفیف جدید</b>\n\nمرحله ۱ — کد:\n<i>مثال: SUMMER20</i>",
+        "<b>کد تخفیف جدید</b>\n\nمرحله ۱ — کد:\n<i>مثال: SUMMER20</i>",
         parse_mode="HTML", reply_markup=cancel_admin_kb(),
     )
     await cb.answer()
@@ -1117,7 +1117,7 @@ async def disc_add_code(message: Message, state: FSMContext, session: AsyncSessi
     code = message.text.strip().upper()
     exists = await session.execute(select(DiscountCode).where(DiscountCode.code == code))
     if exists.scalar_one_or_none():
-        await message.answer("❌ این کد قبلاً وجود دارد:")
+        await message.answer("این کد قبلاً وجود دارد:")
         return
     await state.update_data(code=code)
     await state.set_state(DiscountFSM.add_percent)
@@ -1128,7 +1128,7 @@ async def disc_add_code(message: Message, state: FSMContext, session: AsyncSessi
 async def disc_add_percent(message: Message, state: FSMContext):
     pct = float(message.text)
     if not 1 <= pct <= 100:
-        await message.answer("❌ باید بین ۱ تا ۱۰۰:")
+        await message.answer("باید بین ۱ تا ۱۰۰:")
         return
     await state.update_data(discount_percent=pct)
     await state.set_state(DiscountFSM.add_expires)
@@ -1145,7 +1145,7 @@ async def disc_add_expires(message: Message, state: FSMContext):
             dt = datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=timezone.utc)
             await state.update_data(expires_at=dt.isoformat())
         except ValueError:
-            await message.answer("❌ فرمت نادرست. مثال: 2025-12-31")
+            await message.answer("فرمت نادرست. مثال: 2025-12-31")
             return
     await state.set_state(DiscountFSM.add_max_uses)
     await message.answer("مرحله ۴ — حداکثر استفاده یا /skip:", reply_markup=skip_or_cancel_kb())
@@ -1167,7 +1167,7 @@ async def disc_add_max_uses(message: Message, state: FSMContext, session: AsyncS
         try:
             max_uses = int(raw)
         except ValueError:
-            await message.answer("❌ عدد صحیح وارد کنید:")
+            await message.answer("عدد صحیح وارد کنید:")
             return
     await _save_discount(message, state, session, max_uses)
 
@@ -1193,11 +1193,11 @@ async def _save_discount(msg, state: FSMContext, session: AsyncSession, max_uses
     await session.flush()
     exp_text = expires_at.strftime("%Y-%m-%d") if expires_at else "بدون انقضا"
     await msg.answer(
-        f"✅ <b>کد تخفیف ساخته شد!</b>\n\n"
-        f"🏷 کد: <code>{code.code}</code>\n"
-        f"💯 {code.discount_percent:.0f}%\n"
-        f"📅 {exp_text}\n"
-        f"🔢 {max_uses or 'نامحدود'}",
+        f"<b>کد تخفیف ساخته شد!</b>\n\n"
+        f"کد: <code>{code.code}</code>\n"
+        f"{code.discount_percent:.0f}%\n"
+        f"{exp_text}\n"
+        f"{max_uses or 'نامحدود'}",
         parse_mode="HTML",
         reply_markup=back_to_admin_kb("admin:discounts"),
     )
@@ -1212,13 +1212,13 @@ async def cb_disc_detail(cb: CallbackQuery, session: AsyncSession):
         return
     exp = code.expires_at.strftime("%Y-%m-%d") if code.expires_at else "بدون انقضا"
     max_u = str(code.max_uses) if code.max_uses else "نامحدود"
-    user_note = f"\n👤 اختصاصی کاربر ID: {code.user_id}" if code.user_id else ""
+    user_note = f"\nاختصاصی کاربر ID: {code.user_id}" if code.user_id else ""
     await cb.message.edit_text(
-        f"🏷 <b>{code.code}</b>{user_note}\n\n"
-        f"💯 {code.discount_percent:.0f}%\n"
-        f"📅 {exp}\n"
-        f"🔢 {code.use_count}/{max_u}\n"
-        f"وضعیت: {'✅' if code.is_active else '❌'}",
+        f"<b>{code.code}</b>{user_note}\n\n"
+        f"{code.discount_percent:.0f}%\n"
+        f"{exp}\n"
+        f"{code.use_count}/{max_u}\n"
+        f"وضعیت: {'' if code.is_active else ''}",
         parse_mode="HTML",
         reply_markup=discount_detail_kb(disc_id, code.is_active),
     )
@@ -1234,7 +1234,7 @@ async def cb_disc_toggle(cb: CallbackQuery, session: AsyncSession):
         return
     code.is_active = not code.is_active
     await session.flush()
-    await cb.answer(f"{'✅ فعال' if code.is_active else '❌ غیرفعال'} شد.")
+    await cb.answer(f"{'فعال' if code.is_active else 'غیرفعال'} شد.")
     cb.data = f"admin:disc:{disc_id}"
     await cb_disc_detail(cb, session)
 
@@ -1247,7 +1247,7 @@ async def cb_disc_del_confirm(cb: CallbackQuery, session: AsyncSession):
         await cb.answer("کد یافت نشد.", show_alert=True)
         return
     await cb.message.edit_text(
-        f"⚠️ حذف کد <b>{code.code}</b>؟",
+        f"حذف کد <b>{code.code}</b>؟",
         parse_mode="HTML",
         reply_markup=confirm_kb(f"admin:disc_del_do:{disc_id}", "admin:discounts"),
     )
@@ -1261,7 +1261,7 @@ async def cb_disc_del_do(cb: CallbackQuery, session: AsyncSession):
     if code:
         await session.delete(code)
         await session.flush()
-    await cb.message.edit_text("✅ کد حذف شد.", reply_markup=back_to_admin_kb("admin:discounts"))
+    await cb.message.edit_text("کد حذف شد.", reply_markup=back_to_admin_kb("admin:discounts"))
     await cb.answer()
 
 
@@ -1277,7 +1277,7 @@ async def cb_disc_edit_start(cb: CallbackQuery, state: FSMContext):
     await state.update_data(edit_disc_id=disc_id, edit_field=field)
     await state.set_state(DiscountFSM.edit_value)
     await cb.message.edit_text(
-        f"✏️ <b>{labels.get(field, field)}</b>\n\nمقدار جدید:",
+        f"<b>{labels.get(field, field)}</b>\n\nمقدار جدید:",
         parse_mode="HTML", reply_markup=cancel_admin_kb(),
     )
     await cb.answer()
@@ -1304,9 +1304,9 @@ async def disc_edit_value(message: Message, state: FSMContext, session: AsyncSes
             val = int(raw)
             code.max_uses = None if val == 0 else val
         await session.flush()
-        await message.answer("✅ ذخیره شد.", reply_markup=discount_detail_kb(data["edit_disc_id"], code.is_active))
+        await message.answer("ذخیره شد.", reply_markup=discount_detail_kb(data["edit_disc_id"], code.is_active))
     except ValueError as e:
-        await message.answer(f"❌ مقدار نامعتبر: {e}")
+        await message.answer(f"مقدار نامعتبر: {e}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1330,8 +1330,8 @@ async def cmd_credit_user(message: Message, session: AsyncSession):
         await message.answer("کاربر یافت نشد.")
         return
     await BillingService(session).credit(user.id, amount, description="شارژ توسط ادمین")
-    await message.answer(f"✅ {amount:,.0f} تومان به {tg_id} اضافه شد.")
+    await message.answer(f"{amount:,.0f} تومان به {tg_id} اضافه شد.")
     try:
-        await message.bot.send_message(tg_id, f"✅ {amount:,.0f} تومان به کیف‌پول شما اضافه شد.")
+        await message.bot.send_message(tg_id, f"{amount:,.0f} تومان به کیف‌پول شما اضافه شد.")
     except Exception:
         pass

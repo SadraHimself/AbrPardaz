@@ -99,8 +99,8 @@ async def _get_terms_text(session: AsyncSession) -> str:
 
 def _terms_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ قبول می‌کنم", callback_data="accept_terms")],
-        [InlineKeyboardButton(text="❌ رد کردن", callback_data="decline_terms")],
+        [InlineKeyboardButton(text="قبول می‌کنم", callback_data="accept_terms", **{"icon_custom_emoji_id": "5206607081334906820"})],
+        [InlineKeyboardButton(text="رد کردن", callback_data="decline_terms", **{"icon_custom_emoji_id": "5240241223632954241"})],
     ])
 
 
@@ -212,7 +212,7 @@ async def _render_support(target_msg, session: AsyncSession):
     buttons = []
     if support_id:
         buttons.append([InlineKeyboardButton(text="💬 پشتیبانی", url=f"https://t.me/{support_id.lstrip('@')}")])
-    buttons.append([InlineKeyboardButton(text="بازگشت", callback_data="main_menu", **{"icon_custom_emoji_id": "5933748020960038714"})])
+    buttons.append([InlineKeyboardButton(text="بازگشت", callback_data="main_menu", **{"icon_custom_emoji_id": "5258236805890710909"})])
     await target_msg.edit_text(support_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 
@@ -281,7 +281,7 @@ async def _render_profile(target_msg, user: User, session: AsyncSession):
             [InlineKeyboardButton(text="شارژ کیف پول", callback_data="wallet", **{"icon_custom_emoji_id": "5987880246865565644"})],
             [InlineKeyboardButton(text="تاریخچه تراکنش‌ها", callback_data="tx_history", **{"icon_custom_emoji_id": "5956561916573782596"})],
             [InlineKeyboardButton(text="احراز هویت", callback_data="start_verify", **{"icon_custom_emoji_id": "5346024704765347251"})],
-            [InlineKeyboardButton(text="بازگشت", callback_data="main_menu", **{"icon_custom_emoji_id": "5933748020960038714"})],
+            [InlineKeyboardButton(text="بازگشت", callback_data="main_menu", **{"icon_custom_emoji_id": "5258236805890710909"})],
         ]),
     )
 

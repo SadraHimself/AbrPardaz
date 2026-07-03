@@ -25,12 +25,12 @@ class RestoreFSM(StatesGroup):
 def _confirm_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(
-            text="✅ بله، بازیابی شود",
+            text="بله، بازیابی شود",
             callback_data="restore_do",
             **{"style": "danger"},
         ),
         InlineKeyboardButton(
-            text="❌ لغو",
+            text="لغو",
             callback_data="restore_cancel",
         ),
     ]])
@@ -149,10 +149,10 @@ async def handle_zip_upload(message: Message, user: User, state: FSMContext):
     await state.update_data(file_id=doc.file_id, file_name=doc.file_name)
 
     await message.answer(
-        f"💾 <b>بازیابی دیتابیس</b>\n\n"
-        f"📦 فایل: <code>{doc.file_name}</code>\n"
-        f"📏 حجم: <b>{size_kb} KB</b>\n\n"
-        f"⚠️ <b>هشدار:</b> تمام داده‌های فعلی با داده‌های بکاپ جایگزین می‌شوند.\n"
+        f"<b>بازیابی دیتابیس</b>\n\n"
+        f"فایل: <code>{doc.file_name}</code>\n"
+        f"حجم: <b>{size_kb} KB</b>\n\n"
+        f"<b>هشدار:</b> تمام داده‌های فعلی با داده‌های بکاپ جایگزین می‌شوند.\n"
         f"پس از بازیابی، سرورها با Virtualizor همگام می‌شوند.\n\n"
         f"ادامه می‌دهید؟",
         parse_mode="HTML",
@@ -172,7 +172,7 @@ async def cb_restore_confirm(cb: CallbackQuery, user: User, bot: Bot, state: FSM
     await state.clear()
     await cb.answer()
 
-    await cb.message.edit_text("⏳ در حال دریافت فایل از تلگرام...")
+    await cb.message.edit_text("در حال دریافت فایل از تلگرام...")
 
     # 1. Download ZIP from Telegram
     try:
@@ -182,7 +182,7 @@ async def cb_restore_confirm(cb: CallbackQuery, user: User, bot: Bot, state: FSM
         buf.seek(0)
     except Exception as e:
         await cb.message.edit_text(
-            f"❌ خطا در دریافت فایل:\n<code>{e}</code>",
+            f"خطا در دریافت فایل:\n<code>{e}</code>",
             parse_mode="HTML",
         )
         return
@@ -192,19 +192,19 @@ async def cb_restore_confirm(cb: CallbackQuery, user: User, bot: Bot, state: FSM
         with zipfile.ZipFile(buf) as zf:
             sql_names = [n for n in zf.namelist() if n.endswith(".sql")]
             if not sql_names:
-                await cb.message.edit_text("❌ فایل SQL داخل ZIP پیدا نشد.")
+                await cb.message.edit_text("فایل SQL داخل ZIP پیدا نشد.")
                 return
             sql_bytes = zf.read(sql_names[0])
             sql_kb = len(sql_bytes) // 1024
     except Exception as e:
         await cb.message.edit_text(
-            f"❌ خطا در باز کردن ZIP:\n<code>{e}</code>",
+            f"خطا در باز کردن ZIP:\n<code>{e}</code>",
             parse_mode="HTML",
         )
         return
 
     await cb.message.edit_text(
-        f"⏳ در حال بازیابی دیتابیس...\n"
+        f"در حال بازیابی دیتابیس...\n"
         f"<i>({sql_kb} KB — ممکن است چند دقیقه طول بکشد)</i>",
         parse_mode="HTML",
     )
@@ -214,7 +214,7 @@ async def cb_restore_confirm(cb: CallbackQuery, user: User, bot: Bot, state: FSM
 
     if not ok:
         await cb.message.edit_text(
-            f"❌ <b>خطا در بازیابی</b>\n\n<code>{err[:800]}</code>",
+            f"<b>خطا در بازیابی</b>\n\n<code>{err[:800]}</code>",
             parse_mode="HTML",
         )
         return
@@ -227,17 +227,17 @@ async def cb_restore_confirm(cb: CallbackQuery, user: User, bot: Bot, state: FSM
         pass
 
     await cb.message.edit_text(
-        "✅ دیتابیس بازیابی شد.\n⏳ در حال همگام‌سازی سرورها با Virtualizor..."
+        "دیتابیس بازیابی شد.\nدر حال همگام‌سازی سرورها با Virtualizor..."
     )
 
     # 5. Re-sync all servers with live Virtualizor status
     sync = await _resync_servers()
 
     await cb.message.edit_text(
-        f"✅ <b>بازیابی کامل شد</b>\n\n"
-        f"📦 فایل: <code>{file_name}</code>\n"
-        f"🖥 سرورهای همگام‌شده: <b>{sync['synced']}</b>\n"
-        f"⚠️ خطا در همگام‌سازی: <b>{sync['errors']}</b>\n\n"
+        f"<b>بازیابی کامل شد</b>\n\n"
+        f"فایل: <code>{file_name}</code>\n"
+        f"سرورهای همگام‌شده: <b>{sync['synced']}</b>\n"
+        f"خطا در همگام‌سازی: <b>{sync['errors']}</b>\n\n"
         f"ربات آماده به کار است.",
         parse_mode="HTML",
     )
@@ -246,5 +246,5 @@ async def cb_restore_confirm(cb: CallbackQuery, user: User, bot: Bot, state: FSM
 @router.callback_query(F.data == "restore_cancel")
 async def cb_restore_cancel(cb: CallbackQuery, state: FSMContext):
     await state.clear()
-    await cb.message.edit_text("❌ عملیات بازیابی لغو شد.")
+    await cb.message.edit_text("عملیات بازیابی لغو شد.")
     await cb.answer()

@@ -87,8 +87,8 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
 def server_delete_confirm_kb(server_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            _btn("بله، حذف شود", f"srv_action:{server_id}:delete", "danger"),
-            _btn("خیر", f"server:{server_id}", "success"),
+            _btn("بله، حذف شود", f"srv_action:{server_id}:delete", "danger", "5206607081334906820"),
+            _btn("خیر", f"server:{server_id}", "success", "5240241223632954241"),
         ]
     ])
 
@@ -101,7 +101,7 @@ def subproducts_buy_kb(server_id: int, sub_products) -> InlineKeyboardMarkup:
             text=f"📦 {sp.name} — {sp.value:.0f} {unit} — {sp.price:,.0f}T",
             callback_data=f"buy_subprod:{server_id}:{sp.id}",
         )
-    builder.button(text="🔙 بازگشت", callback_data=f"server:{server_id}")
+    builder.button(text="بازگشت", callback_data=f"server:{server_id}", **{"icon_custom_emoji_id": "5258236805890710909"})
     builder.adjust(1)
     return builder.as_markup()
 
@@ -111,6 +111,6 @@ def add_traffic_kb(server_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for gb in options:
         builder.button(text=f"{gb} GB", callback_data=f"add_traffic:{server_id}:{gb}")
-    builder.button(text="🔙 بازگشت", callback_data=f"server:{server_id}")
+    builder.button(text="بازگشت", callback_data=f"server:{server_id}", **{"icon_custom_emoji_id": "5258236805890710909"})
     builder.adjust(3)
     return builder.as_markup()

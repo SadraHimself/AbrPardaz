@@ -181,8 +181,8 @@ async def cb_server_action(cb: CallbackQuery, user: User, session: AsyncSession)
             f"آیا از ریبوت سرور <b>{server.name}</b> مطمئن هستید؟\nسرور به مدت چند ثانیه از دسترس خارج می‌شود.",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="بله، ریبوت شود", callback_data=f"srv_action:{server_id}:restart", **{"style": "success"}),
-                InlineKeyboardButton(text="انصراف", callback_data=f"server:{server_id}", **{"style": "danger"}),
+                InlineKeyboardButton(text="بله، ریبوت شود", callback_data=f"srv_action:{server_id}:restart", **{"style": "success", "icon_custom_emoji_id": "5206607081334906820"}),
+                InlineKeyboardButton(text="انصراف", callback_data=f"server:{server_id}", **{"style": "danger", "icon_custom_emoji_id": "5240241223632954241"}),
             ]]),
         )
         await cb.answer()
@@ -205,7 +205,7 @@ async def cb_server_action(cb: CallbackQuery, user: User, session: AsyncSession)
         builder = InlineKeyboardBuilder()
         for os_item in os_list[:20]:
             builder.button(text=os_item["name"], callback_data=f"srv_rebuild:{server_id}:{os_item['id']}")
-        builder.button(text="❌ انصراف", callback_data=f"server:{server_id}")
+        builder.button(text="انصراف", callback_data=f"server:{server_id}", **{"icon_custom_emoji_id": "5240241223632954241"})
         builder.adjust(2)
         await cb.message.edit_text(
             f"🔁 <b>ریبیلد — {server.name}</b>\n\nسیستم‌عامل جدید را انتخاب کنید:",
@@ -279,8 +279,8 @@ async def cb_server_rebuild_confirm(cb: CallbackQuery, user: User, session: Asyn
         "این عمل قابل بازگشت نیست. آیا مطمئن هستید؟",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="✅ بله، ریبیلد شود", callback_data=f"srv_rebuild_do:{server_id}:{os_id}"),
-            InlineKeyboardButton(text="❌ انصراف", callback_data=f"server:{server_id}"),
+            InlineKeyboardButton(text="بله، ریبیلد شود", callback_data=f"srv_rebuild_do:{server_id}:{os_id}", **{"icon_custom_emoji_id": "5206607081334906820"}),
+            InlineKeyboardButton(text="انصراف", callback_data=f"server:{server_id}", **{"icon_custom_emoji_id": "5240241223632954241"}),
         ]]),
     )
     await cb.answer()
@@ -397,7 +397,7 @@ async def _show_buy_categories(target_msg, user: User, state: FSMContext, sessio
     builder = InlineKeyboardBuilder()
     for cat in categories:
         builder.button(text=cat, callback_data=f"buycat:{cat}")
-    builder.button(text="بازگشت به منو", callback_data="cancel", **{"icon_custom_emoji_id": "5933748020960038714"})
+    builder.button(text="بازگشت به منو", callback_data="cancel", **{"icon_custom_emoji_id": "5258236805890710909"})
     builder.adjust(1)
     await target_msg.edit_text(
         '<tg-emoji emoji-id="5926980668624998964">🟡</tg-emoji> دسته‌بندی مورد نظر را انتخاب کنید:',
@@ -431,7 +431,7 @@ async def cb_select_category(cb: CallbackQuery, user: User, state: FSMContext, s
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🪪 احراز هویت", callback_data="start_verify")],
-                [InlineKeyboardButton(text="بازگشت به منو", callback_data="cancel", **{"icon_custom_emoji_id": "5933748020960038714"})],
+                [InlineKeyboardButton(text="بازگشت به منو", callback_data="cancel", **{"icon_custom_emoji_id": "5258236805890710909"})],
             ]),
         )
         await state.clear()
@@ -456,7 +456,7 @@ async def cb_select_category(cb: CallbackQuery, user: User, state: FSMContext, s
         ram_display = plan.ram // 1024 if plan.ram >= 1024 else plan.ram
         label = f"{plan.display_name or plan.name} | {ram_display}GB/{plan.cpu}C/{plan.disk}G"
         builder.button(text=label, callback_data=f"buyplan:{plan.id}", **{"icon_custom_emoji_id": "5260726538302660868"})
-    builder.button(text="بازگشت", callback_data="buy_server")
+    builder.button(text="بازگشت", callback_data="buy_server", **{"icon_custom_emoji_id": "5258236805890710909"})
     builder.adjust(1)
 
     await state.set_state(BuyServerStates.selecting_plan)
@@ -494,7 +494,7 @@ async def cb_select_plan(cb: CallbackQuery, state: FSMContext, session: AsyncSes
                     InlineKeyboardButton(text=f"ساعتی — {plan.price_hourly:,.0f} تومان", callback_data="buybilling:hourly", **{"icon_custom_emoji_id": "5798535677318533269"}),
                     InlineKeyboardButton(text=f"ماهانه — {plan.price_monthly:,.0f} تومان", callback_data="buybilling:monthly", **{"icon_custom_emoji_id": "5778496382117613636"}),
                 ],
-                [InlineKeyboardButton(text="انصراف", callback_data="cancel", **{"icon_custom_emoji_id": "5348362704572664028", "style": "danger"})],
+                [InlineKeyboardButton(text="انصراف", callback_data="cancel", **{"icon_custom_emoji_id": "5240241223632954241", "style": "danger"})],
             ]),
         )
     elif has_hourly:
@@ -526,7 +526,7 @@ async def _ask_hostname(cb: CallbackQuery, state: FSMContext):
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="خودکار", callback_data="buyhost:auto", **{"icon_custom_emoji_id": "6039614175917903752"})],
-            [InlineKeyboardButton(text="بازگشت به منو", callback_data="cancel", **{"icon_custom_emoji_id": "5933748020960038714"})],
+            [InlineKeyboardButton(text="بازگشت به منو", callback_data="cancel", **{"icon_custom_emoji_id": "5258236805890710909"})],
         ]),
     )
 
@@ -590,7 +590,7 @@ async def _ask_os(cb: CallbackQuery, state: FSMContext, session: AsyncSession, u
     builder = InlineKeyboardBuilder()
     for os_item in os_list[:20]:
         builder.button(text=os_item["name"], callback_data=f"buyos:{os_item['id']}")
-    builder.button(text="بازگشت به منو", callback_data="cancel", **{"icon_custom_emoji_id": "5933748020960038714"})
+    builder.button(text="بازگشت به منو", callback_data="cancel", **{"icon_custom_emoji_id": "5258236805890710909"})
     builder.adjust(2)
 
     await cb.message.edit_text(
@@ -634,7 +634,7 @@ async def _ask_os_message(message: Message, state: FSMContext, session: AsyncSes
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="⏭ بدون کد تخفیف", callback_data="buydisc:skip")],
-                    [InlineKeyboardButton(text="❌ انصراف", callback_data="cancel", **{"style": "danger"})],
+                    [InlineKeyboardButton(text="انصراف", callback_data="cancel", **{"style": "danger", "icon_custom_emoji_id": "5240241223632954241"})],
                 ]),
             )
         return
@@ -645,7 +645,7 @@ async def _ask_os_message(message: Message, state: FSMContext, session: AsyncSes
     builder = InlineKeyboardBuilder()
     for os_item in os_list[:20]:
         builder.button(text=os_item["name"], callback_data=f"buyos:{os_item['id']}")
-    builder.button(text="بازگشت به منو", callback_data="cancel", **{"icon_custom_emoji_id": "5933748020960038714"})
+    builder.button(text="بازگشت به منو", callback_data="cancel", **{"icon_custom_emoji_id": "5258236805890710909"})
     builder.adjust(2)
 
     await message.answer(
@@ -679,7 +679,7 @@ async def _ask_discount(cb: CallbackQuery, state: FSMContext):
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="⏭ بدون کد تخفیف", callback_data="buydisc:skip")],
-            [InlineKeyboardButton(text="❌ انصراف", callback_data="cancel", **{"style": "danger"})],
+            [InlineKeyboardButton(text="انصراف", callback_data="cancel", **{"style": "danger", "icon_custom_emoji_id": "5240241223632954241"})],
         ]),
     )
 
@@ -913,8 +913,8 @@ async def cb_change_ip_confirm(cb: CallbackQuery, user: User, session: AsyncSess
         "سرور پس از تغییر IP ریبوت خواهد شد.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="تأیید تغییر IP", callback_data=f"srv_changeip_do:{server_id}", **{"style": "success"}),
-            InlineKeyboardButton(text="انصراف", callback_data=f"server:{server_id}", **{"style": "danger"}),
+            InlineKeyboardButton(text="تأیید تغییر IP", callback_data=f"srv_changeip_do:{server_id}", **{"style": "success", "icon_custom_emoji_id": "5206607081334906820"}),
+            InlineKeyboardButton(text="انصراف", callback_data=f"server:{server_id}", **{"style": "danger", "icon_custom_emoji_id": "5240241223632954241"}),
         ]]),
     )
     await cb.answer()
@@ -1093,8 +1093,8 @@ async def cb_change_password_confirm(cb: CallbackQuery, user: User, session: Asy
         "آیا مطمئن هستید؟",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="بله، رمز تغییر شود", callback_data=f"srv_chpass_do:{server_id}", **{"style": "success"}),
-            InlineKeyboardButton(text="انصراف", callback_data=f"server:{server_id}", **{"style": "danger"}),
+            InlineKeyboardButton(text="بله، رمز تغییر شود", callback_data=f"srv_chpass_do:{server_id}", **{"style": "success", "icon_custom_emoji_id": "5206607081334906820"}),
+            InlineKeyboardButton(text="انصراف", callback_data=f"server:{server_id}", **{"style": "danger", "icon_custom_emoji_id": "5240241223632954241"}),
         ]]),
     )
     await cb.answer()

@@ -387,6 +387,37 @@ async def cb_admin_finance(cb: CallbackQuery):
     await cb.answer()
 
 
+# ── Exchange rates ────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "admin:exrate")
+async def cb_admin_exrate(cb: CallbackQuery, session: AsyncSession):
+    usd = await _get_setting(session, "np_usd_to_irt_rate", "")
+    eur = await _get_setting(session, "np_eur_to_irt_rate", "")
+    updated = await _get_setting(session, "exrate_updated_at", "")
+
+    def _fmt(v: str) -> str:
+        try:
+            return f"{float(v):,.0f} تومان"
+        except (ValueError, TypeError):
+            return "تنظیم نشده"
+
+    lines = [
+        "💱 <b>نرخ ارز</b>\n",
+        f"دلار آمریکا: <b>{_fmt(usd)}</b>",
+        f"یورو: <b>{_fmt(eur)}</b>",
+    ]
+    if updated:
+        lines.append(f"\n<i>آخرین بروزرسانی: {updated}</i>")
+    lines.append("\n<i>هر ۸ ساعت به‌صورت خودکار از API نوسان بروزرسانی می‌شود.</i>")
+
+    await cb.message.edit_text(
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=back_to_admin_kb("admin:finance"),
+    )
+    await cb.answer()
+
+
 # ── Bulk credit ───────────────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "admin:finance_bulk_credit")

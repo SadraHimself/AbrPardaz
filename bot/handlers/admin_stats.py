@@ -85,7 +85,7 @@ async def _set_setting(session: AsyncSession, key: str, value: str) -> None:
 @router.callback_query(F.data == "admin:stats")
 async def cb_admin_stats_menu(cb: CallbackQuery):
     await cb.message.edit_text(
-        "📊 <b>آمار</b>\n\nنوع گزارش را انتخاب کنید:",
+        "<b>آمار</b>\n\nنوع گزارش را انتخاب کنید:",
         parse_mode="HTML",
         reply_markup=stats_kb(),
     )
@@ -114,7 +114,7 @@ async def cb_stats_month(cb: CallbackQuery, session: AsyncSession):
 async def cb_stats_range_start(cb: CallbackQuery, state: FSMContext):
     await state.set_state(StatsFSM.range_start)
     await cb.message.edit_text(
-        "📅 <b>بازه تاریخی</b>\n\nتاریخ شروع (YYYY-MM-DD):",
+        "<b>بازه تاریخی</b>\n\nتاریخ شروع (YYYY-MM-DD):",
         parse_mode="HTML",
         reply_markup=cancel_admin_kb(),
     )
@@ -129,7 +129,7 @@ async def msg_stats_range_start(message: Message, state: FSMContext):
         await state.set_state(StatsFSM.range_end)
         await message.answer("تاریخ پایان (YYYY-MM-DD):", reply_markup=cancel_admin_kb())
     except ValueError:
-        await message.answer("❌ فرمت نادرست. مثال: 2025-01-01")
+        await message.answer("فرمت نادرست. مثال: 2025-01-01")
 
 
 @router.message(StatsFSM.range_end)
@@ -139,7 +139,7 @@ async def msg_stats_range_end(message: Message, state: FSMContext, session: Asyn
             tzinfo=timezone.utc, hour=23, minute=59, second=59
         )
     except ValueError:
-        await message.answer("❌ فرمت نادرست. مثال: 2025-01-31")
+        await message.answer("فرمت نادرست. مثال: 2025-01-31")
         return
     data = await state.get_data()
     await state.clear()
@@ -176,16 +176,16 @@ async def msg_stats_range_end(message: Message, state: FSMContext, session: Asyn
     )).scalar() or 0
 
     await message.answer(
-        f"📊 <b>آمار: {label}</b>\n\n"
-        f"👥 <b>کاربران</b>\n"
+        f"<b>آمار: {label}</b>\n\n"
+        f"<b>کاربران</b>\n"
         f"کاربران کل: <b>{total_users}</b>\n"
         f"کاربر جدید: <b>{new_users}</b>\n\n"
-        f"🖥 <b>سرور‌ها</b>\n"
+        f"<b>سرور‌ها</b>\n"
         f"سرور جدید: <b>{new_servers}</b>\n"
         f"سرور فعال: <b>{active_srv}</b>\n"
         f"سرور ساسپند: <b>{suspended_srv}</b>\n"
         f"سرور حذف شده: <b>{deleted_srv}</b>\n\n"
-        f"💰 <b>مالی</b>\n"
+        f"<b>مالی</b>\n"
         f"درآمد: <b>{revenue:,.0f} تومان</b>\n"
         f"موجودی کیف‌پول‌ها: <b>{total_wallet:,.0f} تومان</b>",
         parse_mode="HTML",
@@ -226,16 +226,16 @@ async def _show_stats(cb: CallbackQuery, session: AsyncSession, start: datetime,
     )).scalar() or 0
 
     await cb.message.edit_text(
-        f"📊 <b>آمار — {label}</b>\n\n"
-        f"👥 <b>کاربران</b>\n"
+        f"<b>آمار — {label}</b>\n\n"
+        f"<b>کاربران</b>\n"
         f"کاربران کل: <b>{total_users}</b>\n"
         f"کاربر جدید: <b>{new_users}</b>\n\n"
-        f"🖥 <b>سرور‌ها</b>\n"
+        f"<b>سرور‌ها</b>\n"
         f"سرور جدید: <b>{new_servers}</b>\n"
         f"سرور فعال: <b>{active_srv}</b>\n"
         f"سرور ساسپند: <b>{suspended_srv}</b>\n"
         f"سرور حذف شده: <b>{deleted_srv}</b>\n\n"
-        f"💰 <b>مالی</b>\n"
+        f"<b>مالی</b>\n"
         f"درآمد: <b>{revenue:,.0f} تومان</b>\n"
         f"موجودی کیف‌پول‌ها: <b>{total_wallet:,.0f} تومان</b>\n"
         f"کد تخفیف فعال: <b>{active_disc}</b>",
@@ -257,7 +257,7 @@ _SETTING_LABELS = {
 @router.callback_query(F.data == "admin:settings")
 async def cb_admin_settings(cb: CallbackQuery):
     await cb.message.edit_text(
-        "⚙️ <b>تنظیمات ربات</b>\n\nیک گزینه را انتخاب کنید:",
+        "<b>تنظیمات ربات</b>\n\nیک گزینه را انتخاب کنید:",
         parse_mode="HTML",
         reply_markup=settings_menu_kb(),
     )
@@ -273,7 +273,7 @@ async def cb_setting_edit(cb: CallbackQuery, state: FSMContext, session: AsyncSe
     await state.set_state(SettingsFSM.edit_value)
     preview = f"\n\n<b>مقدار فعلی:</b>\n<code>{current[:200]}</code>" if current else ""
     await cb.message.edit_text(
-        f"✏️ <b>{label}</b>{preview}\n\nمقدار جدید را وارد کنید:",
+        f"<b>{label}</b>{preview}\n\nمقدار جدید را وارد کنید:",
         parse_mode="HTML",
         reply_markup=cancel_admin_kb(),
     )
@@ -289,7 +289,7 @@ async def msg_setting_value(message: Message, state: FSMContext, session: AsyncS
     if key == "welcome_sticker_id" and message.sticker:
         value = message.sticker.file_id
     elif key == "welcome_sticker_id" and not message.text:
-        await message.answer("❌ لطفاً یک استیکر ارسال کنید.")
+        await message.answer("لطفاً یک استیکر ارسال کنید.")
         return
     else:
         value = message.text.strip() if message.text else ""
@@ -297,7 +297,7 @@ async def msg_setting_value(message: Message, state: FSMContext, session: AsyncS
     await state.clear()
     await _set_setting(session, key, value)
     await message.answer(
-        "✅ تنظیم ذخیره شد.",
+        "تنظیم ذخیره شد.",
         reply_markup=settings_menu_kb(),
     )
 
@@ -312,7 +312,7 @@ async def cb_channels(cb: CallbackQuery, session: AsyncSession):
     except Exception:
         channels = []
     await cb.message.edit_text(
-        f"📢 <b>کانال‌های اجباری</b>\n\n"
+        f"<b>کانال‌های اجباری</b>\n\n"
         f"کاربران باید قبل از استفاده عضو این کانال‌ها باشند:\n"
         f"{'بدون کانال' if not channels else chr(10).join(channels)}",
         parse_mode="HTML",
@@ -325,7 +325,7 @@ async def cb_channels(cb: CallbackQuery, session: AsyncSession):
 async def cb_ch_add(cb: CallbackQuery, state: FSMContext):
     await state.set_state(SettingsFSM.channel_add)
     await cb.message.edit_text(
-        "📢 <b>افزودن کانال</b>\n\n"
+        "<b>افزودن کانال</b>\n\n"
         "آیدی کانال را وارد کنید:\n<i>مثال: @mychannel یا -1001234567890</i>",
         parse_mode="HTML",
         reply_markup=cancel_admin_kb(),
@@ -338,7 +338,7 @@ async def msg_ch_add(message: Message, state: FSMContext, session: AsyncSession)
     await state.clear()
     ch = message.text.strip()
     if not ch.startswith("@") and not ch.lstrip("-").isdigit():
-        await message.answer("❌ آیدی نامعتبر. باید با @ شروع شود یا عدد باشد.")
+        await message.answer("آیدی نامعتبر. باید با @ شروع شود یا عدد باشد.")
         return
     raw = await _get_setting(session, "force_channels", "[]")
     try:
@@ -348,7 +348,7 @@ async def msg_ch_add(message: Message, state: FSMContext, session: AsyncSession)
     if ch not in channels:
         channels.append(ch)
         await _set_setting(session, "force_channels", json.dumps(channels))
-    await message.answer(f"✅ کانال {ch} اضافه شد.", reply_markup=back_to_admin_kb("admin:channels"))
+    await message.answer(f"کانال {ch} اضافه شد.", reply_markup=back_to_admin_kb("admin:channels"))
 
 
 @router.callback_query(F.data.startswith("admin:ch_del:"))
@@ -369,7 +369,7 @@ async def cb_ch_del(cb: CallbackQuery, session: AsyncSession):
     if to_remove:
         channels.remove(to_remove)
         await _set_setting(session, "force_channels", json.dumps(channels))
-    await cb.answer("✅ کانال حذف شد.")
+    await cb.answer("کانال حذف شد.")
     await cb_channels(cb, session)
 
 
@@ -380,7 +380,7 @@ async def cb_ch_del(cb: CallbackQuery, session: AsyncSession):
 @router.callback_query(F.data == "admin:finance")
 async def cb_admin_finance(cb: CallbackQuery):
     await cb.message.edit_text(
-        "💰 <b>بخش مالی</b>\n\nعملیات مورد نظر را انتخاب کنید:",
+        "<b>بخش مالی</b>\n\nعملیات مورد نظر را انتخاب کنید:",
         parse_mode="HTML",
         reply_markup=finance_kb(),
     )
@@ -402,7 +402,7 @@ async def cb_admin_exrate(cb: CallbackQuery, session: AsyncSession):
             return "تنظیم نشده"
 
     lines = [
-        "💱 <b>نرخ ارز</b>\n",
+        "<b>نرخ ارز</b>\n",
         f"دلار آمریکا: <b>{_fmt(usd)}</b>",
         f"یورو: <b>{_fmt(eur)}</b>",
     ]
@@ -424,7 +424,7 @@ async def cb_admin_exrate(cb: CallbackQuery, session: AsyncSession):
 async def cb_bulk_credit_start(cb: CallbackQuery, state: FSMContext):
     await state.set_state(FinanceFSM.bulk_credit_amount)
     await cb.message.edit_text(
-        "💰 <b>شارژ همه کاربران</b>\n\nمبلغ (تومان) برای شارژ همه کاربران فعال:",
+        "<b>شارژ همه کاربران</b>\n\nمبلغ (تومان) برای شارژ همه کاربران فعال:",
         parse_mode="HTML",
         reply_markup=cancel_admin_kb(),
     )
@@ -440,7 +440,7 @@ async def msg_bulk_credit_amount(message: Message, state: FSMContext, session: A
     await state.update_data(bulk_amount=amount)
     await state.set_state(FinanceFSM.bulk_credit_confirm)
     await message.answer(
-        f"⚠️ <b>تأیید شارژ همگانی</b>\n\n"
+        f"<b>تأیید شارژ همگانی</b>\n\n"
         f"مبلغ: {amount:,.0f} تومان\n"
         f"تعداد کاربران: {total_users}\n"
         f"جمع کل: {amount * total_users:,.0f} تومان\n\n"
@@ -455,7 +455,7 @@ async def cb_bulk_credit_do(cb: CallbackQuery, state: FSMContext, session: Async
     data = await state.get_data()
     await state.clear()
     amount = data["bulk_amount"]
-    await cb.answer("⏳ در حال پردازش...")
+    await cb.answer("در حال پردازش...")
 
     result = await session.execute(select(User).where(User.status == UserStatus.ACTIVE))
     users = list(result.scalars().all())
@@ -466,7 +466,7 @@ async def cb_bulk_credit_do(cb: CallbackQuery, state: FSMContext, session: Async
         count += 1
 
     await cb.message.edit_text(
-        f"✅ <b>شارژ همگانی انجام شد!</b>\n\n"
+        f"<b>شارژ همگانی انجام شد!</b>\n\n"
         f"{count} کاربر — {amount:,.0f} تومان هر نفر",
         parse_mode="HTML",
         reply_markup=back_to_admin_kb("admin:finance"),
@@ -480,7 +480,7 @@ async def cb_price_adj_start(cb: CallbackQuery, session: AsyncSession):
     result = await session.execute(select(ServerPlan.category).distinct())
     categories = sorted({row[0] for row in result.all() if row[0]})
     await cb.message.edit_text(
-        "📈 <b>تغییر قیمت محصولات</b>\n\nدسته‌بندی را انتخاب کنید:",
+        "<b>تغییر قیمت محصولات</b>\n\nدسته‌بندی را انتخاب کنید:",
         parse_mode="HTML",
         reply_markup=price_adj_categories_kb(categories),
     )
@@ -494,7 +494,7 @@ async def cb_price_adj_category(cb: CallbackQuery, state: FSMContext):
     await state.set_state(FinanceFSM.price_adj_percent)
     cat_label = "همه محصولات" if category == "__all__" else category
     await cb.message.edit_text(
-        f"📈 <b>{cat_label}</b>\n\n"
+        f"<b>{cat_label}</b>\n\n"
         "درصد تغییر را وارد کنید:\n"
         "<i>مثبت = افزایش، منفی = کاهش\nمثال: 25 یا -10</i>",
         parse_mode="HTML",
@@ -519,7 +519,7 @@ async def msg_price_adj_percent(message: Message, state: FSMContext, session: As
     await state.set_state(FinanceFSM.price_adj_confirm)
     cat_label = "همه محصولات" if category == "__all__" else category
     await message.answer(
-        f"⚠️ <b>تأیید تغییر قیمت</b>\n\n"
+        f"<b>تأیید تغییر قیمت</b>\n\n"
         f"دسته: {cat_label}\n"
         f"تغییر: {'+'if pct > 0 else ''}{pct:.1f}%\n"
         f"تعداد محصولات: {count}\n\n"
@@ -554,7 +554,7 @@ async def cb_price_adj_do(cb: CallbackQuery, state: FSMContext, session: AsyncSe
 
     sign = "+" if pct > 0 else ""
     await cb.message.edit_text(
-        f"✅ <b>قیمت‌ها تغییر کرد!</b>\n\n"
+        f"<b>قیمت‌ها تغییر کرد!</b>\n\n"
         f"{count} محصول — {sign}{pct:.1f}%",
         parse_mode="HTML",
         reply_markup=back_to_admin_kb("admin:finance"),
@@ -567,13 +567,13 @@ async def cb_price_adj_do(cb: CallbackQuery, state: FSMContext, session: AsyncSe
 # ══════════════════════════════════════════════════════════════════════════════
 
 _LOG_TOPIC_NAMES = {
-    "log_topic_finance":        "💰 گزارش مالی",
-    "log_topic_new_user":       "👤 کاربران جدید",
-    "log_topic_purchase":       "🛒 گزارش خرید",
-    "log_topic_server":         "🖥 لاگ سرور",
-    "log_topic_backup":         "💾 بکاپ",
-    "log_topic_moderation":     "🔨 مودریشن",
-    "log_topic_exchange_rate":  "💱 نرخ ارز",
+    "log_topic_finance":        "گزارش مالی",
+    "log_topic_new_user":       "کاربران جدید",
+    "log_topic_purchase":       "گزارش خرید",
+    "log_topic_server":         "لاگ سرور",
+    "log_topic_backup":         "بکاپ",
+    "log_topic_moderation":     "مودریشن",
+    "log_topic_exchange_rate":  "نرخ ارز",
 }
 
 
@@ -584,27 +584,27 @@ async def cb_admin_log_group(cb: CallbackQuery, session: AsyncSession):
         topics = []
         for key, label in _LOG_TOPIC_NAMES.items():
             tid = await _get_setting(session, key)
-            topics.append(f"  {label}: {'✅' if tid else '❌'}")
+            topics.append(f"  {label}: {'' if tid else ''}")
         topics_text = "\n".join(topics)
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="➕ ساخت تاپیک‌های جدید", callback_data="admin:log_sync")],
-            [InlineKeyboardButton(text="❌ قطع اتصال", callback_data="admin:log_disconnect")],
-            [InlineKeyboardButton(text="🔙 بازگشت", callback_data="admin_panel")],
+            [InlineKeyboardButton(text="ساخت تاپیک‌های جدید", callback_data="admin:log_sync")],
+            [InlineKeyboardButton(text="قطع اتصال", callback_data="admin:log_disconnect")],
+            [InlineKeyboardButton(text="بازگشت", callback_data="admin_panel")],
         ])
         await cb.message.edit_text(
-            f"📋 <b>تاپیک اطلاعات</b>\n\n"
-            f"✅ متصل به گروه: <code>{group_id}</code>\n\n"
+            f"<b>تاپیک اطلاعات</b>\n\n"
+            f"متصل به گروه: <code>{group_id}</code>\n\n"
             f"<b>تاپیک‌ها:</b>\n{topics_text}",
             parse_mode="HTML",
             reply_markup=kb,
         )
     else:
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔗 اتصال گروه", callback_data="admin:log_setup")],
-            [InlineKeyboardButton(text="🔙 بازگشت", callback_data="admin_panel")],
+            [InlineKeyboardButton(text="اتصال گروه", callback_data="admin:log_setup")],
+            [InlineKeyboardButton(text="بازگشت", callback_data="admin_panel")],
         ])
         await cb.message.edit_text(
-            "📋 <b>تاپیک اطلاعات</b>\n\n"
+            "<b>تاپیک اطلاعات</b>\n\n"
             "هنوز گروهی متصل نشده.\n\n"
             "<b>راهنما:</b>\n"
             "۱. ربات را به یک سوپرگروه تاپیک‌دار اضافه کنید\n"
@@ -620,7 +620,7 @@ async def cb_admin_log_group(cb: CallbackQuery, session: AsyncSession):
 async def cb_admin_log_setup(cb: CallbackQuery, state: FSMContext):
     await state.set_state(LogGroupFSM.waiting_group_id)
     await cb.message.edit_text(
-        "🔗 <b>اتصال گروه لاگ</b>\n\n"
+        "<b>اتصال گروه لاگ</b>\n\n"
         "Chat ID گروه را وارد کنید:\n"
         "<i>مثال: -1001234567890</i>",
         parse_mode="HTML",
@@ -635,7 +635,7 @@ async def msg_log_group_id(message: Message, state: FSMContext, session: AsyncSe
     try:
         group_id = int(raw)
     except ValueError:
-        await message.answer("❌ آیدی نامعتبر. یک عدد صحیح وارد کنید:")
+        await message.answer("آیدی نامعتبر. یک عدد صحیح وارد کنید:")
         return
 
     await state.clear()
@@ -644,11 +644,11 @@ async def msg_log_group_id(message: Message, state: FSMContext, session: AsyncSe
     try:
         await message.bot.send_message(
             group_id,
-            "✅ ربات با موفقیت متصل شد! در حال ساخت تاپیک‌ها...",
+            "ربات با موفقیت متصل شد! در حال ساخت تاپیک‌ها...",
         )
     except Exception as e:
         await message.answer(
-            f"❌ اتصال به گروه ناموفق بود:\n<code>{e}</code>\n\n"
+            f"اتصال به گروه ناموفق بود:\n<code>{e}</code>\n\n"
             "مطمئن شوید ربات ادمین گروه است.",
             parse_mode="HTML",
         )
@@ -676,13 +676,13 @@ async def msg_log_group_id(message: Message, state: FSMContext, session: AsyncSe
     if failed:
         fail_text = "\n".join(failed)
         await message.answer(
-            f"⚠️ گروه متصل شد ولی برخی تاپیک‌ها ساخته نشدند:\n<code>{fail_text}</code>",
+            f"گروه متصل شد ولی برخی تاپیک‌ها ساخته نشدند:\n<code>{fail_text}</code>",
             parse_mode="HTML",
             reply_markup=back_to_admin_kb("admin:log_group"),
         )
     else:
         await message.answer(
-            "✅ <b>اتصال برقرار شد!</b>\n\n"
+            "<b>اتصال برقرار شد!</b>\n\n"
             "تمام تاپیک‌ها با موفقیت ساخته شدند.\n"
             "اولین بکاپ در چند ثانیه ارسال می‌شود.",
             parse_mode="HTML",
@@ -710,9 +710,9 @@ async def cb_admin_log_sync(cb: CallbackQuery, session: AsyncSession):
     if not created and not failed:
         await cb.answer("همه تاپیک‌ها قبلاً موجودند.", show_alert=True)
     elif failed:
-        await cb.answer(f"❌ خطا در ساخت: {', '.join(failed[:2])}", show_alert=True)
+        await cb.answer(f"خطا در ساخت: {', '.join(failed[:2])}", show_alert=True)
     else:
-        await cb.answer(f"✅ ساخته شد: {', '.join(created)}", show_alert=True)
+        await cb.answer(f"ساخته شد: {', '.join(created)}", show_alert=True)
     await cb_admin_log_group(cb, session)
 
 
@@ -738,17 +738,17 @@ async def cb_admin_np_gateway(cb: CallbackQuery, session: AsyncSession):
     rate = await _get_setting(session, "np_usd_to_irt_rate", "تنظیم نشده")
     wh_url = await _get_setting(session, "np_webhook_url", "تنظیم نشده")
 
-    api_status = "✅ تنظیم شده" if _s.NP_API_KEY else "❌ تنظیم نشده"
+    api_status = "تنظیم شده" if _s.NP_API_KEY else "تنظیم نشده"
     if wh_url and wh_url != "تنظیم نشده":
         wh_short = wh_url[:40] + "…" if len(wh_url) > 40 else wh_url
     else:
         wh_short = "تنظیم نشده"
 
     await cb.message.edit_text(
-        f"💎 <b>مدیریت درگاه NOWPayments</b>\n\n"
-        f"🔑 API Key: {api_status}\n"
-        f"💱 نرخ دلار: <b>{rate}</b> تومان\n"
-        f"🌐 Webhook URL: <code>{wh_short}</code>\n\n"
+        f"<b>مدیریت درگاه NOWPayments</b>\n\n"
+        f"API Key: {api_status}\n"
+        f"نرخ دلار: <b>{rate}</b> تومان\n"
+        f"Webhook URL: <code>{wh_short}</code>\n\n"
         f"<i>برای تغییر هر مورد دکمه مربوطه را بزنید.</i>",
         parse_mode="HTML",
         reply_markup=np_gateway_kb(),
@@ -760,7 +760,7 @@ async def cb_admin_np_gateway(cb: CallbackQuery, session: AsyncSession):
 async def cb_admin_np_rate(cb: CallbackQuery, state: FSMContext):
     await state.set_state(NPSettingsFSM.waiting_rate)
     await cb.message.edit_text(
-        "💱 <b>تنظیم نرخ دلار به تومان</b>\n\n"
+        "<b>تنظیم نرخ دلار به تومان</b>\n\n"
         "نرخ تبدیل هر دلار به تومان را وارد کنید:\n"
         "<i>مثال: 75000</i>",
         parse_mode="HTML",
@@ -777,13 +777,13 @@ async def msg_np_rate(message: Message, state: FSMContext, session: AsyncSession
         if rate <= 0:
             raise ValueError
     except ValueError:
-        await message.answer("❌ مقدار نامعتبر. یک عدد مثبت وارد کنید:")
+        await message.answer("مقدار نامعتبر. یک عدد مثبت وارد کنید:")
         return
 
     await state.clear()
     await _set_setting(session, "np_usd_to_irt_rate", str(rate))
     await message.answer(
-        f"✅ نرخ دلار به <b>{rate:,.0f} تومان</b> تنظیم شد.",
+        f"نرخ دلار به <b>{rate:,.0f} تومان</b> تنظیم شد.",
         parse_mode="HTML",
         reply_markup=back_to_admin_kb("admin:np"),
     )
@@ -793,7 +793,7 @@ async def msg_np_rate(message: Message, state: FSMContext, session: AsyncSession
 async def cb_admin_np_wh(cb: CallbackQuery, state: FSMContext):
     await state.set_state(NPSettingsFSM.waiting_webhook_url)
     await cb.message.edit_text(
-        "🌐 <b>تنظیم Webhook URL</b>\n\n"
+        "<b>تنظیم Webhook URL</b>\n\n"
         "آدرس IPN webhook را وارد کنید:\n"
         "<i>مثال: https://example.com/np-webhook</i>",
         parse_mode="HTML",
@@ -806,13 +806,13 @@ async def cb_admin_np_wh(cb: CallbackQuery, state: FSMContext):
 async def msg_np_wh(message: Message, state: FSMContext, session: AsyncSession):
     url = (message.text or "").strip()
     if not url.startswith("http"):
-        await message.answer("❌ آدرس باید با http یا https شروع شود:")
+        await message.answer("آدرس باید با http یا https شروع شود:")
         return
 
     await state.clear()
     await _set_setting(session, "np_webhook_url", url)
     await message.answer(
-        f"✅ Webhook URL تنظیم شد:\n<code>{url}</code>",
+        f"Webhook URL تنظیم شد:\n<code>{url}</code>",
         parse_mode="HTML",
         reply_markup=back_to_admin_kb("admin:np"),
     )
@@ -823,25 +823,25 @@ async def cb_admin_np_test(cb: CallbackQuery):
     from bot.config import settings as _s
     from bot.services.nowpayments import NOWPaymentsClient, NOWPaymentsError
 
-    await cb.answer("⏳ در حال تست...")
+    await cb.answer("در حال تست...")
 
     if not _s.NP_API_KEY:
         await cb.message.edit_text(
-            "❌ <b>NP_API_KEY</b> در .env تنظیم نشده.",
+            "<b>NP_API_KEY</b> در .env تنظیم نشده.",
             parse_mode="HTML",
             reply_markup=back_to_admin_kb("admin:np"),
         )
         return
 
     client = NOWPaymentsClient()
-    lines = ["💎 <b>تست اتصال NOWPayments</b>\n"]
+    lines = ["<b>تست اتصال NOWPayments</b>\n"]
 
     try:
         status = await client.check_status()
         api_ok = status.get("message") == "OK"
-        lines.append(f"🔌 وضعیت API: {'✅ آنلاین' if api_ok else '❌ مشکل'}")
+        lines.append(f"وضعیت API: {'آنلاین' if api_ok else 'مشکل'}")
     except NOWPaymentsError as e:
-        lines.append(f"🔌 وضعیت API: ❌ خطا — {e}")
+        lines.append(f"وضعیت API: خطا — {e}")
         await cb.message.edit_text("\n".join(lines), parse_mode="HTML",
                                    reply_markup=back_to_admin_kb("admin:np"))
         return
@@ -850,15 +850,15 @@ async def cb_admin_np_test(cb: CallbackQuery):
         coins = await client.get_merchant_coins()
         outcome = _s.NP_OUTCOME_CURRENCY.lower()
         trx_active = any(c.lower() == outcome for c in coins)
-        lines.append(f"🪙 ارز خروجی ({outcome.upper()}): {'✅ فعال' if trx_active else '❌ غیرفعال'}")
+        lines.append(f"ارز خروجی ({outcome.upper()}): {'فعال' if trx_active else 'غیرفعال'}")
         active_list = ", ".join(coins[:10]) + ("…" if len(coins) > 10 else "")
-        lines.append(f"📋 ارزهای فعال: {active_list}")
+        lines.append(f"ارزهای فعال: {active_list}")
     except NOWPaymentsError as e:
-        lines.append(f"🪙 دریافت لیست ارزها: ❌ خطا — {e}")
+        lines.append(f"دریافت لیست ارزها: خطا — {e}")
 
-    lines.append(f"\n🔑 API Key: <code>***{_s.NP_API_KEY[-6:]}</code>")
-    lines.append(f"💱 قیمت‌گذاری: {_s.NP_PRICE_CURRENCY.upper()}")
-    lines.append(f"🎯 پرداخت به: {_s.NP_OUTCOME_CURRENCY.upper()}")
+    lines.append(f"\nAPI Key: <code>***{_s.NP_API_KEY[-6:]}</code>")
+    lines.append(f"قیمت‌گذاری: {_s.NP_PRICE_CURRENCY.upper()}")
+    lines.append(f"پرداخت به: {_s.NP_OUTCOME_CURRENCY.upper()}")
 
     await cb.message.edit_text(
         "\n".join(lines),

@@ -274,17 +274,15 @@ async def _render_profile(target_msg, user: User, session: AsyncSession):
         f'<tg-emoji emoji-id="5258477770735885832">📄</tg-emoji> لیمیت سرور ساعتی: <b>{hourly_limit}</b>\n\n'
         f"موجودی کیف پول: <b>{user.balance:,.0f} تومان</b>"
     )
-    rows = [
-        [InlineKeyboardButton(text="شارژ کیف پول", callback_data="wallet", **{"icon_custom_emoji_id": "5987880246865565644"})],
-        [InlineKeyboardButton(text="تاریخچه تراکنش‌ها", callback_data="tx_history", **{"icon_custom_emoji_id": "5956561916573782596"})],
-    ]
-    if not user.is_kyc_verified:
-        rows.append([InlineKeyboardButton(text="🪪 احراز هویت", callback_data="start_verify")])
-    rows.append([InlineKeyboardButton(text="بازگشت", callback_data="main_menu", **{"icon_custom_emoji_id": "5933748020960038714"})])
     await target_msg.edit_text(
         text,
         parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="شارژ کیف پول", callback_data="wallet", **{"icon_custom_emoji_id": "5987880246865565644"})],
+            [InlineKeyboardButton(text="تاریخچه تراکنش‌ها", callback_data="tx_history", **{"icon_custom_emoji_id": "5956561916573782596"})],
+            [InlineKeyboardButton(text="احراز هویت", callback_data="start_verify", **{"icon_custom_emoji_id": "5346024704765347251"})],
+            [InlineKeyboardButton(text="بازگشت", callback_data="main_menu", **{"icon_custom_emoji_id": "5933748020960038714"})],
+        ]),
     )
 
 

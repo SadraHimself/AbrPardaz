@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     MIN_BALANCE_THRESHOLD: float = 0.0
     TRAFFIC_GRACE_SECONDS: int = 300
 
+    # ── Navasan (exchange rates) ──────────────────────────────────────────────────
+    NAVASAN_API_KEY: str = ""
+
     # ── NOWPayments ───────────────────────────────────────────────────────────────
     NP_API_KEY: str = ""
     NP_IPN_SECRET: str = ""

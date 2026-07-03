@@ -5,9 +5,9 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
-def _inactive(is_active: bool) -> str:
-    """Text tag used instead of a status emoji in list rows."""
-    return "" if is_active else " (غیرفعال)"
+def _st(is_active: bool) -> str:
+    """Status indicator prefix for list rows (active / inactive)."""
+    return "✅ " if is_active else "❌ "
 
 
 def admin_menu_kb() -> InlineKeyboardMarkup:
@@ -32,7 +32,7 @@ def providers_list_kb(providers: list) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for p in providers:
         kyc = " (KYC)" if p.strict_kyc else ""
-        builder.button(text=f"{p.name}{kyc}{_inactive(p.is_active)}", callback_data=f"admin:prov:{p.id}")
+        builder.button(text=f"{_st(p.is_active)}{p.name}{kyc}", callback_data=f"admin:prov:{p.id}")
     builder.button(text="اضافه کردن سرور", callback_data="admin:prov_add")
     builder.button(text="بازگشت", callback_data="admin_panel")
     builder.adjust(1)
@@ -75,7 +75,7 @@ def plans_in_category_kb(plans: list, category: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for p in plans:
         builder.button(
-            text=f"{p.display_name or p.name}{_inactive(p.is_active)}",
+            text=f"{_st(p.is_active)}{p.display_name or p.name}",
             callback_data=f"admin:plan:{p.id}",
         )
     builder.button(text="افزودن محصول", callback_data="admin:plan_add")
@@ -112,7 +112,7 @@ def discounts_list_kb(codes: list) -> InlineKeyboardMarkup:
     for c in codes:
         user_tag = "(اختصاصی) " if c.user_id else ""
         builder.button(
-            text=f"{user_tag}{c.code} — {c.discount_percent:.0f}%{_inactive(c.is_active)}",
+            text=f"{_st(c.is_active)}{user_tag}{c.code} — {c.discount_percent:.0f}%",
             callback_data=f"admin:disc:{c.id}",
         )
     builder.button(text="کد جدید", callback_data="admin:disc_add")
@@ -161,9 +161,9 @@ def user_detail_kb(user_id: int, is_banned: bool, is_kyc: bool, hourly_limit: in
 def users_list_kb(users: list, page: int = 0, total: int = 0) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for u in users:
-        tag = "(بن) " if u.status.value == "banned" else ""
+        status = "🚫" if u.status.value == "banned" else ("✅" if u.is_phone_verified else "❌")
         builder.button(
-            text=f"{tag}{u.first_name or 'N/A'} | {u.balance:,.0f}T",
+            text=f"{status} {u.first_name or 'N/A'} | {u.balance:,.0f}T",
             callback_data=f"admin:user:{u.id}",
         )
     # Pagination
@@ -264,7 +264,7 @@ def subproducts_kb(plan_id: int, sub_products: list) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for sp in sub_products:
         builder.button(
-            text=f"{sp.name} — {sp.price:,.0f}T{_inactive(sp.is_active)}",
+            text=f"{_st(sp.is_active)}{sp.name} — {sp.price:,.0f}T",
             callback_data=f"admin:subprod:{sp.id}",
         )
     builder.button(text="افزودن ریز-محصول", callback_data=f"admin:subprod_add:{plan_id}")

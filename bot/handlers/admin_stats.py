@@ -584,7 +584,7 @@ async def cb_admin_log_group(cb: CallbackQuery, session: AsyncSession):
         topics = []
         for key, label in _LOG_TOPIC_NAMES.items():
             tid = await _get_setting(session, key)
-            topics.append(f"  {label}: {'' if tid else ''}")
+            topics.append(f"  {label}: {'✅' if tid else '❌'}")
         topics_text = "\n".join(topics)
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="ساخت تاپیک‌های جدید", callback_data="admin:log_sync")],
@@ -593,7 +593,7 @@ async def cb_admin_log_group(cb: CallbackQuery, session: AsyncSession):
         ])
         await cb.message.edit_text(
             f"<b>تاپیک اطلاعات</b>\n\n"
-            f"متصل به گروه: <code>{group_id}</code>\n\n"
+            f"✅ متصل به گروه: <code>{group_id}</code>\n\n"
             f"<b>تاپیک‌ها:</b>\n{topics_text}",
             parse_mode="HTML",
             reply_markup=kb,
@@ -605,7 +605,7 @@ async def cb_admin_log_group(cb: CallbackQuery, session: AsyncSession):
         ])
         await cb.message.edit_text(
             "<b>تاپیک اطلاعات</b>\n\n"
-            "هنوز گروهی متصل نشده.\n\n"
+            "❌ هنوز گروهی متصل نشده.\n\n"
             "<b>راهنما:</b>\n"
             "۱. ربات را به یک سوپرگروه تاپیک‌دار اضافه کنید\n"
             "۲. به ربات دسترسی <b>ادمین کامل</b> بدهید\n"
@@ -644,11 +644,11 @@ async def msg_log_group_id(message: Message, state: FSMContext, session: AsyncSe
     try:
         await message.bot.send_message(
             group_id,
-            "ربات با موفقیت متصل شد! در حال ساخت تاپیک‌ها...",
+            "✅ ربات با موفقیت متصل شد! در حال ساخت تاپیک‌ها...",
         )
     except Exception as e:
         await message.answer(
-            f"اتصال به گروه ناموفق بود:\n<code>{e}</code>\n\n"
+            f"❌ اتصال به گروه ناموفق بود:\n<code>{e}</code>\n\n"
             "مطمئن شوید ربات ادمین گروه است.",
             parse_mode="HTML",
         )
@@ -682,7 +682,7 @@ async def msg_log_group_id(message: Message, state: FSMContext, session: AsyncSe
         )
     else:
         await message.answer(
-            "<b>اتصال برقرار شد!</b>\n\n"
+            "✅ <b>اتصال برقرار شد!</b>\n\n"
             "تمام تاپیک‌ها با موفقیت ساخته شدند.\n"
             "اولین بکاپ در چند ثانیه ارسال می‌شود.",
             parse_mode="HTML",
@@ -738,11 +738,11 @@ async def cb_admin_np_gateway(cb: CallbackQuery, session: AsyncSession):
     rate = await _get_setting(session, "np_usd_to_irt_rate", "تنظیم نشده")
     wh_url = await _get_setting(session, "np_webhook_url", "تنظیم نشده")
 
-    api_status = "تنظیم شده" if _s.NP_API_KEY else "تنظیم نشده"
+    api_status = "✅ تنظیم شده" if _s.NP_API_KEY else "❌ تنظیم نشده"
     if wh_url and wh_url != "تنظیم نشده":
-        wh_short = wh_url[:40] + "…" if len(wh_url) > 40 else wh_url
+        wh_short = "✅ " + (wh_url[:40] + "…" if len(wh_url) > 40 else wh_url)
     else:
-        wh_short = "تنظیم نشده"
+        wh_short = "❌ تنظیم نشده"
 
     await cb.message.edit_text(
         f"<b>مدیریت درگاه NOWPayments</b>\n\n"
@@ -839,9 +839,9 @@ async def cb_admin_np_test(cb: CallbackQuery):
     try:
         status = await client.check_status()
         api_ok = status.get("message") == "OK"
-        lines.append(f"وضعیت API: {'آنلاین' if api_ok else 'مشکل'}")
+        lines.append(f"وضعیت API: {'✅ آنلاین' if api_ok else '❌ مشکل'}")
     except NOWPaymentsError as e:
-        lines.append(f"وضعیت API: خطا — {e}")
+        lines.append(f"وضعیت API: ❌ خطا — {e}")
         await cb.message.edit_text("\n".join(lines), parse_mode="HTML",
                                    reply_markup=back_to_admin_kb("admin:np"))
         return
@@ -850,11 +850,11 @@ async def cb_admin_np_test(cb: CallbackQuery):
         coins = await client.get_merchant_coins()
         outcome = _s.NP_OUTCOME_CURRENCY.lower()
         trx_active = any(c.lower() == outcome for c in coins)
-        lines.append(f"ارز خروجی ({outcome.upper()}): {'فعال' if trx_active else 'غیرفعال'}")
+        lines.append(f"ارز خروجی ({outcome.upper()}): {'✅ فعال' if trx_active else '❌ غیرفعال'}")
         active_list = ", ".join(coins[:10]) + ("…" if len(coins) > 10 else "")
         lines.append(f"ارزهای فعال: {active_list}")
     except NOWPaymentsError as e:
-        lines.append(f"دریافت لیست ارزها: خطا — {e}")
+        lines.append(f"دریافت لیست ارزها: ❌ خطا — {e}")
 
     lines.append(f"\nAPI Key: <code>***{_s.NP_API_KEY[-6:]}</code>")
     lines.append(f"قیمت‌گذاری: {_s.NP_PRICE_CURRENCY.upper()}")

@@ -218,6 +218,7 @@ def finance_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="💰 شارژ همه کاربران", callback_data="admin:finance_bulk_credit")
     builder.button(text="📈 تغییر قیمت محصولات", callback_data="admin:finance_price_adj")
+    builder.button(text="💱 نرخ ارز", callback_data="admin:exrate")
     builder.button(text="💎 NOWPayments", callback_data="admin:np")
     builder.button(text="🔙 بازگشت", callback_data="admin_panel")
     builder.adjust(1)

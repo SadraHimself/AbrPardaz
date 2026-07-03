@@ -1,6 +1,8 @@
 """Celery application + beat schedule."""
 from __future__ import annotations
 
+from datetime import timedelta
+
 from celery import Celery
 from celery.schedules import crontab
 
@@ -68,10 +70,11 @@ app.conf.update(
             "task": "bot.tasks.crypto_polling.poll_crypto_payments",
             "schedule": crontab(minute="*/5"),
         },
-        # هر ۳۰ دقیقه نرخ دلار از alanchand.com گرفته و np_usd_to_irt_rate آپدیت می‌شود
+        # هر ۸ ساعت نرخ دلار و یورو از API نوسان گرفته و آپدیت می‌شود
+        # (اولین اجرا بلافاصله بعد از ری‌استارت worker انجام می‌شود — worker_ready)
         "exchange-rate-update": {
             "task": "bot.tasks.exchange_rate.update_exchange_rate",
-            "schedule": crontab(minute="0,30"),
+            "schedule": timedelta(hours=8),
         },
     },
 )

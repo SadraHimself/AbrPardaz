@@ -246,7 +246,7 @@ async def cb_tx_srv_detail(cb: CallbackQuery, user: User, session: AsyncSession)
     srv_ip = (server.ip_address or "—") if server else "—"
 
     if not hourly_txs:
-        back_row = [[InlineKeyboardButton(text="🔙 بازگشت", callback_data=f"tx_page:{back_page}")]]
+        back_row = [[InlineKeyboardButton(text="بازگشت", callback_data=f"tx_page:{back_page}", **{"icon_custom_emoji_id": "5257963315258204021"})]]
         await cb.message.edit_text(
             "تراکنشی یافت نشد.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=back_row),
@@ -257,14 +257,14 @@ async def cb_tx_srv_detail(cb: CallbackQuery, user: User, session: AsyncSession)
     count = len(hourly_txs)
     total = sum(t.amount for t in hourly_txs)
 
-    back_row = [[InlineKeyboardButton(text="🔙 بازگشت", callback_data=f"tx_page:{back_page}")]]
+    back_row = [[InlineKeyboardButton(text="بازگشت", callback_data=f"tx_page:{back_page}", **{"icon_custom_emoji_id": "5257963315258204021"})]]
     await cb.message.edit_text(
-        f"💸 <b>جزئیات برداشت</b>\n\n"
-        f"🖥 سرور: <b>{srv_name}</b>\n"
-        f"🌐 آی‌پی: <code>{srv_ip}</code>\n"
-        f"💳 نوع: ساعتی\n"
-        f"⏱ مدت: {count} ساعت × {rate:,.0f} تومان\n"
-        f"💰 مجموع: <b>{total:,.0f} تومان</b>",
+        f"<b>جزئیات برداشت</b>\n\n"
+        f"سرور: <b>{srv_name}</b>\n"
+        f"آی‌پی: <code>{srv_ip}</code>\n"
+        f"نوع: ساعتی\n"
+        f"مدت: {count} ساعت × {rate:,.0f} تومان\n"
+        f"مجموع: <b>{total:,.0f} تومان</b>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=back_row),
     )
@@ -285,28 +285,28 @@ async def cb_tx_item_detail(cb: CallbackQuery, user: User, session: AsyncSession
     server = await session.get(Server, tx.server_id) if tx.server_id else None
 
     if tx.type == TransactionType.DEBIT:
-        icon, label = "💸", "برداشت وجه"
+        label = "برداشت وجه"
     elif tx.type == TransactionType.REFUND:
-        icon, label = "💚", "برگشت وجه"
+        label = "برگشت وجه"
     else:
-        icon, label = "💰", "واریز"
+        label = "واریز"
 
     date_str = ""
     if tx.created_at:
         d = _tz(tx.created_at).astimezone(_TEHRAN)
         date_str = d.strftime("%Y/%m/%d — %H:%M")
 
-    lines = [f"{icon} <b>{label}</b>", "", f"💰 مبلغ: <b>{tx.amount:,.0f} تومان</b>"]
+    lines = [f"<b>{label}</b>", "", f"مبلغ: <b>{tx.amount:,.0f} تومان</b>"]
     if tx.description:
-        lines.append(f"📝 شرح: {tx.description}")
+        lines.append(f"شرح: {tx.description}")
     if server:
-        lines.append(f"🖥 سرور: {server.name}")
+        lines.append(f"سرور: {server.name}")
         if server.ip_address:
-            lines.append(f"🌐 آی‌پی: <code>{server.ip_address}</code>")
+            lines.append(f"آی‌پی: <code>{server.ip_address}</code>")
     if date_str:
-        lines.append(f"📅 {date_str}")
+        lines.append(f"{date_str}")
 
-    back_row = [[InlineKeyboardButton(text="🔙 بازگشت", callback_data=f"tx_page:{back_page}")]]
+    back_row = [[InlineKeyboardButton(text="بازگشت", callback_data=f"tx_page:{back_page}", **{"icon_custom_emoji_id": "5257963315258204021"})]]
     await cb.message.edit_text(
         "\n".join(lines),
         parse_mode="HTML",

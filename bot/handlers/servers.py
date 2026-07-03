@@ -67,9 +67,6 @@ async def _show_server_list(target_msg, user: User, session: AsyncSession):
 
 @router.callback_query(F.data == "my_servers")
 async def cb_my_servers(cb: CallbackQuery, user: User, session: AsyncSession):
-    if not user.is_phone_verified:
-        await cb.answer("ابتدا شماره موبایل خود را تأیید کنید.", show_alert=True)
-        return
     await edit_loading(cb.message)
     await cb.answer()
     await _show_server_list(cb.message, user, session)
@@ -77,10 +74,6 @@ async def cb_my_servers(cb: CallbackQuery, user: User, session: AsyncSession):
 
 @router.message(F.text == "سرور‌های من")
 async def msg_my_servers(message: Message, user: User, session: AsyncSession):
-    if not user.is_phone_verified:
-        loading = await answer_loading(message)
-        await loading.edit_text("❌ ابتدا شماره موبایل خود را تأیید کنید.")
-        return
     loading = await answer_loading(message)
     await _show_server_list(loading, user, session)
 
@@ -415,9 +408,6 @@ async def _show_buy_categories(target_msg, user: User, state: FSMContext, sessio
 
 @router.callback_query(F.data == "buy_server")
 async def cb_buy_server(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
-    if not user.is_phone_verified:
-        await cb.answer("ابتدا شماره موبایل خود را تأیید کنید.", show_alert=True)
-        return
     await edit_loading(cb.message)
     await cb.answer()
     await _show_buy_categories(cb.message, user, state, session)
@@ -425,10 +415,6 @@ async def cb_buy_server(cb: CallbackQuery, user: User, state: FSMContext, sessio
 
 @router.message(F.text == "تهیه سرور")
 async def msg_buy_server(message: Message, user: User, state: FSMContext, session: AsyncSession):
-    if not user.is_phone_verified:
-        loading = await answer_loading(message)
-        await loading.edit_text("❌ ابتدا شماره موبایل خود را تأیید کنید.")
-        return
     loading = await answer_loading(message)
     await _show_buy_categories(loading, user, state, session)
 
@@ -444,7 +430,7 @@ async def cb_select_category(cb: CallbackQuery, user: User, state: FSMContext, s
             "برای خرید سرور ایران، احراز هویت با شاهکار الزامی است.",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🪪 احراز هویت", callback_data="start_kyc")],
+                [InlineKeyboardButton(text="🪪 احراز هویت", callback_data="start_verify")],
                 [InlineKeyboardButton(text="بازگشت به منو", callback_data="cancel", **{"icon_custom_emoji_id": "5933748020960038714"})],
             ]),
         )

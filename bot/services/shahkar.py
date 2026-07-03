@@ -1,55 +1,73 @@
-"""Shahkar (شاهکار) KYC integration.
+"""Identity verification via Zohal (زحل) → Shahkar.
 
-Shahkar is Iran's national mobile number verification service that maps
-phone numbers to national IDs. We call it before granting access to
-Iran-located servers as required by regulation.
+Zohal proxies Iran's Shahkar service, matching a mobile number to a national
+code. Docs: https://dashboard.zohal.io/documents
 
-Endpoint spec: https://shahkar.nict.ir  (use credentials from Shahkar portal)
+Requires ZOHAL_TOKEN (Bearer) and the server's outbound IP to be registered in
+Zohal's whitelist.
 """
 from __future__ import annotations
+
+import re
 
 import httpx
 
 from bot.config import settings
 
 
+def normalize_ir_mobile(raw: str) -> str | None:
+    """Return an Iranian mobile as 09XXXXXXXXX, or None if invalid."""
+    digits = re.sub(r"\D", "", raw or "")
+    if digits.startswith("0098"):
+        digits = digits[4:]
+    elif digits.startswith("98"):
+        digits = digits[2:]
+    if digits.startswith("0"):
+        digits = digits[1:]
+    if len(digits) == 10 and digits.startswith("9"):
+        return "0" + digits
+    return None
+
+
+def valid_national_code(code: str) -> bool:
+    """Validate an Iranian national code (10 digits + checksum)."""
+    if not re.fullmatch(r"\d{10}", code or ""):
+        return False
+    if code == code[0] * 10:  # all identical digits are invalid
+        return False
+    s = sum(int(code[i]) * (10 - i) for i in range(9))
+    r = s % 11
+    check = int(code[9])
+    return check == r if r < 2 else check == 11 - r
+
+
 class ShahkarService:
 
-    async def verify(self, phone_number: str, national_id: str) -> bool:
+    async def verify(self, phone_number: str, national_code: str) -> bool:
+        """True if (mobile, national_code) match in Shahkar (via Zohal).
+
+        Raises RuntimeError("... not configured") when ZOHAL_TOKEN is unset.
         """
-        Returns True if (phone_number, national_id) is a valid match
-        in Shahkar database.
+        if not settings.ZOHAL_TOKEN:
+            raise RuntimeError("ZOHAL_TOKEN is not configured")
 
-        Phone should be in format 09xxxxxxxxx (11 digits).
-        """
-        if not settings.SHAHKAR_BASE_URL:
-            raise RuntimeError("SHAHKAR_BASE_URL is not configured")
+        mobile = normalize_ir_mobile(phone_number) or phone_number
 
-        mobile = phone_number.lstrip("+98").lstrip("98")
-        if not mobile.startswith("0"):
-            mobile = "0" + mobile
-
-        payload = {
-            "serviceNumber": settings.SHAHKAR_SERVICE_ID,
-            "mobileNumber": mobile,
-            "identificationNo": national_id,
+        url = f"{settings.ZOHAL_BASE_URL}/services/inquiry/shahkar"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {settings.ZOHAL_TOKEN}",
         }
-        auth = (settings.SHAHKAR_SERVICE_ID, settings.SHAHKAR_PASSWORD)
+        payload = {"mobile": mobile, "national_code": national_code}
 
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.post(
-                f"{settings.SHAHKAR_BASE_URL}/api/inquiry/v2/inquiry/",
-                json=payload,
-                auth=auth,
-            )
-            resp.raise_for_status()
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+            # 400 = invalid input, 4xx/5xx service errors → treat as "not matched"
+            if resp.status_code != 200:
+                return False
             data = resp.json()
-            # Shahkar returns {"matched": true/false}
-            return bool(data.get("matched"))
 
-    async def check_mobile_owner(self, phone_number: str) -> dict | None:
-        """
-        Optional: get subscriber info from Shahkar (if your plan supports it).
-        Returns None if not supported.
-        """
-        return None
+        if data.get("result") != 1:
+            return False
+        body = data.get("response_body") or {}
+        return bool((body.get("data") or {}).get("matched"))

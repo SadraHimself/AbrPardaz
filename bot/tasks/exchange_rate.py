@@ -90,7 +90,7 @@ def _diff_text(old: float | None, new: int) -> str:
     return f" ({sign}{d:,.0f})"
 
 
-async def _do_update() -> None:
+async def _do_update(only_if_empty: bool = False) -> None:
     from bot.database.session import AsyncSessionFactory, engine
     from bot.database.models import BotSettings
     from aiogram import Bot
@@ -99,6 +99,15 @@ async def _do_update() -> None:
         await engine.dispose(close=False)
     except Exception:
         pass
+
+    # Startup trigger: only fetch on a fresh install (rate never set), so restarts
+    # don't re-fetch. Skips the Navasan request entirely when a rate already exists.
+    if only_if_empty:
+        async with AsyncSessionFactory() as session:
+            row = await session.get(BotSettings, "np_usd_to_irt_rate")
+            if row and row.value:
+                logger.info("exchange_rate: startup skip — rate already set (%s)", row.value)
+                return
 
     rates = await _fetch_rates()
     if rates is None:
@@ -158,15 +167,16 @@ async def _do_update() -> None:
 
 
 @app.task(name="bot.tasks.exchange_rate.update_exchange_rate")
-def update_exchange_rate() -> None:
-    asyncio.run(_do_update())
+def update_exchange_rate(only_if_empty: bool = False) -> None:
+    asyncio.run(_do_update(only_if_empty=only_if_empty))
 
 
 @worker_ready.connect
 def _run_on_startup(sender=None, **kwargs):
-    """Refresh rates the moment the worker comes up (i.e. on deploy/restart),
-    so the 8-hour cycle starts from the exact time the bot is updated."""
+    """On a FRESH install (no rate stored yet), fetch once so the panel isn't empty.
+    On subsequent restarts the rate already exists → this is a no-op, and updates
+    happen only on the fixed 8-hour schedule."""
     try:
-        update_exchange_rate.delay()
+        update_exchange_rate.delay(only_if_empty=True)
     except Exception as exc:  # pragma: no cover
         logger.warning("exchange_rate: startup trigger failed: %s", exc)

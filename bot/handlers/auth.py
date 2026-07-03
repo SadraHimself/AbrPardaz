@@ -1,135 +1,142 @@
-"""Phone number verification + Shahkar KYC."""
+"""Identity verification (احراز هویت) via Zohal → Shahkar."""
 from __future__ import annotations
 
-import random
-from datetime import datetime, timedelta, timezone
-
-import phonenumbers
 from aiogram import F, Router
-from bot.config import settings as _settings
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.database.models import OTP, User
-from bot.keyboards.main import (
-    back_kb, cancel_kb, main_menu_kb, remove_kb, request_phone_kb,
-)
-from bot.services.shahkar import ShahkarService
+from bot.database.models import User
+from bot.keyboards.main import cancel_kb
+from bot.services.shahkar import ShahkarService, normalize_ir_mobile, valid_national_code
 
 router = Router(name="auth")
 
-
-class KYCStates(StatesGroup):
-    waiting_national_id = State()
+_DIGIT_TRANS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _normalize_phone(raw: str) -> str | None:
-    """Returns E.164 format or None if the number is not valid."""
-    for region in (None, "IR"):
-        try:
-            parsed = phonenumbers.parse(raw, region)
-            if phonenumbers.is_valid_number(parsed):
-                return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
-        except Exception:
-            continue
-    return None
+class VerifyStates(StatesGroup):
+    first_name = State()
+    last_name = State()
+    national_code = State()
+    phone = State()
 
 
-# ── Phone contact handler ─────────────────────────────────────────────────────
+# ── Identity verification (Zohal → Shahkar) ───────────────────────────────────
 
-@router.message(F.contact)
-async def handle_contact(message: Message, user: User, session: AsyncSession):
-    contact = message.contact
-
-    # Telegram enforces that contact.user_id == message.from_user.id for own contacts
-    if contact.user_id != message.from_user.id:
-        await message.answer("❌ لطفاً شماره خودتان را ارسال کنید.", reply_markup=request_phone_kb())
-        return
-
-    phone = _normalize_phone(contact.phone_number)
-    if not phone:
-        await message.answer(
-            "❌ شماره موبایل معتبر نیست.\nلطفاً دوباره تلاش کنید.",
-            reply_markup=request_phone_kb(),
-        )
-        return
-
-    user.phone_number = phone
-    user.is_phone_verified = True
-    await session.flush()
-
-    await message.answer(
-        f"✅ شماره موبایل شما با موفقیت تأیید شد!\n📱 {phone}",
-        reply_markup=remove_kb(),
-    )
-    await message.answer(
-        "به ربات خوش آمدید! از منوی زیر استفاده کنید:",
-        reply_markup=main_menu_kb(is_admin=user.is_admin or user.telegram_id in _settings.admin_ids),
-    )
-
-
-# ── Shahkar KYC ───────────────────────────────────────────────────────────────
-
-@router.callback_query(F.data == "start_kyc")
-async def cb_start_kyc(cb: CallbackQuery, user: User, state: FSMContext):
-    if not user.is_phone_verified:
-        await cb.answer("ابتدا شماره موبایل خود را تأیید کنید.", show_alert=True)
-        return
+@router.callback_query(F.data == "start_verify")
+async def cb_start_verify(cb: CallbackQuery, user: User, state: FSMContext):
     if user.is_kyc_verified:
-        await cb.answer("احراز هویت شما قبلاً تأیید شده است.", show_alert=True)
+        await cb.answer("شما قبلاً احراز هویت شده‌اید.", show_alert=True)
         return
 
-    await state.set_state(KYCStates.waiting_national_id)
+    await state.set_state(VerifyStates.first_name)
     await cb.message.edit_text(
-        "🪪 <b>احراز هویت (شاهکار)</b>\n\n"
-        "برای تهیه سرور ایران، احراز هویت الزامی است.\n"
-        "لطفاً کد ملی ۱۰ رقمی خود را وارد کنید:",
+        "🪪 <b>احراز هویت</b>\n\n"
+        "لطفاً <b>نام</b> خود را وارد کنید:",
         parse_mode="HTML",
         reply_markup=cancel_kb(),
     )
     await cb.answer()
 
 
-@router.message(KYCStates.waiting_national_id, F.text.regexp(r"^\d{10}$"))
-async def handle_national_id(message: Message, user: User, state: FSMContext, session: AsyncSession):
-    national_id = message.text.strip()
+@router.message(VerifyStates.first_name, F.text)
+async def verify_first_name(message: Message, state: FSMContext):
+    name = (message.text or "").strip()
+    if not (2 <= len(name) <= 50):
+        await message.answer("❌ نام معتبر نیست. دوباره وارد کنید:")
+        return
+    await state.update_data(first_name=name)
+    await state.set_state(VerifyStates.last_name)
+    await message.answer(
+        "لطفاً <b>نام خانوادگی</b> خود را وارد کنید:",
+        parse_mode="HTML", reply_markup=cancel_kb(),
+    )
+
+
+@router.message(VerifyStates.last_name, F.text)
+async def verify_last_name(message: Message, state: FSMContext):
+    name = (message.text or "").strip()
+    if not (2 <= len(name) <= 50):
+        await message.answer("❌ نام خانوادگی معتبر نیست. دوباره وارد کنید:")
+        return
+    await state.update_data(last_name=name)
+    await state.set_state(VerifyStates.national_code)
+    await message.answer(
+        "لطفاً <b>کد ملی</b> ۱۰ رقمی خود را وارد کنید:",
+        parse_mode="HTML", reply_markup=cancel_kb(),
+    )
+
+
+@router.message(VerifyStates.national_code, F.text)
+async def verify_national_code(message: Message, state: FSMContext):
+    code = (message.text or "").strip().translate(_DIGIT_TRANS)
+    if not valid_national_code(code):
+        await message.answer("❌ کد ملی معتبر نیست. یک کد ملی صحیح ۱۰ رقمی وارد کنید:")
+        return
+    await state.update_data(national_code=code)
+    await state.set_state(VerifyStates.phone)
+    await message.answer(
+        "لطفاً <b>شماره تلفن</b> خود را وارد کنید:\n"
+        "<i>فقط شماره موبایل ایرانی — مثال: 09121234567</i>",
+        parse_mode="HTML", reply_markup=cancel_kb(),
+    )
+
+
+@router.message(VerifyStates.phone, F.text)
+async def verify_phone(message: Message, user: User, state: FSMContext, session: AsyncSession):
+    raw = (message.text or "").strip().translate(_DIGIT_TRANS)
+    phone = normalize_ir_mobile(raw)
+    if not phone:
+        await message.answer(
+            "❌ شماره معتبر نیست. یک شماره موبایل ایرانی وارد کنید:\n"
+            "<i>مثال: 09121234567</i>",
+            parse_mode="HTML",
+        )
+        return
+
+    data = await state.get_data()
+    national_code = data.get("national_code", "")
     await state.clear()
 
-    await message.answer("⏳ در حال بررسی اطلاعات در سامانه شاهکار...")
+    wait = await message.answer("⏳ در حال بررسی اطلاعات در سامانه شاهکار...")
 
     try:
-        shahkar = ShahkarService()
-        matched = await shahkar.verify(user.phone_number, national_id)
+        matched = await ShahkarService().verify(phone, national_code)
     except RuntimeError as e:
         if "not configured" in str(e):
-            await message.answer(
-                "⚠️ سرویس شاهکار در حال حاضر پیکربندی نشده است. با پشتیبانی تماس بگیرید.",
-                reply_markup=main_menu_kb(is_admin=user.is_admin or user.telegram_id in _settings.admin_ids),
+            await wait.edit_text(
+                "⚠️ سرویس احراز هویت هنوز پیکربندی نشده است. با پشتیبانی تماس بگیرید."
             )
             return
         matched = False
-
-    if matched:
-        user.national_id = national_id
-        user.is_kyc_verified = True
-        await session.flush()
-        await message.answer(
-            "✅ احراز هویت با موفقیت انجام شد!\nاکنون می‌توانید سرور ایران تهیه کنید.",
-            reply_markup=main_menu_kb(is_admin=user.is_admin or user.telegram_id in _settings.admin_ids),
+    except Exception:
+        await wait.edit_text(
+            "⚠️ خطا در ارتباط با سامانه احراز هویت. لطفاً کمی بعد دوباره تلاش کنید."
         )
-    else:
-        await message.answer(
-            "❌ اطلاعات وارد شده با سامانه شاهکار مطابقت ندارد.\n"
-            "مطمئن شوید کد ملی با شماره موبایل ثبت شده در سامانه مخابرات یکی باشد.",
-            reply_markup=main_menu_kb(is_admin=user.is_admin or user.telegram_id in _settings.admin_ids),
+        return
+
+    if not matched:
+        await wait.edit_text(
+            "❌ اطلاعات وارد شده مطابقت ندارد.\n"
+            "مطمئن شوید شماره موبایل به نام همین کد ملی ثبت شده باشد، "
+            "سپس دوباره از دکمه «احراز هویت» اقدام کنید."
         )
+        return
 
+    user.first_name = data.get("first_name") or user.first_name
+    user.last_name = data.get("last_name") or user.last_name
+    user.national_id = national_code
+    user.phone_number = phone
+    user.is_kyc_verified = True
+    user.is_phone_verified = True
+    await session.flush()
 
-@router.message(KYCStates.waiting_national_id)
-async def handle_national_id_invalid(message: Message):
-    await message.answer("❌ کد ملی باید دقیقاً ۱۰ رقم باشد. دوباره وارد کنید:")
+    await wait.edit_text(
+        "✅ <b>احراز هویت با موفقیت انجام شد!</b>\n\n"
+        f"نام: {user.first_name} {user.last_name}\n"
+        f"کد ملی: <code>{national_code}</code>\n"
+        f"شماره: <code>{phone}</code>",
+        parse_mode="HTML",
+    )

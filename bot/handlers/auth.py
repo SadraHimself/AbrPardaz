@@ -4,16 +4,23 @@ from __future__ import annotations
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.database.models import User
-from bot.keyboards.main import back_kb, cancel_kb
+from bot.keyboards.main import back_kb
 from bot.services.shahkar import ShahkarService, normalize_ir_mobile, valid_national_code
 
 router = Router(name="auth")
 
 _DIGIT_TRANS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+
+
+def _verify_back_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="بازگشت", callback_data="cancel",
+                             **{"icon_custom_emoji_id": "5258236805890710909"}),
+    ]])
 
 
 class VerifyStates(StatesGroup):
@@ -38,11 +45,11 @@ async def cb_start_verify(cb: CallbackQuery, user: User, state: FSMContext):
 
     await state.set_state(VerifyStates.full_name)
     await cb.message.edit_text(
-        "🪪 <b>احراز هویت</b>\n\n"
-        "لطفاً <b>نام و نام خانوادگی</b> خود را وارد کنید:\n"
-        "<i>مثال: علی رضایی</i>",
+        "برای پرداخت ریالی احراز هویت الزامی است\n\n"
+        '<tg-emoji emoji-id="5983580310292402968">✍️</tg-emoji> '
+        "لطفاً <b>نام و نام خانوادگی</b> خود را وارد کنید:",
         parse_mode="HTML",
-        reply_markup=cancel_kb(),
+        reply_markup=_verify_back_kb(),
     )
     await cb.answer()
 
@@ -52,16 +59,14 @@ async def verify_full_name(message: Message, state: FSMContext):
     full = (message.text or "").strip()
     parts = full.split()
     if len(parts) < 2 or len(full) > 100:
-        await message.answer(
-            "❌ لطفاً نام و نام خانوادگی را کامل وارد کنید.\n<i>مثال: علی رضایی</i>",
-            parse_mode="HTML",
-        )
+        await message.answer("❌ لطفاً نام و نام خانوادگی را کامل وارد کنید.")
         return
     await state.update_data(first_name=parts[0], last_name=" ".join(parts[1:]))
     await state.set_state(VerifyStates.national_code)
     await message.answer(
-        "لطفاً <b>کد ملی</b> ۱۰ رقمی خود را وارد کنید:",
-        parse_mode="HTML", reply_markup=cancel_kb(),
+        'لطفاً <tg-emoji emoji-id="5346136537123801643">🪪</tg-emoji> '
+        "<b>کد ملی</b> ۱۰ رقمی خود را وارد کنید:",
+        parse_mode="HTML", reply_markup=_verify_back_kb(),
     )
 
 
@@ -74,9 +79,11 @@ async def verify_national_code(message: Message, state: FSMContext):
     await state.update_data(national_code=code)
     await state.set_state(VerifyStates.phone)
     await message.answer(
-        "لطفاً <b>شماره تلفن</b> خود را وارد کنید:\n"
-        "<i>فقط شماره موبایل ایرانی — مثال: 09121234567</i>",
-        parse_mode="HTML", reply_markup=cancel_kb(),
+        'لطفاً <tg-emoji emoji-id="5172893417717367746">📱</tg-emoji> '
+        "<b>شماره تلفن</b> خود را وارد کنید:\n"
+        '<tg-emoji emoji-id="6030801830739448093">⚠️</tg-emoji> '
+        "شماره تلفن وارد شده باید به نام خود شما باشد",
+        parse_mode="HTML", reply_markup=_verify_back_kb(),
     )
 
 
@@ -85,15 +92,13 @@ async def verify_phone(message: Message, user: User, state: FSMContext, session:
     raw = (message.text or "").strip().translate(_DIGIT_TRANS)
     phone = normalize_ir_mobile(raw)
     if not phone:
-        await message.answer(
-            "❌ شماره معتبر نیست. یک شماره موبایل ایرانی وارد کنید:\n"
-            "<i>مثال: 09121234567</i>",
-            parse_mode="HTML",
-        )
+        await message.answer("❌ شماره معتبر نیست. لطفاً یک شماره موبایل ایرانی معتبر وارد کنید.")
         return
 
     data = await state.get_data()
     national_code = data.get("national_code", "")
+    first_name = data.get("first_name", "")
+    last_name = data.get("last_name", "")
     await state.clear()
 
     wait = await message.answer("⏳ در حال بررسی اطلاعات در سامانه شاهکار...")
@@ -121,17 +126,21 @@ async def verify_phone(message: Message, user: User, state: FSMContext, session:
         )
         return
 
-    user.first_name = data.get("first_name") or user.first_name
-    user.last_name = data.get("last_name") or user.last_name
+    # Store the verified legal identity WITHOUT overwriting the Telegram display
+    # name (first_name/last_name) used in greetings.
     user.national_id = national_code
     user.phone_number = phone
     user.is_kyc_verified = True
     user.is_phone_verified = True
+    extra = dict(user.extra_data or {})
+    extra["verified_name"] = f"{first_name} {last_name}".strip()
+    user.extra_data = extra
     await session.flush()
 
     await wait.edit_text(
-        "✅ <b>احراز هویت با موفقیت انجام شد!</b>\n\n"
-        f"نام: {user.first_name} {user.last_name}\n"
+        '<tg-emoji emoji-id="5206607081334906820">✔️</tg-emoji> '
+        "<b>احراز هویت با موفقیت انجام شد!</b>\n\n"
+        f"نام: {first_name} {last_name}\n"
         f"کد ملی: <code>{national_code}</code>\n"
         f"شماره: <code>{phone}</code>",
         parse_mode="HTML",

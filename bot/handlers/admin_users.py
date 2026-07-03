@@ -71,7 +71,7 @@ async def _show_users_page(cb: CallbackQuery, session: AsyncSession, page: int):
     )
     users = list(result.scalars().all())
     await cb.message.edit_text(
-        f"👥 <b>کاربران</b> (صفحه {page + 1} — {total} نفر کل):",
+        f"<b>کاربران</b> (صفحه {page + 1} — {total} نفر کل):",
         parse_mode="HTML",
         reply_markup=users_list_kb(users, page, total),
     )
@@ -82,7 +82,7 @@ async def _show_users_page(cb: CallbackQuery, session: AsyncSession, page: int):
 async def cb_user_search_start(cb: CallbackQuery, state: FSMContext):
     await state.set_state(UserManageFSM.search_user)
     await cb.message.edit_text(
-        "🔍 <b>جستجوی کاربر</b>\n\nیوزرنیم، آیدی تلگرام یا شماره تلفن وارد کنید:",
+        "<b>جستجوی کاربر</b>\n\nیوزرنیم، آیدی تلگرام یا شماره تلفن وارد کنید:",
         parse_mode="HTML",
         reply_markup=cancel_admin_kb(),
     )
@@ -108,7 +108,7 @@ async def msg_user_search(message: Message, state: FSMContext, session: AsyncSes
         user = result.scalar_one_or_none()
 
     if not user:
-        await message.answer("❌ کاربری یافت نشد.", reply_markup=back_to_admin_kb("admin:users"))
+        await message.answer("کاربری یافت نشد.", reply_markup=back_to_admin_kb("admin:users"))
         return
 
     await _show_user_detail(message, session, user, edit=False)
@@ -146,21 +146,21 @@ async def _show_user_detail(msg, session: AsyncSession, user: User, edit: bool =
         if ban_until_raw:
             try:
                 bt = datetime.fromisoformat(ban_until_raw).strftime("%Y/%m/%d %H:%M")
-                status_text = f"🚫 بن تا {bt}\n(علت: {ban_reason})"
+                status_text = f"بن تا {bt}\n(علت: {ban_reason})"
             except (ValueError, TypeError):
-                status_text = f"🚫 بن دائمی\n(علت: {ban_reason})"
+                status_text = f"بن دائمی\n(علت: {ban_reason})"
         else:
-            status_text = f"🚫 بن دائمی\n(علت: {ban_reason})"
+            status_text = f"بن دائمی\n(علت: {ban_reason})"
     elif user.status == UserStatus.ACTIVE:
-        status_text = "✅ فعال"
+        status_text = "فعال"
     else:
-        status_text = "⏸ معلق"
-    kyc_text = "✅ تأیید شده" if user.is_kyc_verified else "❌ تأیید نشده"
+        status_text = "معلق"
+    kyc_text = "تأیید شده" if user.is_kyc_verified else "تأیید نشده"
     phone_text = user.phone_number or "—"
     hourly_limit = (user.extra_data or {}).get("max_hourly_servers", 5)
 
     text = (
-        f"👤 <b>کاربر #{user.id}</b>\n\n"
+        f"<b>کاربر #{user.id}</b>\n\n"
         f"نام: {user.first_name or '—'} {user.last_name or ''}\n"
         f"یوزرنیم: @{user.username or '—'}\n"
         f"Telegram ID: <code>{user.telegram_id}</code>\n"
@@ -168,11 +168,11 @@ async def _show_user_detail(msg, session: AsyncSession, user: User, edit: bool =
         f"کد ملی: <code>{user.national_id or '—'}</code>\n"
         f"KYC: {kyc_text}\n"
         f"وضعیت: {status_text}\n\n"
-        f"💰 موجودی: <b>{user.balance:,.0f} تومان</b>\n"
-        f"🖥 سرور فعال: {srv_count}\n"
-        f"📜 تراکنش: {tx_count}\n"
-        f"🔢 لیمیت سرور ساعتی: {hourly_limit}\n"
-        f"📅 عضو از: {user.created_at.strftime('%Y/%m/%d')}"
+        f"موجودی: <b>{user.balance:,.0f} تومان</b>\n"
+        f"سرور فعال: {srv_count}\n"
+        f"تراکنش: {tx_count}\n"
+        f"لیمیت سرور ساعتی: {hourly_limit}\n"
+        f"عضو از: {user.created_at.strftime('%Y/%m/%d')}"
     )
     kb = user_detail_kb(user.id, is_banned, user.is_kyc_verified, hourly_limit)
     if edit:
@@ -199,9 +199,9 @@ async def cb_user_ban(cb: CallbackQuery, user: User, session: AsyncSession, stat
         extra.pop("ban_reason", None)
         target.extra_data = extra
         await session.flush()
-        await cb.answer("✅ کاربر آنبن شد.")
+        await cb.answer("کاربر آنبن شد.")
         try:
-            await cb.bot.send_message(target.telegram_id, "✅ حساب شما از حالت بن خارج شد.")
+            await cb.bot.send_message(target.telegram_id, "حساب شما از حالت بن خارج شد.")
         except Exception:
             pass
         await LogService(cb.bot, session).log_unban_user(target, cb.from_user.id)
@@ -215,7 +215,7 @@ async def cb_user_ban(cb: CallbackQuery, user: User, session: AsyncSession, stat
         await state.update_data(target_user_id=user_id)
         await state.set_state(UserManageFSM.ban_days)
         await cb.message.edit_text(
-            f"🚫 <b>بن کاربر #{user_id}</b>\n\n"
+            f"<b>بن کاربر #{user_id}</b>\n\n"
             "چند روز بن شود؟\n"
             "<i>(عدد وارد کنید — ۰ = بن دائمی)</i>",
             parse_mode="HTML",
@@ -261,12 +261,12 @@ async def msg_ban_reason(message: Message, state: FSMContext, session: AsyncSess
     await session.flush()
 
     await message.answer(
-        f"🚫 کاربر برای <b>{duration_text}</b> بن شد.\nعلت: {reason}",
+        f"کاربر برای <b>{duration_text}</b> بن شد.\nعلت: {reason}",
         parse_mode="HTML",
         reply_markup=back_to_admin_kb(f"admin:user:{user_id}"),
     )
     try:
-        notify = f"🚫 حساب شما توسط مدیریت بن شده است.\nعلت: {reason}"
+        notify = f"حساب شما توسط مدیریت بن شده است.\nعلت: {reason}"
         if days > 0:
             notify += f"\nمدت: {days} روز"
         await message.bot.send_message(target.telegram_id, notify)
@@ -283,7 +283,7 @@ async def cb_user_credit_start(cb: CallbackQuery, state: FSMContext):
     await state.update_data(target_user_id=user_id)
     await state.set_state(UserManageFSM.credit_amount)
     await cb.message.edit_text(
-        "💰 <b>افزایش موجودی</b>\n\nمبلغ (تومان) را وارد کنید:",
+        "<b>افزایش موجودی</b>\n\nمبلغ (تومان) را وارد کنید:",
         parse_mode="HTML",
         reply_markup=cancel_admin_kb(),
     )
@@ -302,7 +302,7 @@ async def msg_user_credit(message: Message, state: FSMContext, session: AsyncSes
     billing = BillingService(session)
     await billing.credit(user.id, amount, description="شارژ توسط ادمین")
     await message.answer(
-        f"✅ {amount:,.0f} تومان به <b>{user.first_name or user.telegram_id}</b> اضافه شد.",
+        f"{amount:,.0f} تومان به <b>{user.first_name or user.telegram_id}</b> اضافه شد.",
         parse_mode="HTML",
         reply_markup=back_to_admin_kb(f"admin:user:{user.id}"),
     )
@@ -314,7 +314,7 @@ async def msg_user_credit(message: Message, state: FSMContext, session: AsyncSes
     try:
         await message.bot.send_message(
             user.telegram_id,
-            f"✅ <b>{amount:,.0f} تومان</b> توسط مدیریت به کیف‌پول شما اضافه شد.",
+            f"<b>{amount:,.0f} تومان</b> توسط مدیریت به کیف‌پول شما اضافه شد.",
             parse_mode="HTML",
         )
     except Exception:
@@ -327,7 +327,7 @@ async def cb_user_debit_start(cb: CallbackQuery, state: FSMContext):
     await state.update_data(target_user_id=user_id)
     await state.set_state(UserManageFSM.debit_amount)
     await cb.message.edit_text(
-        "💸 <b>کاهش موجودی</b>\n\nمبلغ (تومان) را وارد کنید:",
+        "<b>کاهش موجودی</b>\n\nمبلغ (تومان) را وارد کنید:",
         parse_mode="HTML",
         reply_markup=cancel_admin_kb(),
     )
@@ -347,7 +347,7 @@ async def msg_user_debit(message: Message, state: FSMContext, session: AsyncSess
     ok = await billing.debit(user.id, amount, description="کسر توسط ادمین")
     if ok:
         await message.answer(
-            f"✅ {amount:,.0f} تومان از <b>{user.first_name or user.telegram_id}</b> کسر شد.",
+            f"{amount:,.0f} تومان از <b>{user.first_name or user.telegram_id}</b> کسر شد.",
             parse_mode="HTML",
             reply_markup=back_to_admin_kb(f"admin:user:{user.id}"),
         )
@@ -358,7 +358,7 @@ async def msg_user_debit(message: Message, state: FSMContext, session: AsyncSess
         )
     else:
         await message.answer(
-            "❌ موجودی کافی نیست.",
+            "موجودی کافی نیست.",
             reply_markup=back_to_admin_kb(f"admin:user:{user.id}"),
         )
 
@@ -375,11 +375,11 @@ async def cb_user_verify(cb: CallbackQuery, session: AsyncSession):
     user.is_kyc_verified = True
     user.is_phone_verified = True
     await session.flush()
-    await cb.answer("✅ کاربر احراز هویت شد.")
+    await cb.answer("کاربر احراز هویت شد.")
     try:
         await cb.bot.send_message(
             user.telegram_id,
-            "✅ احراز هویت شما توسط مدیریت تأیید شد.",
+            "احراز هویت شما توسط مدیریت تأیید شد.",
             reply_markup=ReplyKeyboardRemove(),
         )
     except Exception:
@@ -397,7 +397,7 @@ async def cb_user_unverify(cb: CallbackQuery, session: AsyncSession):
     user.is_kyc_verified = False
     user.national_id = None
     await session.flush()
-    await cb.answer("🗑 احراز هویت حذف شد.")
+    await cb.answer("احراز هویت حذف شد.")
     try:
         await cb.bot.send_message(
             user.telegram_id,
@@ -416,7 +416,7 @@ async def cb_user_edit_nid_start(cb: CallbackQuery, state: FSMContext):
     await state.update_data(target_user_id=user_id)
     await state.set_state(UserManageFSM.edit_national_id)
     await cb.message.edit_text(
-        "✏️ <b>ویرایش کد ملی</b>\n\nکد ملی جدید (۱۰ رقم) را وارد کنید:",
+        "<b>ویرایش کد ملی</b>\n\nکد ملی جدید (۱۰ رقم) را وارد کنید:",
         parse_mode="HTML",
         reply_markup=cancel_admin_kb(),
     )
@@ -434,7 +434,7 @@ async def msg_user_edit_nid(message: Message, state: FSMContext, session: AsyncS
     user.national_id = message.text.strip()
     await session.flush()
     await message.answer(
-        f"✅ کد ملی به <code>{user.national_id}</code> تغییر یافت.",
+        f"کد ملی به <code>{user.national_id}</code> تغییر یافت.",
         parse_mode="HTML",
         reply_markup=back_to_admin_kb(f"admin:user:{user.id}"),
     )
@@ -446,7 +446,7 @@ async def cb_user_edit_phone_start(cb: CallbackQuery, state: FSMContext):
     await state.update_data(target_user_id=user_id)
     await state.set_state(UserManageFSM.edit_phone)
     await cb.message.edit_text(
-        "✏️ <b>ویرایش شماره موبایل</b>\n\nشماره موبایل جدید را وارد کنید:",
+        "<b>ویرایش شماره موبایل</b>\n\nشماره موبایل جدید را وارد کنید:",
         parse_mode="HTML",
         reply_markup=cancel_admin_kb(),
     )
@@ -466,7 +466,7 @@ async def msg_user_edit_phone(message: Message, state: FSMContext, session: Asyn
     user.is_phone_verified = True
     await session.flush()
     await message.answer(
-        f"✅ شماره موبایل به <code>{phone}</code> تغییر یافت.",
+        f"شماره موبایل به <code>{phone}</code> تغییر یافت.",
         parse_mode="HTML",
         reply_markup=back_to_admin_kb(f"admin:user:{user.id}"),
     )
@@ -480,7 +480,7 @@ async def cb_user_msg_start(cb: CallbackQuery, state: FSMContext):
     await state.update_data(target_user_id=user_id)
     await state.set_state(UserManageFSM.send_message)
     await cb.message.edit_text(
-        "📨 <b>ارسال پیام به کاربر</b>\n\nمتن پیام را بنویسید:",
+        "<b>ارسال پیام به کاربر</b>\n\nمتن پیام را بنویسید:",
         parse_mode="HTML",
         reply_markup=cancel_admin_kb(),
     )
@@ -498,16 +498,16 @@ async def msg_send_to_user(message: Message, state: FSMContext, session: AsyncSe
     try:
         await message.bot.send_message(
             user.telegram_id,
-            f"📨 <b>پیام از مدیریت:</b>\n\n{message.text}",
+            f"<b>پیام از مدیریت:</b>\n\n{message.text}",
             parse_mode="HTML",
         )
         await message.answer(
-            "✅ پیام ارسال شد.",
+            "پیام ارسال شد.",
             reply_markup=back_to_admin_kb(f"admin:user:{user.id}"),
         )
     except Exception as e:
         await message.answer(
-            f"❌ ارسال ناموفق: {e}",
+            f"ارسال ناموفق: {e}",
             reply_markup=back_to_admin_kb(f"admin:user:{user.id}"),
         )
 
@@ -534,7 +534,7 @@ async def cb_user_payments(cb: CallbackQuery, session: AsyncSession):
             f"{sign}{tx.amount:,.0f}T | {tx.description or '—'} | {tx.created_at.strftime('%m/%d %H:%M')}"
         )
     await cb.message.edit_text(
-        f"📜 <b>آخرین ۱۰ تراکنش:</b>\n\n" + "\n".join(lines),
+        f"<b>آخرین ۱۰ تراکنش:</b>\n\n" + "\n".join(lines),
         parse_mode="HTML",
         reply_markup=back_to_admin_kb(f"admin:user:{user_id}"),
     )
@@ -559,10 +559,10 @@ async def cb_user_servers(cb: CallbackQuery, session: AsyncSession):
     lines = []
     for s in servers:
         lines.append(
-            f"🖥 {s.name} | {s.ip_address or '—'} | {s.status.value}"
+            f"{s.name} | {s.ip_address or '—'} | {s.status.value}"
         )
     await cb.message.edit_text(
-        f"🖥 <b>سرویس‌های کاربر ({len(servers)}):</b>\n\n" + "\n".join(lines),
+        f"<b>سرویس‌های کاربر ({len(servers)}):</b>\n\n" + "\n".join(lines),
         parse_mode="HTML",
         reply_markup=back_to_admin_kb(f"admin:user:{user_id}"),
     )
@@ -583,11 +583,11 @@ async def cb_user_disc_start(cb: CallbackQuery, state: FSMContext, session: Asyn
     if existing:
         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🗑 حذف کد موجود", callback_data=f"admin:user_disc_del:{user_id}:{existing.id}")],
-            [InlineKeyboardButton(text="🔙 بازگشت", callback_data=f"admin:user:{user_id}")],
+            [InlineKeyboardButton(text="حذف کد موجود", callback_data=f"admin:user_disc_del:{user_id}:{existing.id}")],
+            [InlineKeyboardButton(text="بازگشت", callback_data=f"admin:user:{user_id}")],
         ])
         await cb.message.edit_text(
-            f"🏷 کد تخفیف اختصاصی این کاربر:\n\n"
+            f"کد تخفیف اختصاصی این کاربر:\n\n"
             f"کد: <code>{existing.code}</code>\n"
             f"تخفیف: {existing.discount_percent:.0f}%\n"
             f"انقضا: {existing.expires_at.strftime('%Y-%m-%d') if existing.expires_at else 'بدون انقضا'}",
@@ -598,7 +598,7 @@ async def cb_user_disc_start(cb: CallbackQuery, state: FSMContext, session: Asyn
         await state.update_data(disc_user_id=user_id)
         await state.set_state(UserManageFSM.disc_code)
         await cb.message.edit_text(
-            "🏷 <b>کد تخفیف اختصاصی</b>\n\nکد تخفیف را وارد کنید:",
+            "<b>کد تخفیف اختصاصی</b>\n\nکد تخفیف را وارد کنید:",
             parse_mode="HTML",
             reply_markup=cancel_admin_kb(),
         )
@@ -613,7 +613,7 @@ async def cb_user_disc_del(cb: CallbackQuery, session: AsyncSession):
     if disc:
         await session.delete(disc)
         await session.flush()
-    await cb.answer("✅ کد تخفیف حذف شد.")
+    await cb.answer("کد تخفیف حذف شد.")
     cb.data = f"admin:user:{user_id}"
     user = await session.get(User, user_id)
     if user:
@@ -625,7 +625,7 @@ async def msg_disc_code(message: Message, state: FSMContext, session: AsyncSessi
     code = message.text.strip().upper()
     exists = await session.execute(select(DiscountCode).where(DiscountCode.code == code))
     if exists.scalar_one_or_none():
-        await message.answer("❌ این کد قبلاً وجود دارد.")
+        await message.answer("این کد قبلاً وجود دارد.")
         return
     await state.update_data(disc_code=code)
     await state.set_state(UserManageFSM.disc_percent)
@@ -636,7 +636,7 @@ async def msg_disc_code(message: Message, state: FSMContext, session: AsyncSessi
 async def msg_disc_percent(message: Message, state: FSMContext):
     pct = float(message.text)
     if not 1 <= pct <= 100:
-        await message.answer("❌ باید بین ۱ تا ۱۰۰ باشد.")
+        await message.answer("باید بین ۱ تا ۱۰۰ باشد.")
         return
     await state.update_data(disc_percent=pct)
     await state.set_state(UserManageFSM.disc_expires)
@@ -654,7 +654,7 @@ async def msg_disc_expires(message: Message, state: FSMContext):
             dt = datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=timezone.utc)
             await state.update_data(disc_expires=dt.isoformat())
         except ValueError:
-            await message.answer("❌ فرمت نادرست. مثال: 2025-12-31")
+            await message.answer("فرمت نادرست. مثال: 2025-12-31")
             return
     await state.set_state(UserManageFSM.disc_max_uses)
     from bot.keyboards.admin import skip_or_cancel_kb
@@ -678,7 +678,7 @@ async def msg_disc_max_uses(message: Message, state: FSMContext, session: AsyncS
         try:
             max_uses = int(raw)
         except ValueError:
-            await message.answer("❌ عدد صحیح وارد کنید.")
+            await message.answer("عدد صحیح وارد کنید.")
             return
 
     data = await state.get_data()
@@ -695,7 +695,7 @@ async def msg_disc_max_uses(message: Message, state: FSMContext, session: AsyncS
     session.add(disc)
     await session.flush()
     await message.answer(
-        f"✅ کد تخفیف اختصاصی <code>{disc.code}</code> با {disc.discount_percent:.0f}% برای کاربر ساخته شد.",
+        f"کد تخفیف اختصاصی <code>{disc.code}</code> با {disc.discount_percent:.0f}% برای کاربر ساخته شد.",
         parse_mode="HTML",
         reply_markup=back_to_admin_kb(f"admin:user:{data['disc_user_id']}"),
     )
@@ -714,7 +714,7 @@ async def cb_user_limit_start(cb: CallbackQuery, state: FSMContext, session: Asy
     await state.update_data(target_user_id=user_id)
     await state.set_state(UserManageFSM.server_limit)
     await cb.message.edit_text(
-        f"🔢 <b>لیمیت سرور ساعتی</b>\n\n"
+        f"<b>لیمیت سرور ساعتی</b>\n\n"
         f"لیمیت فعلی: <b>{current}</b>\n\n"
         f"مقدار جدید را وارد کنید (۵ تا ۵۰):",
         parse_mode="HTML",
@@ -737,7 +737,7 @@ async def msg_user_server_limit(message: Message, state: FSMContext, session: As
     user.extra_data = extra
     await session.flush()
     await message.answer(
-        f"✅ لیمیت سرور ساعتی کاربر به <b>{value}</b> تغییر یافت.",
+        f"لیمیت سرور ساعتی کاربر به <b>{value}</b> تغییر یافت.",
         parse_mode="HTML",
         reply_markup=back_to_admin_kb(f"admin:user:{user.id}"),
     )

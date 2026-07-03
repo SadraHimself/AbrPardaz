@@ -146,16 +146,16 @@ async def _show_user_detail(msg, session: AsyncSession, user: User, edit: bool =
         if ban_until_raw:
             try:
                 bt = datetime.fromisoformat(ban_until_raw).strftime("%Y/%m/%d %H:%M")
-                status_text = f"بن تا {bt}\n(علت: {ban_reason})"
+                status_text = f"🚫 بن تا {bt}\n(علت: {ban_reason})"
             except (ValueError, TypeError):
-                status_text = f"بن دائمی\n(علت: {ban_reason})"
+                status_text = f"🚫 بن دائمی\n(علت: {ban_reason})"
         else:
-            status_text = f"بن دائمی\n(علت: {ban_reason})"
+            status_text = f"🚫 بن دائمی\n(علت: {ban_reason})"
     elif user.status == UserStatus.ACTIVE:
-        status_text = "فعال"
+        status_text = "✅ فعال"
     else:
         status_text = "معلق"
-    kyc_text = "تأیید شده" if user.is_kyc_verified else "تأیید نشده"
+    kyc_text = "✅ تأیید شده" if user.is_kyc_verified else "❌ تأیید نشده"
     phone_text = user.phone_number or "—"
     hourly_limit = (user.extra_data or {}).get("max_hourly_servers", 5)
 

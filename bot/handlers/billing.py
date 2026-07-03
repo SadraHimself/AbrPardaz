@@ -197,7 +197,7 @@ async def _render_tx_page(target_msg, user: User, session: AsyncSession, page: i
     buttons.append([
         InlineKeyboardButton(text="📄 فاکتور XML", callback_data="invoice_xml", **{"style": "primary"}),
     ])
-    buttons.append([InlineKeyboardButton(text="بازگشت", callback_data="user_profile", **{"icon_custom_emoji_id": "5933748020960038714"})])
+    buttons.append([InlineKeyboardButton(text="بازگشت", callback_data="user_profile", **{"icon_custom_emoji_id": "5258236805890710909"})])
 
     await target_msg.edit_text(
         f"<b>تاریخچه تراکنش‌ها</b>  {page + 1}/{total_pages}\n\n"
@@ -246,7 +246,7 @@ async def cb_tx_srv_detail(cb: CallbackQuery, user: User, session: AsyncSession)
     srv_ip = (server.ip_address or "—") if server else "—"
 
     if not hourly_txs:
-        back_row = [[InlineKeyboardButton(text="بازگشت", callback_data=f"tx_page:{back_page}", **{"icon_custom_emoji_id": "5257963315258204021"})]]
+        back_row = [[InlineKeyboardButton(text="بازگشت", callback_data=f"tx_page:{back_page}", **{"icon_custom_emoji_id": "5258236805890710909"})]]
         await cb.message.edit_text(
             "تراکنشی یافت نشد.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=back_row),
@@ -257,7 +257,7 @@ async def cb_tx_srv_detail(cb: CallbackQuery, user: User, session: AsyncSession)
     count = len(hourly_txs)
     total = sum(t.amount for t in hourly_txs)
 
-    back_row = [[InlineKeyboardButton(text="بازگشت", callback_data=f"tx_page:{back_page}", **{"icon_custom_emoji_id": "5257963315258204021"})]]
+    back_row = [[InlineKeyboardButton(text="بازگشت", callback_data=f"tx_page:{back_page}", **{"icon_custom_emoji_id": "5258236805890710909"})]]
     await cb.message.edit_text(
         f"<b>جزئیات برداشت</b>\n\n"
         f"سرور: <b>{srv_name}</b>\n"
@@ -306,7 +306,7 @@ async def cb_tx_item_detail(cb: CallbackQuery, user: User, session: AsyncSession
     if date_str:
         lines.append(f"{date_str}")
 
-    back_row = [[InlineKeyboardButton(text="بازگشت", callback_data=f"tx_page:{back_page}", **{"icon_custom_emoji_id": "5257963315258204021"})]]
+    back_row = [[InlineKeyboardButton(text="بازگشت", callback_data=f"tx_page:{back_page}", **{"icon_custom_emoji_id": "5258236805890710909"})]]
     await cb.message.edit_text(
         "\n".join(lines),
         parse_mode="HTML",

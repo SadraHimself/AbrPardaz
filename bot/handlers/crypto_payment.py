@@ -26,7 +26,7 @@ _AMOUNT_ICONS = {
     100: "5440539497383087970",
 }
 _BACK_KB = InlineKeyboardMarkup(inline_keyboard=[[
-    InlineKeyboardButton(text="بازگشت به کیف پول", callback_data="wallet", **{"icon_custom_emoji_id": "5933748020960038714"})
+    InlineKeyboardButton(text="بازگشت به کیف پول", callback_data="wallet", **{"icon_custom_emoji_id": "5258236805890710909"})
 ]])
 
 # Display names for NOWPayments currency codes
@@ -107,7 +107,7 @@ def _amount_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=f"{a}$", callback_data=f"np_amount:{a}", **{"icon_custom_emoji_id": _AMOUNT_ICONS[a]})]
         for a in reversed(_USD_AMOUNTS)
     ]
-    rows.append([InlineKeyboardButton(text="بازگشت", callback_data="wallet", **{"icon_custom_emoji_id": "5933748020960038714"})])
+    rows.append([InlineKeyboardButton(text="بازگشت", callback_data="wallet", **{"icon_custom_emoji_id": "5258236805890710909"})])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -155,7 +155,7 @@ def _currency_kb(amount_usd: int, coins: list[str]) -> InlineKeyboardMarkup:
     rows.append([InlineKeyboardButton(
         text="بازگشت",
         callback_data="crypto_pay",
-        **{"icon_custom_emoji_id": "5933748020960038714"},
+        **{"icon_custom_emoji_id": "5258236805890710909"},
     )])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -288,7 +288,7 @@ async def cb_np_currency(cb: CallbackQuery, user: User, session: AsyncSession):
     )
 
     back_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="بازگشت به منو", callback_data=f"np_cancel:{cp.id}", **{"icon_custom_emoji_id": "5933748020960038714"})]
+        [InlineKeyboardButton(text="بازگشت به منو", callback_data=f"np_cancel:{cp.id}", **{"icon_custom_emoji_id": "5258236805890710909"})]
     ])
 
     try:

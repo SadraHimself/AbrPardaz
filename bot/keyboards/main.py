@@ -51,20 +51,20 @@ def remove_kb() -> ReplyKeyboardRemove:
 
 def cancel_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ انصراف", callback_data="cancel")]
+        [InlineKeyboardButton(text="انصراف", callback_data="cancel", **{"icon_custom_emoji_id": "5240241223632954241"})]
     ])
 
 
 def back_kb(callback: str = "main_menu") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 بازگشت", callback_data=callback)]
+        [InlineKeyboardButton(text="بازگشت", callback_data=callback, **{"icon_custom_emoji_id": "5258236805890710909"})]
     ])
 
 
 def wallet_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="درگاه Nowpayments", callback_data="crypto_pay", **{"icon_custom_emoji_id": "5346160971192747426"})
-    builder.button(text="بازگشت", callback_data="user_profile", **{"icon_custom_emoji_id": "5933748020960038714"})
+    builder.button(text="بازگشت", callback_data="user_profile", **{"icon_custom_emoji_id": "5258236805890710909"})
     builder.adjust(1)
     return builder.as_markup()
 
@@ -74,6 +74,6 @@ def charge_amount_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for a in amounts:
         builder.button(text=f"{a:,} تومان", callback_data=f"charge:{a}")
-    builder.button(text="❌ انصراف", callback_data="cancel")
+    builder.button(text="انصراف", callback_data="cancel", **{"icon_custom_emoji_id": "5240241223632954241"})
     builder.adjust(2)
     return builder.as_markup()

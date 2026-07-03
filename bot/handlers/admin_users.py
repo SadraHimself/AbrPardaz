@@ -401,7 +401,9 @@ async def cb_user_unverify(cb: CallbackQuery, session: AsyncSession):
     try:
         await cb.bot.send_message(
             user.telegram_id,
-            "⚠️ احراز هویت شما توسط مدیریت حذف شد. لطفاً مجدداً احراز هویت کنید.",
+            '<tg-emoji emoji-id="6008233706039284019">⚠️</tg-emoji> '
+            "احراز هویت شما توسط مدیریت حذف شد. لطفاً مجدداً احراز هویت کنید.",
+            parse_mode="HTML",
         )
     except Exception:
         pass

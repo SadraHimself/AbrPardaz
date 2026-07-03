@@ -8,7 +8,7 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.database.models import User
-from bot.keyboards.main import cancel_kb
+from bot.keyboards.main import back_kb, cancel_kb
 from bot.services.shahkar import ShahkarService, normalize_ir_mobile, valid_national_code
 
 router = Router(name="auth")
@@ -17,8 +17,7 @@ _DIGIT_TRANS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "012345
 
 
 class VerifyStates(StatesGroup):
-    first_name = State()
-    last_name = State()
+    full_name = State()
     national_code = State()
     phone = State()
 
@@ -28,40 +27,37 @@ class VerifyStates(StatesGroup):
 @router.callback_query(F.data == "start_verify")
 async def cb_start_verify(cb: CallbackQuery, user: User, state: FSMContext):
     if user.is_kyc_verified:
-        await cb.answer("شما قبلاً احراز هویت شده‌اید.", show_alert=True)
+        await cb.message.edit_text(
+            '<tg-emoji emoji-id="6026147640968744910">✅</tg-emoji> '
+            "حساب کاربری شما از قبل احراز هویت شده است.",
+            parse_mode="HTML",
+            reply_markup=back_kb("user_profile"),
+        )
+        await cb.answer()
         return
 
-    await state.set_state(VerifyStates.first_name)
+    await state.set_state(VerifyStates.full_name)
     await cb.message.edit_text(
         "🪪 <b>احراز هویت</b>\n\n"
-        "لطفاً <b>نام</b> خود را وارد کنید:",
+        "لطفاً <b>نام و نام خانوادگی</b> خود را وارد کنید:\n"
+        "<i>مثال: علی رضایی</i>",
         parse_mode="HTML",
         reply_markup=cancel_kb(),
     )
     await cb.answer()
 
 
-@router.message(VerifyStates.first_name, F.text)
-async def verify_first_name(message: Message, state: FSMContext):
-    name = (message.text or "").strip()
-    if not (2 <= len(name) <= 50):
-        await message.answer("❌ نام معتبر نیست. دوباره وارد کنید:")
+@router.message(VerifyStates.full_name, F.text)
+async def verify_full_name(message: Message, state: FSMContext):
+    full = (message.text or "").strip()
+    parts = full.split()
+    if len(parts) < 2 or len(full) > 100:
+        await message.answer(
+            "❌ لطفاً نام و نام خانوادگی را کامل وارد کنید.\n<i>مثال: علی رضایی</i>",
+            parse_mode="HTML",
+        )
         return
-    await state.update_data(first_name=name)
-    await state.set_state(VerifyStates.last_name)
-    await message.answer(
-        "لطفاً <b>نام خانوادگی</b> خود را وارد کنید:",
-        parse_mode="HTML", reply_markup=cancel_kb(),
-    )
-
-
-@router.message(VerifyStates.last_name, F.text)
-async def verify_last_name(message: Message, state: FSMContext):
-    name = (message.text or "").strip()
-    if not (2 <= len(name) <= 50):
-        await message.answer("❌ نام خانوادگی معتبر نیست. دوباره وارد کنید:")
-        return
-    await state.update_data(last_name=name)
+    await state.update_data(first_name=parts[0], last_name=" ".join(parts[1:]))
     await state.set_state(VerifyStates.national_code)
     await message.answer(
         "لطفاً <b>کد ملی</b> ۱۰ رقمی خود را وارد کنید:",

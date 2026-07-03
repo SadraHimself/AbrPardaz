@@ -190,11 +190,11 @@ async def prov_add_pass(message: Message, state: FSMContext, session: AsyncSessi
     try:
         prov = VirtualizorProvider(data["url"], data["api_key"], account.api_secret)
         plans = await asyncio.wait_for(prov.list_plans(), timeout=10)
-        status = f"اتصال موفق — {len(plans)} پلن یافت شد"
+        status = f"✅ اتصال موفق — {len(plans)} پلن یافت شد"
     except asyncio.TimeoutError:
-        status = "تایم‌اوت"
+        status = "❌ تایم‌اوت"
     except Exception as e:
-        status = f"{str(e)[:80]}"
+        status = f"❌ {str(e)[:80]}"
 
     await test_msg.delete()
     await message.answer(
@@ -214,7 +214,7 @@ async def _render_provider_detail(message, account, provider_id: int):
         f"URL: <code>{account.api_endpoint}</code>\n"
         f"API Key: <code>{account.api_key}</code>\n"
         f"API Pass: <code>{'*' * 8}</code>\n"
-        f"وضعیت: {'فعال' if account.is_active else 'غیرفعال'}\n"
+        f"وضعیت: {'✅ فعال' if account.is_active else '❌ غیرفعال'}\n"
         f"Strict KYC: {'روشن' if account.strict_kyc else 'خاموش'}\n"
         f"هزینه تغییر IP: {fee_text}\n"
         f"ID: {account.id}",
@@ -328,7 +328,7 @@ async def cb_prov_test(cb: CallbackQuery, session: AsyncSession):
             if nodes:
                 node_lines = []
                 for n in nodes[:5]:
-                    status_icon = "" if n["online"] else ""
+                    status_icon = "✅" if n["online"] else "❌"
                     line = f"  {status_icon} <b>{n['name'] or 'بدون نام'}</b> | IP: <code>{n['ip']}</code>"
                     if n.get("os"):
                         line += f"\n     OS: <code>{n['os']}</code>"
@@ -349,20 +349,20 @@ async def cb_prov_test(cb: CallbackQuery, session: AsyncSession):
         try:
             storages = await asyncio.wait_for(prov.list_storages(), timeout=8)
             if storages:
-                st_lines = [f"  {s['name']} ({s['free_gb']:.0f}GB آزاد) {'' if s['is_primary'] else ''}" for s in storages[:3]]
+                st_lines = [f"  {s['name']} ({s['free_gb']:.0f}GB آزاد) {'✅' if s['is_primary'] else ''}" for s in storages[:3]]
                 extra_info += "\n\n<b>استوریج‌ها:</b>\n" + "\n".join(st_lines)
             else:
                 extra_info += "\n\n<b>استوریج‌ها:</b> یافت نشد"
         except Exception as e:
             extra_info += f"\n\n<b>استوریج‌ها — خطا:</b> <code>{e}</code>"
         await test_msg.edit_text(
-            f"<b>اتصال موفق!</b>\n{account.name}\n{len(plans)} پلن{extra_info}",
+            f"✅ <b>اتصال موفق!</b>\n{account.name}\n{len(plans)} پلن{extra_info}",
             parse_mode="HTML",
         )
     except asyncio.TimeoutError:
-        await test_msg.edit_text(f"<b>تایم‌اوت</b>\n{account.api_endpoint}", parse_mode="HTML")
+        await test_msg.edit_text(f"❌ <b>تایم‌اوت</b>\n{account.api_endpoint}", parse_mode="HTML")
     except Exception as e:
-        await test_msg.edit_text(f"<b>خطا:</b> {e}", parse_mode="HTML")
+        await test_msg.edit_text(f"❌ <b>خطا:</b> {e}", parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("admin:prov_monitor:"))
@@ -382,7 +382,7 @@ async def cb_prov_monitor(cb: CallbackQuery, session: AsyncSession):
             return
         lines = []
         for n in nodes:
-            status = "آنلاین" if n["online"] else "آفلاین"
+            status = "✅ آنلاین" if n["online"] else "❌ آفلاین"
             block = (
                 f"━━━━━━━━━━━━━━━━\n"
                 f"<b>{n['name'] or 'بدون نام'}</b>  {status}\n"
@@ -508,7 +508,7 @@ async def cb_plan_detail(cb: CallbackQuery, session: AsyncSession):
         f"{plan.ram} MB | {plan.cpu} CPU | {plan.disk} GB | {plan.bandwidth} GB BW\n"
         f"{plan.location or '—'}\n\n"
         + "\n".join(billing_lines) + "\n\n"
-        + ("فعال" if plan.is_active else "غیرفعال"),
+        + ("✅ فعال" if plan.is_active else "❌ غیرفعال"),
         parse_mode="HTML",
         reply_markup=plan_detail_kb(plan_id, plan.is_active),
     )
@@ -954,7 +954,7 @@ async def cb_subprod_detail(cb: CallbackQuery, session: AsyncSession):
         f"نوع: {type_label}\n"
         f"مقدار: {sp.value} {unit}\n"
         f"قیمت: {sp.price:,.0f} تومان\n"
-        f"وضعیت: {'فعال' if sp.is_active else 'غیرفعال'}",
+        f"وضعیت: {'✅ فعال' if sp.is_active else '❌ غیرفعال'}",
         parse_mode="HTML",
         reply_markup=subprod_detail_kb(sp_id, sp.plan_id, sp.is_active),
     )
@@ -1218,7 +1218,7 @@ async def cb_disc_detail(cb: CallbackQuery, session: AsyncSession):
         f"{code.discount_percent:.0f}%\n"
         f"{exp}\n"
         f"{code.use_count}/{max_u}\n"
-        f"وضعیت: {'' if code.is_active else ''}",
+        f"وضعیت: {'✅ فعال' if code.is_active else '❌ غیرفعال'}",
         parse_mode="HTML",
         reply_markup=discount_detail_kb(disc_id, code.is_active),
     )

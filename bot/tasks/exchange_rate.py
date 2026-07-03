@@ -12,12 +12,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+import time
+from datetime import datetime, timedelta, timezone
 
 import aiohttp
 from celery.signals import worker_ready
 
 from bot.config import settings
+
+# Iran is permanently UTC+3:30 (DST abolished in 2022) — use a fixed offset so we
+# don't depend on the system tz database for display strings.
+_TEHRAN = timezone(timedelta(hours=3, minutes=30))
+
+# Hard guard: never update more than once within this window, regardless of what
+# triggered the task (schedule catch-up on restart, accidental double-fire, etc.).
+_MIN_INTERVAL_SECONDS = 7 * 3600
 from bot.tasks.celery_app import app
 
 logger = logging.getLogger(__name__)
@@ -100,14 +109,28 @@ async def _do_update(only_if_empty: bool = False) -> None:
     except Exception:
         pass
 
+    async with AsyncSessionFactory() as session:
+        rate_row = await session.get(BotSettings, "np_usd_to_irt_rate")
+        ts_row = await session.get(BotSettings, "exrate_updated_ts")
+    rate_set = bool(rate_row and rate_row.value)
+    try:
+        last_ts = float(ts_row.value) if (ts_row and ts_row.value) else None
+    except (ValueError, TypeError):
+        last_ts = None
+
     # Startup trigger: only fetch on a fresh install (rate never set), so restarts
-    # don't re-fetch. Skips the Navasan request entirely when a rate already exists.
-    if only_if_empty:
-        async with AsyncSessionFactory() as session:
-            row = await session.get(BotSettings, "np_usd_to_irt_rate")
-            if row and row.value:
-                logger.info("exchange_rate: startup skip — rate already set (%s)", row.value)
-                return
+    # don't re-fetch.
+    if only_if_empty and rate_set:
+        logger.info("exchange_rate: startup skip — rate already set (%s)", rate_row.value)
+        return
+
+    # Hard min-interval guard: skip any run too soon after the last one. Legit
+    # scheduled runs are 8h apart (> 7h) so they always pass; early re-fires don't.
+    if last_ts is not None:
+        elapsed = time.time() - last_ts
+        if elapsed < _MIN_INTERVAL_SECONDS:
+            logger.info("exchange_rate: skip — only %.1fh since last update", elapsed / 3600)
+            return
 
     rates = await _fetch_rates()
     if rates is None:
@@ -132,12 +155,16 @@ async def _do_update(only_if_empty: bool = False) -> None:
         else:
             session.add(BotSettings(key="np_eur_to_irt_rate", value=str(eur)))
 
-        now_str = datetime.now().strftime("%Y/%m/%d %H:%M")
-        ts_row = await session.get(BotSettings, "exrate_updated_at")
-        if ts_row:
-            ts_row.value = now_str
-        else:
-            session.add(BotSettings(key="exrate_updated_at", value=now_str))
+        now_dt = datetime.now(_TEHRAN)
+        for key, val in (
+            ("exrate_updated_at", now_dt.strftime("%Y/%m/%d %H:%M")),
+            ("exrate_updated_ts", str(int(time.time()))),
+        ):
+            row = await session.get(BotSettings, key)
+            if row:
+                row.value = val
+            else:
+                session.add(BotSettings(key=key, value=val))
 
         gid_row = await session.get(BotSettings, "log_group_id")
         tid_row = await session.get(BotSettings, "log_topic_exchange_rate")
@@ -148,7 +175,7 @@ async def _do_update(only_if_empty: bool = False) -> None:
     if not gid_row or not gid_row.value or not tid_row or not tid_row.value:
         return
 
-    now = datetime.now().strftime("%H:%M")
+    now = now_dt.strftime("%H:%M")
     bot = Bot(token=settings.BOT_TOKEN)
     try:
         await bot.send_message(

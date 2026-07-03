@@ -49,14 +49,14 @@ _FILTER_LABELS = {
 async def cb_broadcast_menu(cb: CallbackQuery, state: FSMContext):
     await state.clear()
     await cb.message.edit_text(
-        "📢 <b>پیام همگانی</b>\n\nمخاطبان را انتخاب کنید:",
+        "<b>پیام همگانی</b>\n\nمخاطبان را انتخاب کنید:",
         parse_mode="HTML",
         reply_markup=broadcast_menu_kb(),
     )
     await cb.answer()
 
 
-# ── Filter selection → message input ─────────────────────────────────────────
+# ── Filter selection message input ─────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("admin:bc_filter:"))
 async def cb_bc_filter(cb: CallbackQuery, state: FSMContext):
@@ -64,9 +64,9 @@ async def cb_bc_filter(cb: CallbackQuery, state: FSMContext):
     await state.update_data(bc_filter=filter_type)
     await state.set_state(BroadcastFSM.waiting_message)
     await cb.message.edit_text(
-        f"📢 <b>پیام به: {_FILTER_LABELS[filter_type]}</b>\n\n"
+        f"<b>پیام به: {_FILTER_LABELS[filter_type]}</b>\n\n"
         "پیام خود را ارسال کنید.\n\n"
-        "💡 <b>نکته:</b> برای forward واقعی (حفظ استیکر پریمیوم و Forwarded from)، "
+        "<b>نکته:</b> برای forward واقعی (حفظ استیکر پریمیوم و Forwarded from)، "
         "پیام را از کانال موردنظر forward کنید.",
         parse_mode="HTML",
         reply_markup=back_to_admin_kb("admin:broadcast"),
@@ -88,9 +88,9 @@ async def msg_bc_message(message: Message, state: FSMContext, session: AsyncSess
     )
     await state.set_state(BroadcastFSM.confirming)
 
-    fwd_note = "\n✅ پیام به صورت <b>forward واقعی</b> ارسال می‌شود." if is_forward else ""
+    fwd_note = "\nپیام به صورت <b>forward واقعی</b> ارسال می‌شود." if is_forward else ""
     await message.answer(
-        f"📢 <b>تأیید ارسال</b>\n\n"
+        f"<b>تأیید ارسال</b>\n\n"
         f"مخاطب: {_FILTER_LABELS[filter_type]}\n"
         f"تعداد: ~{count} نفر{fwd_note}\n\n"
         "آیا ارسال شود؟",
@@ -115,7 +115,7 @@ async def cb_bc_send(cb: CallbackQuery, state: FSMContext, session: AsyncSession
     total = len(recipients)
 
     progress_msg = await cb.message.edit_text(
-        f"📢 در حال ارسال به {total} کاربر...",
+        f"در حال ارسال به {total} کاربر...",
     )
     await cb.answer()
 
@@ -155,7 +155,7 @@ async def cb_bc_send(cb: CallbackQuery, state: FSMContext, session: AsyncSession
             await asyncio.sleep(1)
 
     await progress_msg.edit_text(
-        f"✅ <b>ارسال تمام شد!</b>\n\n"
+        f"<b>ارسال تمام شد!</b>\n\n"
         f"ارسال موفق: {sent}\n"
         f"ناموفق: {failed}",
         parse_mode="HTML",

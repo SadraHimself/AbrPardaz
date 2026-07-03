@@ -22,10 +22,14 @@ class Settings(BaseSettings):
     CELERY_BROKER_URL: str = "redis://localhost:6379/1"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"
 
-    # ── Shahkar KYC ───────────────────────────────────────────────────────────────
+    # ── Shahkar KYC (legacy nict.ir) ──────────────────────────────────────────────
     SHAHKAR_BASE_URL: str = ""
     SHAHKAR_SERVICE_ID: str = ""
     SHAHKAR_PASSWORD: str = ""
+
+    # ── Zohal (identity verification → Shahkar) ───────────────────────────────────
+    ZOHAL_TOKEN: str = ""
+    ZOHAL_BASE_URL: str = "https://service.zohal.io/api/v0"
 
     # ── Billing ───────────────────────────────────────────────────────────────────
     MIN_BALANCE_THRESHOLD: float = 0.0

@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config import settings
 from bot.database.models import BotSettings, Server, ServerStatus, User
-from bot.keyboards.main import back_kb, main_menu_kb, request_phone_kb
+from bot.keyboards.main import back_kb, main_menu_kb
 from bot.services.log_service import LogService
 from bot.utils.loading import answer_loading, edit_loading
 
@@ -121,23 +121,7 @@ async def cmd_start(message: Message, user: User, session: AsyncSession,
         await message.answer(maint_text)
         return
 
-    # 2. Phone verification
-    if not user.is_phone_verified:
-        await message.answer(
-            "👋 سلام!\n\n"
-            "برای استفاده از ربات، ابتدا باید شماره موبایل خود را وارد کنید.\n"
-            "دکمه زیر را بزنید تا شماره‌تان به اشتراک گذاشته شود:",
-            reply_markup=request_phone_kb(),
-        )
-        return
-
-    # 3. Terms acceptance
-    if not user.terms_accepted_at:
-        terms_text = await _get_terms_text(session)
-        await message.answer(terms_text, parse_mode="HTML", reply_markup=_terms_kb())
-        return
-
-    # 4. Force-join channels
+    # 2. Force-join channels (if any configured)
     channels = await _get_force_channels(session)
     if channels:
         not_joined = await _check_membership(message.bot, message.from_user.id, channels)
@@ -150,27 +134,20 @@ async def cmd_start(message: Message, user: User, session: AsyncSession,
             )
             return
 
+    # 3. Terms acceptance
+    if not user.terms_accepted_at:
+        terms_text = await _get_terms_text(session)
+        await message.answer(terms_text, parse_mode="HTML", reply_markup=_terms_kb())
+        return
+
     await _send_welcome(message, user, session)
 
 
 @router.callback_query(F.data == "accept_terms")
 async def cb_accept_terms(cb: CallbackQuery, user: User, session: AsyncSession):
+    # Force-join is enforced before terms, so accepting terms is the last gate.
     user.terms_accepted_at = datetime.now(timezone.utc)
     await session.flush()
-
-    # Check force-join after terms
-    channels = await _get_force_channels(session)
-    if channels:
-        not_joined = await _check_membership(cb.bot, cb.from_user.id, channels)
-        if not_joined:
-            await cb.message.edit_text(
-                "📢 <b>عضویت اجباری</b>\n\n"
-                "برای استفاده از ربات، ابتدا در کانال‌های زیر عضو شوید:",
-                parse_mode="HTML",
-                reply_markup=_join_channels_kb(not_joined),
-            )
-            await cb.answer()
-            return
 
     await cb.message.delete()
     await _send_welcome(cb.message, user, session, is_cb=True, bot=cb.bot, chat_id=cb.from_user.id)
@@ -193,6 +170,14 @@ async def cb_check_join(cb: CallbackQuery, user: User, session: AsyncSession):
     if not_joined:
         await cb.answer("هنوز در همه کانال‌ها عضو نشدید.", show_alert=True)
         return
+
+    # Joined — next gate is terms acceptance.
+    if not user.terms_accepted_at:
+        terms_text = await _get_terms_text(session)
+        await cb.message.edit_text(terms_text, parse_mode="HTML", reply_markup=_terms_kb())
+        await cb.answer("✅ عضویت تأیید شد!")
+        return
+
     await cb.message.delete()
     await _send_welcome(cb.message, user, session, is_cb=True, bot=cb.bot, chat_id=cb.from_user.id)
     await cb.answer("✅ عضویت تأیید شد!")
@@ -289,14 +274,17 @@ async def _render_profile(target_msg, user: User, session: AsyncSession):
         f'<tg-emoji emoji-id="5258477770735885832">📄</tg-emoji> لیمیت سرور ساعتی: <b>{hourly_limit}</b>\n\n'
         f"موجودی کیف پول: <b>{user.balance:,.0f} تومان</b>"
     )
+    rows = [
+        [InlineKeyboardButton(text="شارژ کیف پول", callback_data="wallet", **{"icon_custom_emoji_id": "5987880246865565644"})],
+        [InlineKeyboardButton(text="تاریخچه تراکنش‌ها", callback_data="tx_history", **{"icon_custom_emoji_id": "5956561916573782596"})],
+    ]
+    if not user.is_kyc_verified:
+        rows.append([InlineKeyboardButton(text="🪪 احراز هویت", callback_data="start_verify")])
+    rows.append([InlineKeyboardButton(text="بازگشت", callback_data="main_menu", **{"icon_custom_emoji_id": "5933748020960038714"})])
     await target_msg.edit_text(
         text,
         parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="شارژ کیف پول", callback_data="wallet", **{"icon_custom_emoji_id": "5987880246865565644"})],
-            [InlineKeyboardButton(text="تاریخچه تراکنش‌ها", callback_data="tx_history", **{"icon_custom_emoji_id": "5956561916573782596"})],
-            [InlineKeyboardButton(text="بازگشت", callback_data="main_menu", **{"icon_custom_emoji_id": "5933748020960038714"})],
-        ]),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
 
 

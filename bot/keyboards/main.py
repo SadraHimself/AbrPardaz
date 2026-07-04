@@ -63,6 +63,7 @@ def back_kb(callback: str = "main_menu") -> InlineKeyboardMarkup:
 
 def wallet_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+    builder.button(text="درگاه ریالی (زرین‌پال)", callback_data="zarinpal_pay")
     builder.button(text="درگاه Nowpayments", callback_data="crypto_pay", **{"icon_custom_emoji_id": "5346160971192747426"})
     builder.button(text="بازگشت", callback_data="user_profile", **{"icon_custom_emoji_id": "5258236805890710909"})
     builder.adjust(1)

@@ -24,18 +24,65 @@ from bot.services.zarinpal import ZarinpalClient
 logger = logging.getLogger(__name__)
 
 
-_RESULT_PAGE = (
-    "<!doctype html><html lang='fa' dir='rtl'><head><meta charset='utf-8'>"
-    "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-    "<title>{title}</title></head>"
-    "<body style='font-family:Tahoma,Arial,sans-serif;text-align:center;padding:48px 16px;"
-    "background:#0f172a;color:#e2e8f0'>"
-    "<h2>{title}</h2><p style='font-size:15px;color:#94a3b8'>{msg}</p></body></html>"
-)
+_RESULT_PAGE = """<!doctype html>
+<html lang="fa" dir="rtl"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title}</title>
+<style>
+  *{{box-sizing:border-box;margin:0;padding:0}}
+  body{{font-family:'Segoe UI',Tahoma,Arial,sans-serif;min-height:100vh;display:flex;
+    align-items:center;justify-content:center;padding:20px;
+    background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);color:#e2e8f0}}
+  .card{{background:#1e293b;border:1px solid #334155;border-radius:22px;padding:44px 32px;
+    max-width:420px;width:100%;text-align:center;box-shadow:0 24px 60px rgba(0,0,0,.45);
+    animation:pop .35s ease}}
+  @keyframes pop{{from{{transform:scale(.92);opacity:0}}to{{transform:scale(1);opacity:1}}}}
+  .icon{{width:84px;height:84px;border-radius:50%;background:{accent};display:flex;
+    align-items:center;justify-content:center;margin:0 auto 22px;font-size:44px;
+    color:#fff;box-shadow:0 10px 28px {accent}55}}
+  h1{{font-size:22px;margin-bottom:12px;font-weight:800}}
+  p{{font-size:15px;color:#94a3b8;line-height:2}}
+  .amount{{margin-top:18px;font-size:20px;font-weight:800;color:{accent}}}
+  .btn{{display:inline-block;margin-top:26px;padding:13px 30px;background:{accent};
+    color:#fff;border-radius:13px;text-decoration:none;font-size:15px;font-weight:700}}
+</style></head>
+<body><div class="card">
+  <div class="icon">{glyph}</div>
+  <h1>{title}</h1>
+  <p>{msg}</p>
+  {extra}
+  {button}
+</div></body></html>"""
+
+_THEMES = {
+    "success": ("#22c55e", "✓"),
+    "fail":    ("#ef4444", "✕"),
+    "pending": ("#f59e0b", "⏳"),
+}
 
 
-def _page(title: str, msg: str) -> web.Response:
-    return web.Response(text=_RESULT_PAGE.format(title=title, msg=msg), content_type="text/html")
+def _page(status: str, title: str, msg: str, bot_username: str = "", extra: str = "") -> web.Response:
+    accent, glyph = _THEMES.get(status, ("#64748b", "•"))
+    button = ""
+    if bot_username:
+        button = f'<a class="btn" href="https://t.me/{bot_username}">بازگشت به ربات</a>'
+    html = _RESULT_PAGE.format(accent=accent, glyph=glyph, title=title, msg=msg,
+                              extra=extra, button=button)
+    return web.Response(text=html, content_type="text/html")
+
+
+async def _bot_username(request: web.Request) -> str:
+    """Cached bot username for the 'return to bot' button."""
+    u = request.app.get("bot_username")
+    if u is None:
+        try:
+            me = await request.app["bot"].get_me()
+            u = me.username or ""
+        except Exception:
+            u = ""
+        request.app["bot_username"] = u
+    return u
 
 
 def _verify_hmac(raw_body: bytes, received_sig: str) -> bool:
@@ -127,8 +174,10 @@ async def _handle_zarinpal_callback(request: web.Request) -> web.Response:
     status = request.query.get("Status", "")
     logger.info("Zarinpal callback: authority=%s status=%s", authority[:12] + "…" if authority else "-", status)
 
+    uname = await _bot_username(request)
+
     if not authority:
-        return _page("خطا", "اطلاعات بازگشت از درگاه ناقص است.")
+        return _page("fail", "خطا", "اطلاعات بازگشت از درگاه ناقص است.", uname)
 
     bot = request.app["bot"]
     async with AsyncSessionFactory() as session:
@@ -141,21 +190,21 @@ async def _handle_zarinpal_callback(request: web.Request) -> web.Response:
         order = result.scalar_one_or_none()
 
         if not order:
-            return _page("یافت نشد", "سفارش پرداخت یافت نشد.")
+            return _page("fail", "یافت نشد", "سفارش پرداخت یافت نشد.", uname)
 
         if order.status == "paid":
-            return _page("پرداخت موفق", "این پرداخت قبلاً تأیید شده است. به ربات بازگردید.")
+            return _page("success", "پرداخت موفق", "این پرداخت قبلاً تأیید شده است.", uname)
 
         if status != "OK":
             order.status = "failed"
             await session.commit()
-            return _page("پرداخت ناموفق", "پرداخت لغو شد یا ناموفق بود.")
+            return _page("fail", "پرداخت ناموفق", "پرداخت لغو شد یا توسط شما انصراف داده شد.", uname)
 
         try:
             code, ref_id = await ZarinpalClient().verify(int(order.amount), authority)
         except Exception as exc:
             logger.warning("Zarinpal verify error authority=%s: %s", authority, exc)
-            return _page("در حال بررسی", "پرداخت شما در حال بررسی است. اگر مبلغ کسر شده، به‌زودی شارژ می‌شود.")
+            return _page("pending", "در حال بررسی", "پرداخت شما در حال بررسی است. اگر مبلغ کسر شده، به‌زودی شارژ می‌شود.", uname)
 
         if code in (100, 101):
             user = await session.get(User, order.user_id)
@@ -183,11 +232,13 @@ async def _handle_zarinpal_callback(request: web.Request) -> web.Response:
                     )
                 except Exception:
                     pass
-            return _page("پرداخت موفق", "پرداخت با موفقیت انجام شد. به ربات بازگردید.")
+            amount_html = f'<div class="amount">{order.amount:,.0f} تومان</div>'
+            return _page("success", "پرداخت موفق", "این مبلغ به کیف پول شما اضافه شد. به ربات بازگردید.",
+                         uname, extra=amount_html)
 
         order.status = "failed"
         await session.commit()
-        return _page("پرداخت ناموفق", f"تأیید پرداخت ناموفق بود (کد {code}).")
+        return _page("fail", "پرداخت ناموفق", f"تأیید پرداخت ناموفق بود (کد {code}).", uname)
 
 
 def create_webhook_app(bot) -> web.Application:

@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     # ── Navasan (exchange rates) ──────────────────────────────────────────────────
     NAVASAN_API_KEY: str = ""
 
+    # ── Zarinpal (rial gateway) ───────────────────────────────────────────────────
+    ZARINPAL_MERCHANT_ID: str = ""
+    ZARINPAL_CALLBACK_URL: str = ""   # e.g. https://pay.afaghcloud.com/zarinpal/callback
+    ZARINPAL_SANDBOX: bool = False
+
     # ── NOWPayments ───────────────────────────────────────────────────────────────
     NP_API_KEY: str = ""
     NP_IPN_SECRET: str = ""

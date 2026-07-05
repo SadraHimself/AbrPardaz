@@ -83,8 +83,8 @@ async def verify_national_code(message: Message, state: FSMContext):
     await state.update_data(national_code=code)
     await state.set_state(VerifyStates.birth_date)
     await message.answer(
-        "لطفاً 📅 <b>تاریخ تولد</b> خود را وارد کنید:\n"
-        "<i>به‌صورت شمسی — مثال: 1377/07/19</i>",
+        '<tg-emoji emoji-id="5346136537123801643">📅</tg-emoji> لطفا <b>تاریخ تولد</b> خود را وارد کنید\n'
+        "مثال: 1377/07/19",
         parse_mode="HTML", reply_markup=_verify_back_kb(),
     )
 
@@ -98,8 +98,10 @@ async def verify_birth_date(message: Message, state: FSMContext):
     await state.update_data(birth_date=bd)
     await state.set_state(VerifyStates.card_number)
     await message.answer(
-        "لطفاً 💳 <b>شماره کارت بانکی</b> خود را وارد کنید:\n"
-        "<i>۱۶ رقم — باید به نام خودتان باشد</i>",
+        '<tg-emoji emoji-id="5346227465876423936">💳</tg-emoji> '
+        "لطفا شماره کارتی که قصد انجام پرداختی با آن دارید را وارد کنید\n"
+        '<tg-emoji emoji-id="5258503720928288433">ℹ️</tg-emoji> '
+        "نکته: این عمل به‌منظور تأییدِ تطابق کارت و صاحب کارت می‌باشد",
         parse_mode="HTML", reply_markup=_verify_back_kb(),
     )
 

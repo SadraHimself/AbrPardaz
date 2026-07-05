@@ -27,6 +27,7 @@ from bot.keyboards.admin import (
     providers_select_kb, skip_or_cancel_kb,
     subprod_detail_kb, subprod_type_kb, subproducts_kb,
 )
+from bot.providers import get_provider
 from bot.providers.virtualizor import VirtualizorProvider
 from bot.utils.loading import answer_loading, edit_loading
 from bot.services.billing import BillingService
@@ -438,14 +439,38 @@ async def cb_prov_del_do(cb: CallbackQuery, session: AsyncSession):
     from sqlalchemy import delete as sql_delete
     provider_id = int(cb.data.split(":")[2])
     account = await session.get(ProviderAccount, provider_id)
+    removed_vms = 0
     if account:
-        # Delete associated plans first (cascade not set on FK)
+        # Clean up customers' active VMs still on this provider (force — the node
+        # may be down / being decommissioned). Keep the Server rows for history but
+        # mark them DELETED and unlink the FK so the account row can be removed.
+        result = await session.execute(
+            select(Server).where(
+                Server.provider_account_id == provider_id,
+                Server.status != ServerStatus.DELETED,
+            )
+        )
+        for srv in result.scalars().all():
+            if srv.provider_server_id:
+                try:
+                    await get_provider(account).delete_server(srv.provider_server_id)
+                except Exception:
+                    pass  # force clean regardless of node state
+            srv.status = ServerStatus.DELETED
+            srv.provider_account_id = None
+            removed_vms += 1
+
+        # Delete associated plans, then the account
         await session.execute(
             sql_delete(ServerPlan).where(ServerPlan.provider_account_id == provider_id)
         )
         await session.delete(account)
         await session.flush()
-    await cb.message.edit_text("سرور و محصولات مربوطه حذف شدند.", reply_markup=back_to_admin_kb("admin:providers"))
+
+    msg = "سرور و محصولات مربوطه حذف شدند."
+    if removed_vms:
+        msg += f"\n{removed_vms} سرویس فعال مشتریان هم حذف شد."
+    await cb.message.edit_text(msg, reply_markup=back_to_admin_kb("admin:providers"))
     await cb.answer()
 
 

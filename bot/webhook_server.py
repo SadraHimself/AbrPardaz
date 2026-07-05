@@ -198,7 +198,21 @@ async def _handle_zarinpal_callback(request: web.Request) -> web.Response:
         if status != "OK":
             order.status = "failed"
             await session.commit()
-            return _page("fail", "پرداخت ناموفق", "پرداخت لغو شد یا توسط شما انصراف داده شد.", uname)
+            # Notify the user in the bot (most common cause with card lock on: the
+            # payer's card doesn't match their national code, so Zarinpal blocked it).
+            u = await session.get(User, order.user_id)
+            if u:
+                try:
+                    await bot.send_message(
+                        u.telegram_id,
+                        '<tg-emoji emoji-id="4956612582816351459">❌</tg-emoji> '
+                        "کاربر گرامی، پرداخت ریالی شما به‌خاطر عدم تطابق کارت بانکی با صاحب کد ملی رد شد.\n\n"
+                        '<tg-emoji emoji-id="5983580310292402968">🤖</tg-emoji> @abrmakerbot',
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
+            return _page("fail", "پرداخت ناموفق", "پرداخت انجام نشد یا کارت مجاز نبود.", uname)
 
         try:
             code, ref_id = await ZarinpalClient().verify(int(order.amount), authority)

@@ -193,6 +193,57 @@ def sync_building_servers():
     _run(_do())
 
 
+@app.task(name="bot.tasks.server.check_providers_health")
+def check_providers_health():
+    """هر ۳۰ دقیقه اتصال هر پروایدر ویرچولایزور را تست می‌کند؛ در صورت تغییر وضعیت
+    (قطع/وصل) در تاپیک «لاگ سرور» اطلاع می‌دهد. (فقط هنگام تغییر، تا اسپم نشود.)"""
+    async def _do():
+        from bot.database.session import AsyncSessionFactory, engine
+        try:
+            await engine.dispose(close=False)
+        except Exception:
+            pass
+        from bot.database.models import ProviderAccount
+        from bot.providers import get_provider
+        from bot.services.log_service import LogService
+        from aiogram import Bot
+        from bot.config import settings
+        from sqlalchemy import select
+
+        async with AsyncSessionFactory() as session:
+            result = await session.execute(
+                select(ProviderAccount).where(ProviderAccount.is_active == True)
+            )
+            accounts = list(result.scalars().all())
+            if not accounts:
+                return
+
+            bot = Bot(token=settings.BOT_TOKEN)
+            log = LogService(bot, session)
+            try:
+                for account in accounts:
+                    prev_ok = (account.extra_config or {}).get("health_ok", True)
+                    ok, reason = True, ""
+                    try:
+                        await get_provider(account).list_plans()
+                    except Exception as e:
+                        ok, reason = False, str(e)[:200]
+
+                    if ok != prev_ok:
+                        cfg = dict(account.extra_config or {})
+                        cfg["health_ok"] = ok
+                        account.extra_config = cfg
+                        if ok:
+                            await log.log_provider_up(account.name)
+                        else:
+                            await log.log_provider_down(account.name, reason)
+                await session.commit()
+            finally:
+                await bot.session.close()
+
+    _run(_do())
+
+
 @app.task(name="bot.tasks.server.notify_traffic_warning")
 def notify_traffic_warning(user_id: int, server_id: int, percent: int):
     async def _do():

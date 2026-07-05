@@ -51,7 +51,7 @@ class ZarinpalClient:
 
     async def request_payment(self, amount_toman: int, callback_url: str, description: str,
                               mobile: str | None = None, email: str | None = None,
-                              auto_verify: bool | None = None) -> str:
+                              auto_verify: bool | None = None, card_pan: str | None = None) -> str:
         """Create a payment request; return the authority on success.
 
         `mobile` is required for the Ayan (عیان) identity service — Zarinpal matches
@@ -72,11 +72,20 @@ class ZarinpalClient:
             metadata["mobile"] = mobile
         if email:
             metadata["email"] = email
+        if card_pan:
+            metadata["card_pan"] = card_pan   # lock: Zarinpal rejects any other card
         if auto_verify is not None:
             metadata["auto_verify"] = auto_verify
         if metadata:
             payload["metadata"] = metadata
 
+        logger.info(
+            "zarinpal request: amount=%s mobile=%s card_lock=%s auto_verify=%s",
+            int(amount_toman),
+            (mobile[:4] + "***" + mobile[-2:]) if mobile else None,
+            ("****" + card_pan[-4:]) if card_pan else "OFF",
+            auto_verify,
+        )
         resp = await self._post("request.json", payload)
         data = resp.get("data") or {}
         if isinstance(data, dict) and data.get("code") == 100 and data.get("authority"):

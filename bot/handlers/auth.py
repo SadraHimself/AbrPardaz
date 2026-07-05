@@ -68,8 +68,8 @@ async def verify_full_name(message: Message, state: FSMContext):
     await state.update_data(first_name=parts[0], last_name=" ".join(parts[1:]))
     await state.set_state(VerifyStates.national_code)
     await message.answer(
-        'لطفاً <tg-emoji emoji-id="5346136537123801643">🪪</tg-emoji> '
-        "<b>کد ملی</b> ۱۰ رقمی خود را وارد کنید:",
+        '<tg-emoji emoji-id="5346136537123801643">🪪</tg-emoji> '
+        "لطفاً <b>کد ملی</b> ۱۰ رقمی خود را وارد کنید:",
         parse_mode="HTML", reply_markup=_verify_back_kb(),
     )
 
@@ -99,7 +99,7 @@ async def verify_birth_date(message: Message, state: FSMContext):
     await state.set_state(VerifyStates.card_number)
     await message.answer(
         '<tg-emoji emoji-id="5346227465876423936">💳</tg-emoji> '
-        "لطفا شماره کارتی که قصد انجام پرداختی با آن دارید را وارد کنید\n"
+        "لطفا شماره کارتی که قصد انجام پرداختی با آن دارید را وارد کنید\n\n"
         '<tg-emoji emoji-id="5258503720928288433">ℹ️</tg-emoji> '
         "نکته: این عمل به‌منظور تأییدِ تطابق کارت و صاحب کارت می‌باشد",
         parse_mode="HTML", reply_markup=_verify_back_kb(),

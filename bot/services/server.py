@@ -157,7 +157,55 @@ class ServerService:
         await self.session.flush()
         return server
 
+    async def _delete_server(self, server: Server, force: bool = True) -> bool:
+        """Delete a VM, tolerant of a missing/deleted provider account or a down
+        node — the DB record is always cleaned up so the user is never stuck with a
+        server whose provider no longer exists."""
+        sid = server.provider_server_id
+
+        # Resolve the provider; if the account is gone/inactive, there is nothing to
+        # call on the node — just clean up the DB record.
+        account = None
+        try:
+            account = await self._get_account(server.provider_account_id)
+        except Exception:
+            account = None
+
+        if account is not None and sid:
+            provider = get_provider(account)
+            ok = False
+            try:
+                ok = await provider.delete_server(sid)
+            except RuntimeError as _e:
+                _em = str(_e).lower()
+                if any(w in _em for w in ("not found", "does not exist", "no vps", "invalid vpsid", "no such")):
+                    ok = True  # VPS already gone from provider
+                elif force:
+                    logger.warning("delete server %s: provider error, force-cleaning DB: %s", server.id, _e)
+                    ok = True  # node unreachable / other error — force clean
+                else:
+                    raise
+            if not ok:
+                try:
+                    await provider.get_server(sid)
+                    if force:
+                        logger.warning("delete server %s: still exists but force-cleaning DB", server.id)
+                        ok = True
+                except RuntimeError:
+                    ok = True  # VPS not found by provider either → force clean
+            if not ok:
+                return False
+
+        server.status = ServerStatus.DELETED
+        await self.session.flush()
+        return True
+
     async def perform_action(self, server: Server, action: str, **kwargs) -> bool:
+        # Delete must work even if the provider account was removed / the node is
+        # down, so resolve it separately (don't require an active account first).
+        if action == "delete":
+            return await self._delete_server(server, force=kwargs.get("force", True))
+
         account = await self._get_account(server.provider_account_id)
         provider = get_provider(account)
         sid = server.provider_server_id
@@ -188,37 +236,6 @@ class ServerService:
                 server.status = ServerStatus.ACTIVE
                 server.suspend_reason = None
                 server.suspended_at = None
-                await self.session.flush()
-            return ok
-        if action == "delete":
-            # force=True (default): a down/unreachable node must NOT block the user
-            # from removing their VM — clean the DB record even if the API call fails.
-            force = kwargs.get("force", True)
-            ok = False
-            try:
-                ok = await provider.delete_server(sid)
-            except RuntimeError as _e:
-                _em = str(_e).lower()
-                if any(w in _em for w in ("not found", "does not exist", "no vps", "invalid vpsid", "no such")):
-                    ok = True  # VPS already gone from provider — clean up DB record
-                elif force:
-                    logger.warning("delete server %s: provider error, force-cleaning DB: %s", server.id, _e)
-                    ok = True  # node unreachable / other error — force clean per requirement
-                else:
-                    raise
-            if not ok:
-                # Provider returned false without raising — verify VPS actually still exists.
-                # If get_server also fails, the VPS is already gone → safe to clean up DB.
-                try:
-                    await provider.get_server(sid)
-                    # VPS still exists → genuine delete failure
-                    if force:
-                        logger.warning("delete server %s: still exists but force-cleaning DB", server.id)
-                        ok = True
-                except RuntimeError:
-                    ok = True  # VPS not found by provider either → force clean DB
-            if ok:
-                server.status = ServerStatus.DELETED
                 await self.session.flush()
             return ok
         if action == "change_ip":

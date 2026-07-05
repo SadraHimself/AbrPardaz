@@ -41,6 +41,32 @@ def valid_national_code(code: str) -> bool:
     return check == r if r < 2 else check == 11 - r
 
 
+def normalize_card(raw: str) -> str | None:
+    """Return a 16-digit bank card (Luhn-valid), or None if invalid."""
+    digits = re.sub(r"\D", "", raw or "")
+    if len(digits) != 16:
+        return None
+    # Luhn checksum (Iranian bank cards are Luhn-valid)
+    total = 0
+    for i, ch in enumerate(reversed(digits)):
+        d = int(ch)
+        if i % 2 == 1:
+            d *= 2
+            if d > 9:
+                d -= 9
+        total += d
+    return digits if total % 10 == 0 else None
+
+
+def valid_birth_date(bd: str) -> bool:
+    """Jalali birth date in YYYY/MM/DD form (e.g. 1377/07/19)."""
+    m = re.fullmatch(r"(\d{4})/(\d{2})/(\d{2})", bd or "")
+    if not m:
+        return False
+    y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    return 1200 <= y <= 1450 and 1 <= mo <= 12 and 1 <= d <= 31
+
+
 class ShahkarService:
 
     async def verify(self, phone_number: str, national_code: str) -> bool:
@@ -63,6 +89,36 @@ class ShahkarService:
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.post(url, json=payload, headers=headers)
             # 400 = invalid input, 4xx/5xx service errors → treat as "not matched"
+            if resp.status_code != 200:
+                return False
+            data = resp.json()
+
+        if data.get("result") != 1:
+            return False
+        body = data.get("response_body") or {}
+        return bool((body.get("data") or {}).get("matched"))
+
+    async def verify_card(self, national_code: str, card_number: str, birth_date: str) -> bool:
+        """True if (card_number, national_code, birth_date) all belong to one person.
+
+        Uses Zohal check_card_with_national_code. Raises RuntimeError when unset.
+        """
+        if not settings.ZOHAL_TOKEN:
+            raise RuntimeError("ZOHAL_TOKEN is not configured")
+
+        url = f"{settings.ZOHAL_BASE_URL}/services/inquiry/check_card_with_national_code"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {settings.ZOHAL_TOKEN}",
+        }
+        payload = {
+            "national_code": national_code,
+            "card_number": card_number,
+            "birth_date": birth_date,
+        }
+
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.post(url, json=payload, headers=headers)
             if resp.status_code != 200:
                 return False
             data = resp.json()

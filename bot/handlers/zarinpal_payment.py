@@ -77,9 +77,10 @@ async def cb_zp_amount(cb: CallbackQuery, user: User, session: AsyncSession):
             amount_toman=amount,
             callback_url=cb_url,
             description=f"شارژ کیف پول — کاربر {user.telegram_id}",
-            mobile=user.phone_number or None,   # Ayan: match card owner ↔ this mobile's national code
+            mobile=user.phone_number or None,
             email=user.email or None,
             auto_verify=False,                   # we call verify ourselves in the callback
+            card_pan=(user.extra_data or {}).get("card_pan"),  # lock to the verified card
         )
     except ZarinpalError as exc:
         await cb.message.edit_text(

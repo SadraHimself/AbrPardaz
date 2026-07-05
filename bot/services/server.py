@@ -1,6 +1,7 @@
 """High-level server management service (provider-agnostic)."""
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -12,6 +13,8 @@ from bot.database.models import (
     SuspendReason, User,
 )
 from bot.providers import CreateServerParams, get_provider
+
+logger = logging.getLogger(__name__)
 
 
 class ServerService:
@@ -188,12 +191,19 @@ class ServerService:
                 await self.session.flush()
             return ok
         if action == "delete":
+            # force=True (default): a down/unreachable node must NOT block the user
+            # from removing their VM — clean the DB record even if the API call fails.
+            force = kwargs.get("force", True)
+            ok = False
             try:
                 ok = await provider.delete_server(sid)
             except RuntimeError as _e:
                 _em = str(_e).lower()
                 if any(w in _em for w in ("not found", "does not exist", "no vps", "invalid vpsid", "no such")):
                     ok = True  # VPS already gone from provider — clean up DB record
+                elif force:
+                    logger.warning("delete server %s: provider error, force-cleaning DB: %s", server.id, _e)
+                    ok = True  # node unreachable / other error — force clean per requirement
                 else:
                     raise
             if not ok:
@@ -201,7 +211,10 @@ class ServerService:
                 # If get_server also fails, the VPS is already gone → safe to clean up DB.
                 try:
                     await provider.get_server(sid)
-                    # VPS still exists → genuine delete failure, keep ok=False
+                    # VPS still exists → genuine delete failure
+                    if force:
+                        logger.warning("delete server %s: still exists but force-cleaning DB", server.id)
+                        ok = True
                 except RuntimeError:
                     ok = True  # VPS not found by provider either → force clean DB
             if ok:

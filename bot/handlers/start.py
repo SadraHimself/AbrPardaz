@@ -265,10 +265,13 @@ async def _render_profile(target_msg, user: User, session: AsyncSession):
     name = f"{user.first_name or ''} {user.last_name or ''}".strip() or "—"
     phone = user.phone_number or "ثبت نشده"
     kyc = "✅ تأیید شده" if user.is_kyc_verified else "❌ تأیید نشده"
+    _card = (user.extra_data or {}).get("card_pan")
+    card_line = f"کارت بانکی: <code>**** **** **** {_card[-4:]}</code>\n" if _card else ""
     text = (
         f'<tg-emoji emoji-id="6030393645637570247">👤</tg-emoji> <b>{name}</b>\n\n'
         f"آیدی عددی: <code>{user.telegram_id}</code>\n"
         f"شماره تلفن: <code>{phone}</code>\n"
+        f"{card_line}"
         f"احراز هویت: {kyc}\n\n"
         f'<tg-emoji emoji-id="5348263477943222701">📑</tg-emoji> سرور‌های فعال: <b>{active_count}</b>\n'
         f'<tg-emoji emoji-id="5258477770735885832">📄</tg-emoji> لیمیت سرور ساعتی: <b>{hourly_limit}</b>\n\n'

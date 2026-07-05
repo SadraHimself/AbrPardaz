@@ -9,7 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.database.models import User
 from bot.keyboards.main import back_kb
-from bot.services.shahkar import ShahkarService, normalize_ir_mobile, valid_national_code
+from bot.services.shahkar import (
+    ShahkarService, normalize_card, normalize_ir_mobile, valid_birth_date, valid_national_code,
+)
 
 router = Router(name="auth")
 
@@ -26,6 +28,8 @@ def _verify_back_kb() -> InlineKeyboardMarkup:
 class VerifyStates(StatesGroup):
     full_name = State()
     national_code = State()
+    birth_date = State()
+    card_number = State()
     phone = State()
 
 
@@ -77,6 +81,36 @@ async def verify_national_code(message: Message, state: FSMContext):
         await message.answer("❌ کد ملی معتبر نیست. یک کد ملی صحیح ۱۰ رقمی وارد کنید:")
         return
     await state.update_data(national_code=code)
+    await state.set_state(VerifyStates.birth_date)
+    await message.answer(
+        "لطفاً 📅 <b>تاریخ تولد</b> خود را وارد کنید:\n"
+        "<i>به‌صورت شمسی — مثال: 1377/07/19</i>",
+        parse_mode="HTML", reply_markup=_verify_back_kb(),
+    )
+
+
+@router.message(VerifyStates.birth_date, F.text)
+async def verify_birth_date(message: Message, state: FSMContext):
+    bd = (message.text or "").strip().translate(_DIGIT_TRANS).replace("-", "/").replace(".", "/")
+    if not valid_birth_date(bd):
+        await message.answer("❌ تاریخ تولد معتبر نیست. به‌صورت شمسی وارد کنید — مثال: 1377/07/19")
+        return
+    await state.update_data(birth_date=bd)
+    await state.set_state(VerifyStates.card_number)
+    await message.answer(
+        "لطفاً 💳 <b>شماره کارت بانکی</b> خود را وارد کنید:\n"
+        "<i>۱۶ رقم — باید به نام خودتان باشد</i>",
+        parse_mode="HTML", reply_markup=_verify_back_kb(),
+    )
+
+
+@router.message(VerifyStates.card_number, F.text)
+async def verify_card_number(message: Message, state: FSMContext):
+    card = normalize_card((message.text or "").strip().translate(_DIGIT_TRANS))
+    if not card:
+        await message.answer("❌ شماره کارت معتبر نیست. یک شماره کارت ۱۶ رقمی صحیح وارد کنید:")
+        return
+    await state.update_data(card_number=card)
     await state.set_state(VerifyStates.phone)
     await message.answer(
         'لطفاً <tg-emoji emoji-id="5172893417717367746">📱</tg-emoji> '
@@ -99,49 +133,63 @@ async def verify_phone(message: Message, user: User, state: FSMContext, session:
     national_code = data.get("national_code", "")
     first_name = data.get("first_name", "")
     last_name = data.get("last_name", "")
+    birth_date = data.get("birth_date", "")
+    card_number = data.get("card_number", "")
     await state.clear()
 
-    wait = await message.answer("⏳ در حال بررسی اطلاعات در سامانه شاهکار...")
+    wait = await message.answer("⏳ در حال بررسی اطلاعات در سامانه شاهکار و بانک...")
 
+    svc = ShahkarService()
     try:
-        matched = await ShahkarService().verify(phone, national_code)
+        shahkar_ok = await svc.verify(phone, national_code)
+        # only spend the card-check request if the mobile↔national code matched
+        card_ok = await svc.verify_card(national_code, card_number, birth_date) if shahkar_ok else False
     except RuntimeError as e:
         if "not configured" in str(e):
             await wait.edit_text(
                 "⚠️ سرویس احراز هویت هنوز پیکربندی نشده است. با پشتیبانی تماس بگیرید."
             )
             return
-        matched = False
+        shahkar_ok = card_ok = False
     except Exception:
         await wait.edit_text(
             "⚠️ خطا در ارتباط با سامانه احراز هویت. لطفاً کمی بعد دوباره تلاش کنید."
         )
         return
 
-    if not matched:
+    if not shahkar_ok:
         await wait.edit_text(
-            "❌ اطلاعات وارد شده مطابقت ندارد.\n"
-            "مطمئن شوید شماره موبایل به نام همین کد ملی ثبت شده باشد، "
-            "سپس دوباره از دکمه «احراز هویت» اقدام کنید."
+            "❌ شماره موبایل با کد ملی مطابقت ندارد.\n"
+            "مطمئن شوید شماره به نام همین کد ملی ثبت شده باشد و دوباره اقدام کنید."
+        )
+        return
+    if not card_ok:
+        await wait.edit_text(
+            "❌ شماره کارت با کد ملی/تاریخ تولد مطابقت ندارد.\n"
+            "کارت بانکی باید به نام خودتان باشد. دوباره از «احراز هویت» اقدام کنید."
         )
         return
 
-    # Store the verified legal identity WITHOUT overwriting the Telegram display
-    # name (first_name/last_name) used in greetings.
+    # Store the verified identity. Keep the FULL card (needed for the Zarinpal
+    # card_pan lock) but never expose it — the profile shows only the last 4 digits.
     user.national_id = national_code
     user.phone_number = phone
     user.is_kyc_verified = True
     user.is_phone_verified = True
     extra = dict(user.extra_data or {})
     extra["verified_name"] = f"{first_name} {last_name}".strip()
+    extra["card_pan"] = card_number
+    extra["birth_date"] = birth_date
     user.extra_data = extra
     await session.flush()
 
+    masked = "**** **** **** " + card_number[-4:]
     await wait.edit_text(
         '<tg-emoji emoji-id="5206607081334906820">✔️</tg-emoji> '
         "<b>احراز هویت با موفقیت انجام شد!</b>\n\n"
         f"نام: {first_name} {last_name}\n"
         f"کد ملی: <code>{national_code}</code>\n"
-        f"شماره: <code>{phone}</code>",
+        f"شماره: <code>{phone}</code>\n"
+        f"کارت: <code>{masked}</code>",
         parse_mode="HTML",
     )

@@ -696,14 +696,43 @@ class VirtualizorProvider(BaseProvider):
             raise RuntimeError("هیچ آی‌پی آزادی در pool مجاز این پلن یافت نشد")
 
         new_ip = _random.choice(ip_values)
-        payload: dict = {"editvps": 1}
-        for i, ip in enumerate(current_ips + [new_ip]):
+        all_ips = current_ips + [new_ip]
+        # num_ips (سقف تعداد IPv4 این VPS) باید همراه لیست بالا برود؛ وگرنه ویرچولایزور
+        # با سقف قبلی (مثلاً 1) فقط یک IP نگه می‌دارد و عملاً IP را «تعویض» می‌کند.
+        payload: dict = {"editvps": 1, "num_ips": len(all_ips)}
+        for i, ip in enumerate(all_ips):
             payload[f"ips[{i}]"] = ip
         resp = await self._request("managevps", payload, query={"vpsid": server_id})
         done_val = resp.get("done")
         ok = bool(done_val) if not isinstance(done_val, dict) else bool(done_val.get("done"))
         if not ok:
             raise RuntimeError(f"Virtualizor add-IP failed — response keys: {list(resp.keys())}")
+
+        # تأیید نتیجه: اگر IP قبلی حفظ نشده باشد یعنی افزودن واقعی انجام نشده
+        try:
+            check = await self._request("managevps", {}, query={"vpsid": server_id})
+            check_raw = check.get("ips") or {}
+            check_entries = list(check_raw.values()) if isinstance(check_raw, dict) else (check_raw or [])
+            assigned = {e.get("ip") for e in check_entries
+                        if isinstance(e, dict) and str(e.get("vpsid", "0")) == str(server_id)}
+            missing = [ip for ip in current_ips if ip not in assigned]
+            if missing:
+                # بازگرداندن حالت قبلی (فقط IPهای قبلی) و اعلام خطا
+                revert: dict = {"editvps": 1, "num_ips": len(current_ips)}
+                for i, ip in enumerate(current_ips):
+                    revert[f"ips[{i}]"] = ip
+                try:
+                    await self._request("managevps", revert, query={"vpsid": server_id})
+                except Exception:
+                    pass
+                raise RuntimeError(
+                    "پنل به‌جای افزودن، IP را جایگزین کرد (سقف IP پلن اجازه افزودن نمی‌دهد)"
+                )
+        except RuntimeError:
+            raise
+        except Exception:
+            pass  # خطای بررسی — نتیجه اصلی done بوده، ادامه می‌دهیم
+
         return new_ip
 
     async def add_traffic(self, server_id: str, gb: int) -> bool:

@@ -57,12 +57,20 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
             _btn("ریبوت", f"srv_action:{sid}:restart_confirm", "primary", "5346320297299560938"),
             _btn("ریبیلد", f"srv_action:{sid}:rebuild_menu", "primary", "5346269127059196142"),
         ])
-        rows.append([
-            _btn("تغییر IP", f"srv_changeip:{sid}", icon="6030867032637967807"),
-            _btn("تغییر رمز", f"srv_chpass:{sid}", icon="4904500559203009298"),
-        ])
         if is_hourly:
+            # تغییر/افزودن IP فقط برای سیکل ماهانه است
+            rows.append([_btn("تغییر رمز", f"srv_chpass:{sid}", icon="4904500559203009298")])
+            rows.append([_btn("آمار مصرف", f"srv_usage:{sid}", icon="5936143551854285132")])
             rows.append([_btn("حذف سرور", f"srv_action:{sid}:delete_confirm", "danger", "5258130763148172425")])
+        else:
+            rows.append([
+                _btn("تغییر IP", f"srv_changeip:{sid}", icon="6030867032637967807"),
+                _btn("تغییر رمز", f"srv_chpass:{sid}", icon="4904500559203009298"),
+            ])
+            rows.append([
+                _btn("IP اضافه", f"srv_addip:{sid}", icon="5346024644635804737"),
+                _btn("آمار مصرف", f"srv_usage:{sid}", icon="5936143551854285132"),
+            ])
 
     elif server.status == ServerStatus.SUSPENDED:
         rows.append([

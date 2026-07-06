@@ -660,6 +660,52 @@ class VirtualizorProvider(BaseProvider):
             raise RuntimeError(f"Virtualizor IP change failed — response keys: {list(resp.keys())}")
         return new_ip
 
+    async def add_extra_ip(self, server_id: str) -> str:
+        """Attach ONE additional free IP to the VPS (keeps all current IPs).
+
+        Same pool-scoped sourcing as change_ip — candidates come from the VPS's
+        own Manage page `ips` list; the difference is that the ips[] array we
+        submit contains the existing IPs PLUS the new one instead of replacing."""
+        import random as _random
+
+        data = await self._request("managevps", {}, query={"vpsid": server_id})
+        ips_raw = data.get("ips") or {}
+        entries = list(ips_raw.values()) if isinstance(ips_raw, dict) else (ips_raw or [])
+        entries = [e for e in entries if isinstance(e, dict) and e.get("ip")]
+
+        def _pool(e: dict) -> str:
+            return str(e.get("ippid") or e.get("ippoolid") or e.get("ipp_id") or "")
+
+        current_entries = [e for e in entries if str(e.get("vpsid", "0")) == str(server_id)]
+        current_ips = [e["ip"] for e in current_entries]
+        cur_pool = _pool(current_entries[0]) if current_entries else ""
+        cur_ip = current_ips[0] if current_ips else None
+        cur_subnet = (
+            cur_ip.rsplit(".", 1)[0] if cur_ip and str(cur_ip).count(".") == 3 else None
+        )
+
+        free = [e for e in entries if str(e.get("vpsid", "0")) in ("0", "")]
+        candidates = [e for e in free if cur_pool and _pool(e) == cur_pool]
+        if not candidates and cur_subnet:
+            candidates = [e for e in free if str(e.get("ip", "")).rsplit(".", 1)[0] == cur_subnet]
+        if not candidates:
+            candidates = free
+
+        ip_values = [e.get("ip") for e in candidates if e.get("ip")]
+        if not ip_values:
+            raise RuntimeError("هیچ آی‌پی آزادی در pool مجاز این پلن یافت نشد")
+
+        new_ip = _random.choice(ip_values)
+        payload: dict = {"editvps": 1}
+        for i, ip in enumerate(current_ips + [new_ip]):
+            payload[f"ips[{i}]"] = ip
+        resp = await self._request("managevps", payload, query={"vpsid": server_id})
+        done_val = resp.get("done")
+        ok = bool(done_val) if not isinstance(done_val, dict) else bool(done_val.get("done"))
+        if not ok:
+            raise RuntimeError(f"Virtualizor add-IP failed — response keys: {list(resp.keys())}")
+        return new_ip
+
     async def add_traffic(self, server_id: str, gb: int) -> bool:
         # vpsid in URL query; editvps=1 submit trigger + bandwidth in POST body
         data = await self._request("managevps", {"editvps": 1, "bandwidth": gb}, query={"vpsid": server_id})

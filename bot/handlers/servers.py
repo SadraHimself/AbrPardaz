@@ -126,9 +126,13 @@ async def _render_server_detail(cb: CallbackQuery, user: User, session: AsyncSes
     price = server.price_hourly if server.billing_type == BillingType.HOURLY else server.price_monthly
     price_unit = "تومان/ساعت" if server.billing_type == BillingType.HOURLY else "تومان/ماه"
 
+    _extra_ips = (server.extra_data or {}).get("extra_ips") or []
+    extra_ip_line = "".join(f"آیپی اضافه: <code>{ip}</code>\n" for ip in _extra_ips)
+
     await cb.message.edit_text(
         f'<tg-emoji emoji-id="5348332751470739727">📃</tg-emoji> <b>نام سرور:</b> {server.name}\n\n'
         f"آیپی: <code>{server.ip_address or 'در حال تخصیص'}</code>\n"
+        f"{extra_ip_line}"
         f"موقعیت: {server.location or 'نامشخص'}\n"
         f"وضعیت: {status_label}\n\n"
         f"• رم: {server.ram} MB | پردازنده: {server.cpu} | دیسک: {server.disk} GB"
@@ -743,12 +747,12 @@ async def cb_select_os(cb: CallbackQuery, user: User, state: FSMContext, session
 async def _ask_discount(cb: CallbackQuery, state: FSMContext):
     await state.set_state(BuyServerStates.entering_discount)
     await cb.message.edit_text(
-        "🏷 <b>کد تخفیف</b>\n\n"
+        '‏<tg-emoji emoji-id="5229064374403998351">🏷</tg-emoji> <b>کد تخفیف</b>\n\n'
         "اگر کد تخفیف دارید وارد کنید.\n"
-        "در غیر این صورت /skip بزنید یا دکمه زیر را بزنید:",
+        "در غیر این صورت از دکمه زیر استفاده کنید:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⏭ بدون کد تخفیف", callback_data="buydisc:skip")],
+            [InlineKeyboardButton(text="بدون کد تخفیف", callback_data="buydisc:skip", **{"icon_custom_emoji_id": "5346172687863529237"})],
             [InlineKeyboardButton(text="انصراف", callback_data="cancel", **{"style": "danger", "icon_custom_emoji_id": "5240241223632954241"})],
         ]),
     )
@@ -977,6 +981,9 @@ async def cb_change_ip_confirm(cb: CallbackQuery, user: User, session: AsyncSess
     if server.status != ServerStatus.ACTIVE:
         await cb.answer("سرور باید فعال باشد.", show_alert=True)
         return
+    if server.billing_type != BillingType.MONTHLY:
+        await cb.answer("تغییر IP فقط برای سرورهای ماهانه فعال است.", show_alert=True)
+        return
 
     account = await session.get(ProviderAccount, server.provider_account_id) if server.provider_account_id else None
     fee = float((account.extra_config or {}).get("change_ip_fee", 0) or 0) if account else 0
@@ -1064,6 +1071,165 @@ async def cb_change_ip_do(cb: CallbackQuery, user: User, session: AsyncSession):
             parse_mode="HTML",
             reply_markup=back_kb(f"server:{server_id}"),
         )
+
+
+# ── Extra IP (monthly servers only) ──────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("srv_addip:"))
+async def cb_add_ip_confirm(cb: CallbackQuery, user: User, session: AsyncSession):
+    server_id = int(cb.data.split(":")[1])
+    server = await session.get(Server, server_id)
+    if not server or server.user_id != user.id:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    if server.status != ServerStatus.ACTIVE:
+        await cb.answer("سرور باید فعال باشد.", show_alert=True)
+        return
+    if server.billing_type != BillingType.MONTHLY:
+        await cb.answer("IP اضافه فقط برای سرورهای ماهانه فعال است.", show_alert=True)
+        return
+
+    account = await session.get(ProviderAccount, server.provider_account_id) if server.provider_account_id else None
+    fee = float((account.extra_config or {}).get("extra_ip_fee", 0) or 0) if account else 0
+
+    if fee > 0 and user.balance < fee:
+        await cb.answer(f"موجودی کافی نیست. هزینه IP اضافه: {fee:,.0f} تومان — موجودی: {user.balance:,.0f} تومان", show_alert=True)
+        return
+
+    fee_text = f"{fee:,.0f} تومان" if fee > 0 else "رایگان"
+    await cb.message.edit_text(
+        f'‏<tg-emoji emoji-id="5346024644635804737">🌐</tg-emoji> <b>تأیید IP اضافه</b>\n\n'
+        f"یک آیپی جدید علاوه بر آیپی فعلی به سرور اختصاص می‌یابد.\n"
+        f"آیپی فعلی = <code>{server.ip_address or 'نامشخص'}</code>\n"
+        f"هزینه: <b>{fee_text}</b>\n\n"
+        "سرور پس از افزودن IP ریبوت خواهد شد.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="تأیید IP اضافه", callback_data=f"srv_addip_do:{server_id}", **{"style": "success", "icon_custom_emoji_id": "5206607081334906820"}),
+            InlineKeyboardButton(text="انصراف", callback_data=f"server:{server_id}", **{"style": "danger", "icon_custom_emoji_id": "5240241223632954241"}),
+        ]]),
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("srv_addip_do:"))
+async def cb_add_ip_do(cb: CallbackQuery, user: User, session: AsyncSession):
+    server_id = int(cb.data.split(":")[1])
+    server = await session.get(Server, server_id)
+    if not server or server.user_id != user.id:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    if server.status != ServerStatus.ACTIVE or server.billing_type != BillingType.MONTHLY:
+        await cb.answer("این عملیات مجاز نیست.", show_alert=True)
+        return
+
+    account = await session.get(ProviderAccount, server.provider_account_id) if server.provider_account_id else None
+    if not account:
+        await cb.answer("اطلاعات پروایدر یافت نشد.", show_alert=True)
+        return
+
+    fee = float((account.extra_config or {}).get("extra_ip_fee", 0) or 0)
+
+    billing = BillingService(session)
+    if fee > 0:
+        ok = await billing.debit(user.id, fee, server_id=server_id, description=f"IP اضافه — {server.name}")
+        if not ok:
+            await cb.answer("موجودی کافی نیست.", show_alert=True)
+            return
+
+    await cb.answer("⏳ در حال افزودن IP...")
+    try:
+        await cb.message.delete()
+    except Exception:
+        pass
+    wait = await cb.message.answer('‏<tg-emoji emoji-id="5386367538735104399">⌛️</tg-emoji> در حال افزودن IP...', parse_mode="HTML")
+    try:
+        prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
+        new_ip = await prov.add_extra_ip(server.provider_server_id)
+
+        # آیپی اضافه در extra_data ذخیره می‌شود (آیپی اصلی دست‌نخورده می‌ماند)
+        extra = dict(server.extra_data or {})
+        extra_ips = list(extra.get("extra_ips") or [])
+        extra_ips.append(new_ip)
+        extra["extra_ips"] = extra_ips
+        server.extra_data = extra
+        await session.flush()
+
+        try:
+            await prov.restart_server(server.provider_server_id)
+        except Exception:
+            pass
+
+        fee_text = f"\nهزینه کسر شد: {fee:,.0f} تومان" if fee > 0 else ""
+        await wait.edit_text(
+            f'<tg-emoji emoji-id="5206607081334906820">✔️</tg-emoji> <b>آیپی اضافه اختصاص یافت</b>\n\n'
+            f"• آیپی اصلی: <code>{server.ip_address or 'نامشخص'}</code>\n"
+            f"• آیپی جدید: <code>{new_ip}</code>{fee_text}",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="بازگشت", callback_data=f"server:{server_id}", **{"icon_custom_emoji_id": "5258236805890710909"}),
+            ]]),
+        )
+        await LogService(cb.bot, session).log_server_action(user, server, "add_ip")
+    except Exception as e:
+        if fee > 0:
+            await billing.credit(user.id, fee, description=f"برگشت وجه IP اضافه — {server.name}")
+        await wait.edit_text(
+            f'‏<tg-emoji emoji-id="4956612582816351459">❌</tg-emoji> <b>افزودن IP ناموفق بود:</b> {e}\n\n'
+            "وجه برگشت داده شد.",
+            parse_mode="HTML",
+            reply_markup=back_kb(f"server:{server_id}"),
+        )
+
+
+# ── Usage stats (traffic bar) ────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("srv_usage:"))
+async def cb_server_usage(cb: CallbackQuery, user: User, session: AsyncSession):
+    server_id = int(cb.data.split(":")[1])
+    server = await session.get(Server, server_id)
+    if not server or server.user_id != user.id:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+
+    await cb.answer("⏳ در حال خواندن مصرف...")
+
+    # مصرف زنده از ویرچولایزور (fallback: مقدار ذخیره‌شده در DB)
+    used = float(server.traffic_used_gb or 0)
+    account = await session.get(ProviderAccount, server.provider_account_id) if server.provider_account_id else None
+    if account and server.provider_server_id:
+        try:
+            prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
+            used = await prov.get_traffic(server.provider_server_id)
+            server.traffic_used_gb = used
+            await session.flush()
+        except Exception:
+            pass
+
+    limit = float(server.traffic_limit_gb or 0)
+    pct = (used / limit * 100) if limit > 0 else 0
+    pct = max(0.0, min(pct, 100.0))
+    filled = int(round(pct / 10))
+    bar = "█" * filled + "░" * (10 - filled)
+
+    def _g(v: float) -> str:
+        return f"{v:g}" if v < 1000 else f"{v:,.0f}"
+
+    text = (
+        f'‏<tg-emoji emoji-id="5936143551854285132">📊</tg-emoji> <b>آمار مصرف — {server.name}</b>\n\n'
+        f"‏ترافیک {bar} {_g(used)} / {_g(limit)} GB ({pct:.0f}%)"
+    )
+    try:
+        await cb.message.edit_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="بروزرسانی", callback_data=f"srv_usage:{server_id}")],
+                [InlineKeyboardButton(text="بازگشت", callback_data=f"server:{server_id}", **{"icon_custom_emoji_id": "5258236805890710909"})],
+            ]),
+        )
+    except Exception:
+        pass  # message not modified (مقدار تغییری نکرده)
 
 
 # ── Mute hourly billing notification ─────────────────────────────────────────

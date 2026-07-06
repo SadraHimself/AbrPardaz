@@ -12,7 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.database.models import (
-    BillingType, DiscountCode, ProviderAccount, ProviderType,
+    BillingType, DiscountCode, ProductGroup, ProviderAccount, ProviderType,
     Server, ServerPlan, ServerStatus, SubProduct, SubProductType, SuspendReason, User,
 )
 from bot.keyboards.main import back_kb, cancel_kb
@@ -388,15 +388,39 @@ async def cb_do_add_traffic(cb: CallbackQuery, user: User, session: AsyncSession
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def _show_buy_categories(target_msg, user: User, state: FSMContext, session: AsyncSession):
-    result = await session.execute(select(ServerPlan.category).distinct())
+    # فقط دسته‌هایی که حداقل یک محصول فعال (غیرمخفی) دارند
+    result = await session.execute(
+        select(ServerPlan.category).where(ServerPlan.is_active == True).distinct()
+    )
     categories = sorted({row[0] for row in result.all() if row[0]})
-    if not categories:
+
+    # متادیتای گروه: گروه‌های مخفی حذف، اموجی پریمیوم اضافه.
+    # برای هر دسته‌ی بدون ردیف گروه، یک گروه ساخته می‌شود تا دکمه‌ها ID-محور باشند
+    # (نام خام در callback_data محدودیت ۶۴ بایتی تلگرام را می‌شکست).
+    res = await session.execute(select(ProductGroup))
+    groups = {g.name: g for g in res.scalars().all()}
+    for cat in categories:
+        if cat not in groups:
+            g = ProductGroup(name=cat)
+            session.add(g)
+            groups[cat] = g
+    await session.flush()
+
+    entries = []
+    for cat in categories:
+        g = groups[cat]
+        if g.is_hidden:
+            continue
+        entries.append((g.id, cat, g.emoji_id))
+
+    if not entries:
         await target_msg.edit_text("در حال حاضر هیچ محصولی موجود نیست.", reply_markup=back_kb())
         return
     await state.set_state(BuyServerStates.selecting_category)
     builder = InlineKeyboardBuilder()
-    for cat in categories:
-        builder.button(text=cat, callback_data=f"buycat:{cat}")
+    for gid, cat, emoji_id in entries:
+        kwargs = {"icon_custom_emoji_id": emoji_id} if emoji_id else {}
+        builder.button(text=cat, callback_data=f"buygrp:{gid}", **kwargs)
     builder.button(text="بازگشت به منو", callback_data="cancel", **{"icon_custom_emoji_id": "5258236805890710909"})
     builder.adjust(1)
     await target_msg.edit_text(
@@ -419,9 +443,28 @@ async def msg_buy_server(message: Message, user: User, state: FSMContext, sessio
     await _show_buy_categories(loading, user, state, session)
 
 
+@router.callback_query(BuyServerStates.selecting_category, F.data.startswith("buygrp:"))
+async def cb_select_group(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
+    """ID-based group selection — resolves the group name then reuses cb_select_category."""
+    group = await session.get(ProductGroup, int(cb.data.split(":")[1]))
+    if not group:
+        await cb.answer("گروه یافت نشد.", show_alert=True)
+        return
+    cb.data = f"buycat:{group.name}"
+    await cb_select_category(cb, user, state, session)
+
+
 @router.callback_query(BuyServerStates.selecting_category, F.data.startswith("buycat:"))
 async def cb_select_category(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
     category = cb.data[len("buycat:"):]
+
+    # گروه مخفی‌شده قابل خرید نیست (حتی از روی کیبورد قدیمی)
+    _grp = (await session.execute(
+        select(ProductGroup).where(ProductGroup.name == category)
+    )).scalar_one_or_none()
+    if _grp and _grp.is_hidden:
+        await cb.answer("این گروه در حال حاضر در دسترس نیست.", show_alert=True)
+        return
 
     # KYC check for iranian servers
     if "ایران" in category and not user.is_kyc_verified:

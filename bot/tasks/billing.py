@@ -35,14 +35,21 @@ def run_hourly_billing(self):
 
             users_empty_balance: set[int] = set()
 
+            from bot.services.currency import obj_currency, to_toman
+
             for server in servers:
                 success = await billing.charge_hourly(server)
                 if success:
                     user_obj = await session.get(User, server.user_id)
+                    # مبلغ نوتیف همیشه ریالی است (پلن ارزی با نرخ روز تبدیل می‌شود)
+                    cur = obj_currency(server)
+                    amount_toman = float(server.price_hourly or 0)
+                    if cur != "irt":
+                        amount_toman = await to_toman(session, amount_toman, cur)
                     from bot.tasks.server import notify_hourly_billing
                     notify_hourly_billing.delay(
                         server.user_id, server.id,
-                        float(server.price_hourly or 0),
+                        amount_toman,
                         float(user_obj.balance if user_obj else 0),
                     )
                 else:
@@ -282,6 +289,13 @@ def cleanup_old_transactions():
 
         cutoff = datetime.now(timezone.utc) - timedelta(hours=72)
         async with AsyncSessionFactory() as session:
-            await session.execute(delete(Transaction).where(Transaction.created_at < cutoff))
+            result = await session.execute(
+                delete(Transaction).where(Transaction.created_at < cutoff)
+            )
+            await session.commit()  # بدون commit هیچ رکوردی حذف نمی‌شد (باگ قبلی)
+            import logging
+            logging.getLogger(__name__).info(
+                "cleanup_old_transactions: deleted %s old transactions", result.rowcount
+            )
 
     _run(_do())

@@ -511,11 +511,8 @@ async def _select_category(cb: CallbackQuery, user: User, state: FSMContext,
             traffic = f"{plan.bandwidth / 1000:g}ترابایت"
         else:
             traffic = f"{plan.bandwidth}گیگ"
-        if plan.price_monthly:
-            price = f"{plan.price_monthly:,.0f} تومان"
-        else:
-            price = f"{plan.price_hourly or 0:,.0f} تومان/ساعت"
-        label = f"{plan.cpu}هسته | {ram_gb}رم | {traffic} | {price}".translate(_FA_DIGITS)
+        specs = f"{plan.cpu}هسته | {ram_gb}رم | {traffic}".translate(_FA_DIGITS)
+        label = f"{specs} | {plan.display_name or plan.name}"
         builder.button(text=label, callback_data=f"buyplan:{plan.id}", **{"icon_custom_emoji_id": "5260726538302660868"})
     builder.button(text="بازگشت", callback_data="buy_server", **{"icon_custom_emoji_id": "5258236805890710909"})
     builder.adjust(1)

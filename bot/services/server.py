@@ -115,7 +115,9 @@ class ServerService:
             last_billed_at=datetime.now(timezone.utc),
             expires_at=(datetime.now(timezone.utc) + timedelta(days=30))
             if billing_type == BillingType.MONTHLY else None,
-            extra_data=info.extra_data,
+            # ارز قیمت پلن (irt/usd/eur) به سرور منتقل می‌شود تا بیلینگ با نرخ روز تبدیل کند
+            extra_data={**(info.extra_data or {}),
+                        "currency": (plan.extra_data or {}).get("currency", "irt")},
         )
         self.session.add(server)
         await self.session.flush()

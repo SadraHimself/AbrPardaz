@@ -22,6 +22,7 @@ from bot.keyboards.server import (
 )
 from bot.providers.virtualizor import VirtualizorProvider
 from bot.services.billing import BillingService
+from bot.services.currency import obj_currency, to_toman
 from bot.services.log_service import LogService
 from bot.services.notification import NotificationService
 from bot.services.server import ServerService
@@ -543,14 +544,25 @@ async def cb_select_plan(cb: CallbackQuery, state: FSMContext, session: AsyncSes
     has_hourly = bool(plan.price_hourly)
     has_monthly = bool(plan.price_monthly)
 
+    # کاربر همیشه قیمت «ریالی» می‌بیند — پلن ارزی با نرخ روز تبدیل می‌شود
+    _cur = obj_currency(plan)
+    hourly_t = plan.price_hourly or 0
+    monthly_t = plan.price_monthly or 0
+    if _cur != "irt":
+        hourly_t = await to_toman(session, hourly_t, _cur) if hourly_t else 0
+        monthly_t = await to_toman(session, monthly_t, _cur) if monthly_t else 0
+        if (plan.price_hourly and hourly_t <= 0) or (plan.price_monthly and monthly_t <= 0):
+            await cb.answer("نرخ ارز هنوز تنظیم نشده. کمی بعد دوباره تلاش کنید.", show_alert=True)
+            return
+
     if has_hourly and has_monthly:
         await state.set_state(BuyServerStates.selecting_billing)
         await cb.message.edit_text(
             f"نوع بیلینگ را انتخاب کنید:\nپلن: {plan.display_name or plan.name}",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [
-                    InlineKeyboardButton(text=f"ساعتی — {plan.price_hourly:,.0f} تومان", callback_data="buybilling:hourly", **{"icon_custom_emoji_id": "5798535677318533269"}),
-                    InlineKeyboardButton(text=f"ماهانه — {plan.price_monthly:,.0f} تومان", callback_data="buybilling:monthly", **{"icon_custom_emoji_id": "5778496382117613636"}),
+                    InlineKeyboardButton(text=f"ساعتی — {hourly_t:,.0f} تومان", callback_data="buybilling:hourly", **{"icon_custom_emoji_id": "5798535677318533269"}),
+                    InlineKeyboardButton(text=f"ماهانه — {monthly_t:,.0f} تومان", callback_data="buybilling:monthly", **{"icon_custom_emoji_id": "5778496382117613636"}),
                 ],
                 [InlineKeyboardButton(text="انصراف", callback_data="cancel", **{"icon_custom_emoji_id": "5240241223632954241", "style": "danger"})],
             ]),
@@ -820,6 +832,10 @@ async def _show_confirm(msg, state: FSMContext, session, from_message=False, use
 
     billing = data["billing"]
     base_price = plan.price_hourly if billing == "hourly" else plan.price_monthly
+    # تبدیل قیمت ارزی به ریال با نرخ روز (کاربر فقط قیمت ریالی می‌بیند)
+    _cur = obj_currency(plan)
+    if _cur != "irt" and base_price:
+        base_price = await to_toman(session, base_price, _cur)
     discount_pct = data.get("discount_percent", 0)
     final_price = base_price * (1 - discount_pct / 100) if discount_pct else base_price
     price_unit = "تومان/ساعت" if billing == "hourly" else "تومان/ماه"
@@ -867,6 +883,13 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
     billing_str = data["billing"]
     billing_type = BillingType.HOURLY if billing_str == "hourly" else BillingType.MONTHLY
     base_price = plan.price_hourly if billing_type == BillingType.HOURLY else plan.price_monthly
+    # کسر همیشه ریالی است — پلن ارزی با نرخ روز تبدیل می‌شود
+    _cur = obj_currency(plan)
+    if _cur != "irt" and base_price:
+        base_price = await to_toman(session, base_price, _cur)
+        if base_price <= 0:
+            await cb.answer("نرخ ارز هنوز تنظیم نشده. کمی بعد دوباره تلاش کنید.", show_alert=True)
+            return
     discount_pct = data.get("discount_percent", 0)
     final_price = base_price * (1 - discount_pct / 100) if discount_pct else base_price
 

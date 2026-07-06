@@ -32,6 +32,17 @@ from bot.providers import get_provider
 from bot.providers.virtualizor import VirtualizorProvider
 from bot.utils.loading import answer_loading, edit_loading
 from bot.services.billing import BillingService
+from bot.services.currency import CURRENCY_LABELS, fmt_price, obj_currency
+
+# کیبورد انتخاب واحد قیمت محصول
+def _currency_pick_kb():
+    from aiogram.types import InlineKeyboardButton as _Btn, InlineKeyboardMarkup as _Mk
+    return _Mk(inline_keyboard=[
+        [_Btn(text="ریالی (تومان)", callback_data="admin:plancur:irt")],
+        [_Btn(text="دلاری ($)", callback_data="admin:plancur:usd")],
+        [_Btn(text="یورویی (€)", callback_data="admin:plancur:eur")],
+        [_Btn(text="انصراف", callback_data="admin_panel")],
+    ])
 
 router = Router(name="admin")
 
@@ -69,6 +80,7 @@ class PlanFSM(StatesGroup):
     add_disk = State()
     add_bandwidth = State()
     add_billing = State()
+    add_currency = State()   # واحد قیمت: ریالی / دلاری / یورویی
     add_price_hourly = State()
     add_price_monthly = State()
     add_location = State()
@@ -790,11 +802,14 @@ async def _render_plan_detail(cb: CallbackQuery, session: AsyncSession, plan_id:
         await cb.answer("محصول یافت نشد.", show_alert=True)
         return
 
+    _cur = obj_currency(plan)
     billing_lines = []
     if plan.price_hourly:
-        billing_lines.append(f"{plan.price_hourly:,.0f} T/ساعت")
+        billing_lines.append(f"{fmt_price(plan.price_hourly, _cur)}/ساعت")
     if plan.price_monthly:
-        billing_lines.append(f"{plan.price_monthly:,.0f} T/ماه")
+        billing_lines.append(f"{fmt_price(plan.price_monthly, _cur)}/ماه")
+    if _cur != "irt":
+        billing_lines.append(f"واحد قیمت: {CURRENCY_LABELS[_cur]} (تبدیل با نرخ روز)")
 
     prov_name = "—"
     if plan.provider_account_id:
@@ -1127,13 +1142,33 @@ async def plan_add_bandwidth(message: Message, state: FSMContext):
 async def plan_add_billing(cb: CallbackQuery, state: FSMContext):
     billing = cb.data.split(":")[2]
     await state.update_data(billing=billing)
-    if billing in ("hourly", "both"):
+    # قبل از قیمت، واحد قیمت پرسیده می‌شود (ریالی/دلاری/یورویی)
+    await state.set_state(PlanFSM.add_currency)
+    await cb.message.edit_text(
+        "واحد قیمت این محصول چه باشد؟\n"
+        "<i>قیمت‌های ارزی هنگام کسر، با نرخ روز به ریال تبدیل می‌شوند.</i>",
+        parse_mode="HTML",
+        reply_markup=_currency_pick_kb(),
+    )
+    await cb.answer()
+
+
+@router.callback_query(PlanFSM.add_currency, F.data.startswith("admin:plancur:"))
+async def plan_add_currency(cb: CallbackQuery, state: FSMContext):
+    cur = cb.data.split(":")[2]
+    if cur not in CURRENCY_LABELS:
+        await cb.answer("واحد نامعتبر.", show_alert=True)
+        return
+    await state.update_data(plan_currency=cur)
+    unit = CURRENCY_LABELS[cur]
+    data = await state.get_data()
+    if data.get("billing") in ("hourly", "both"):
         await state.set_state(PlanFSM.add_price_hourly)
-        await cb.message.edit_text("قیمت ساعتی (تومان):", reply_markup=cancel_admin_kb())
+        await cb.message.edit_text(f"قیمت ساعتی ({unit}):", reply_markup=cancel_admin_kb())
     else:
         await state.update_data(price_hourly=None)
         await state.set_state(PlanFSM.add_price_monthly)
-        await cb.message.edit_text("قیمت ماهانه (تومان):", reply_markup=cancel_admin_kb())
+        await cb.message.edit_text(f"قیمت ماهانه ({unit}):", reply_markup=cancel_admin_kb())
     await cb.answer()
 
 
@@ -1141,9 +1176,10 @@ async def plan_add_billing(cb: CallbackQuery, state: FSMContext):
 async def plan_add_price_hourly(message: Message, state: FSMContext):
     await state.update_data(price_hourly=float(message.text))
     data = await state.get_data()
+    unit = CURRENCY_LABELS.get(data.get("plan_currency", "irt"), "تومان")
     if data.get("billing") == "both":
         await state.set_state(PlanFSM.add_price_monthly)
-        await message.answer("قیمت ماهانه (تومان):", reply_markup=cancel_admin_kb())
+        await message.answer(f"قیمت ماهانه ({unit}):", reply_markup=cancel_admin_kb())
     else:
         await state.update_data(price_monthly=None)
         await state.set_state(PlanFSM.add_location)
@@ -1188,15 +1224,17 @@ async def _save_new_plan(msg, state: FSMContext, session: AsyncSession, location
         price_monthly=data.get("price_monthly"),
         location=location,
         is_active=True,
+        extra_data={"currency": data.get("plan_currency", "irt")},
     )
     session.add(plan)
     await session.flush()
 
+    _cur = data.get("plan_currency", "irt")
     billing_lines = []
     if plan.price_hourly:
-        billing_lines.append(f"{plan.price_hourly:,.0f} T/ساعت")
+        billing_lines.append(f"{fmt_price(plan.price_hourly, _cur)}/ساعت")
     if plan.price_monthly:
-        billing_lines.append(f"{plan.price_monthly:,.0f} T/ماه")
+        billing_lines.append(f"{fmt_price(plan.price_monthly, _cur)}/ماه")
 
     autofetch_note = "\nمشخصات از Virtualizor خوانده شد" if data.get("autofetch") else ""
     await msg.answer(
@@ -1242,9 +1280,11 @@ async def cb_plan_edit_start(cb: CallbackQuery, state: FSMContext, session: Asyn
         await cb.answer()
         return
 
+    _plan = await session.get(ServerPlan, plan_id)
+    _unit = CURRENCY_LABELS.get(obj_currency(_plan) if _plan else "irt", "تومان")
     labels = {
-        "price_hourly": "قیمت ساعتی (تومان)",
-        "price_monthly": "قیمت ماهانه (تومان)",
+        "price_hourly": f"قیمت ساعتی ({_unit})",
+        "price_monthly": f"قیمت ماهانه ({_unit})",
         "location": "موقعیت",
         "display_name": "نام نمایشی",
     }

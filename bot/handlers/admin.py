@@ -10,20 +10,21 @@ from aiogram.filters import Filter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config import settings
 from bot.database.models import (
-    DiscountCode, ProviderAccount, ProviderType,
+    DiscountCode, ProductGroup, ProviderAccount, ProviderType,
     Server, ServerPlan, ServerStatus, SubProduct, SubProductType,
     Transaction, TransactionType, User,
 )
 from bot.keyboards.admin import (
     admin_menu_kb, back_to_admin_kb, billing_type_admin_kb,
     cancel_admin_kb, confirm_kb, discount_detail_kb,
-    discounts_list_kb, plan_detail_kb, plans_categories_kb,
-    plans_in_category_kb, provider_detail_kb, providers_list_kb,
+    discounts_list_kb, group_detail_kb, group_pick_kb, groups_list_kb,
+    plan_detail_kb, plans_groups_kb, plans_in_group_kb, plans_menu_kb,
+    provider_detail_kb, providers_list_kb,
     providers_select_kb, skip_or_cancel_kb,
     subprod_detail_kb, subprod_type_kb, subproducts_kb,
 )
@@ -55,7 +56,9 @@ class ProviderFSM(StatesGroup):
 
 
 class PlanFSM(StatesGroup):
-    add_category = State()
+    add_category = State()        # group selection (callback-based)
+    add_group_name = State()      # inline creation of a new group during plan add
+    add_group_emoji = State()
     add_name = State()
     add_display_name = State()
     add_provider = State()
@@ -70,6 +73,13 @@ class PlanFSM(StatesGroup):
     add_price_monthly = State()
     add_location = State()
     edit_value = State()
+
+
+class GroupFSM(StatesGroup):
+    add_name = State()
+    add_emoji = State()
+    edit_name = State()
+    edit_emoji = State()
 
 
 class DiscountFSM(StatesGroup):
@@ -478,32 +488,293 @@ async def cb_prov_del_do(cb: CallbackQuery, session: AsyncSession):
 #  PLAN / PRODUCT MANAGEMENT
 # ══════════════════════════════════════════════════════════════════════════════
 
+async def _adopt_groups(session: AsyncSession) -> list[ProductGroup]:
+    """Ensure every existing plan category has a ProductGroup row (adopts legacy
+    string categories), then return all groups sorted by name."""
+    res = await session.execute(select(ServerPlan.category).distinct())
+    cats = {row[0] for row in res.all() if row[0]}
+    res = await session.execute(select(ProductGroup))
+    groups = {g.name: g for g in res.scalars().all()}
+    created = False
+    for c in sorted(cats - set(groups)):
+        g = ProductGroup(name=c)
+        session.add(g)
+        groups[c] = g
+        created = True
+    if created:
+        await session.flush()
+    return sorted(groups.values(), key=lambda g: g.name)
+
+
 @router.callback_query(F.data == "admin:plans")
 async def cb_admin_plans(cb: CallbackQuery, session: AsyncSession):
-    result = await session.execute(select(ServerPlan.category).distinct())
-    categories = sorted({row[0] for row in result.all() if row[0]})
+    await cb.answer()
+    total = (await session.execute(select(func.count(ServerPlan.id)))).scalar() or 0
+    await cb.message.edit_text(
+        f"<b>محصولات</b>\n\n{total} محصول — یک بخش را انتخاب کنید:",
+        parse_mode="HTML",
+        reply_markup=plans_menu_kb(),
+    )
+
+
+@router.callback_query(F.data == "admin:plans_list")
+async def cb_admin_plans_list(cb: CallbackQuery, session: AsyncSession):
+    await cb.answer()
+    groups = await _adopt_groups(session)
+    entries = [(str(g.id), f"{'❌ ' if g.is_hidden else ''}{g.name}") for g in groups]
+    orphan_count = (await session.execute(
+        select(func.count(ServerPlan.id)).where(ServerPlan.category.is_(None))
+    )).scalar() or 0
+    if orphan_count:
+        entries.append(("none", f"بدون گروه ({orphan_count})"))
     text = (
-        f"<b>محصولات</b>\n\n{len(categories)} دسته‌بندی:"
-        if categories else
+        "<b>محصولات</b>\n\nگروه مورد نظر را انتخاب کنید:"
+        if entries else
         "<b>محصولات</b>\n\nهیچ محصولی اضافه نشده."
     )
-    await cb.message.edit_text(text, parse_mode="HTML", reply_markup=plans_categories_kb(categories))
+    await cb.message.edit_text(text, parse_mode="HTML", reply_markup=plans_groups_kb(entries))
+
+
+@router.callback_query(F.data.startswith("admin:plans_grp:"))
+async def cb_admin_plans_grp(cb: CallbackQuery, session: AsyncSession):
+    key = cb.data.split(":")[2]
+    if key == "none":
+        cond, title = ServerPlan.category.is_(None), "بدون گروه"
+    else:
+        group = await session.get(ProductGroup, int(key))
+        if not group:
+            await cb.answer("گروه یافت نشد.", show_alert=True)
+            return
+        cond, title = ServerPlan.category == group.name, group.name
     await cb.answer()
-
-
-@router.callback_query(F.data.startswith("admin:plans_cat:"))
-async def cb_admin_plans_cat(cb: CallbackQuery, session: AsyncSession):
-    category = cb.data[len("admin:plans_cat:"):]
-    result = await session.execute(
-        select(ServerPlan).where(ServerPlan.category == category).order_by(ServerPlan.name)
-    )
+    result = await session.execute(select(ServerPlan).where(cond).order_by(ServerPlan.name))
     plans = list(result.scalars().all())
     await cb.message.edit_text(
-        f"<b>{category}</b>\n\n{len(plans)} محصول:",
+        f"<b>{title}</b>\n\n{len(plans)} محصول:",
         parse_mode="HTML",
-        reply_markup=plans_in_category_kb(plans, category),
+        reply_markup=plans_in_group_kb(plans),
+    )
+
+
+# ─── Product groups (گروه محصولات) ────────────────────────────────────────────
+
+async def _render_group_detail(msg, session: AsyncSession, group: ProductGroup, edit: bool = True):
+    count = (await session.execute(
+        select(func.count(ServerPlan.id)).where(ServerPlan.category == group.name)
+    )).scalar() or 0
+    emoji_text = f"<code>{group.emoji_id}</code>" if group.emoji_id else "ندارد"
+    text = (
+        f"<b>{group.name}</b>\n\n"
+        f"اموجی: {emoji_text}\n"
+        f"وضعیت: {'❌ مخفی' if group.is_hidden else '✅ نمایان'}\n"
+        f"تعداد محصولات: {count}"
+    )
+    kb = group_detail_kb(group.id, group.is_hidden)
+    if edit:
+        await msg.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    else:
+        await msg.answer(text, parse_mode="HTML", reply_markup=kb)
+
+
+@router.callback_query(F.data == "admin:groups")
+async def cb_admin_groups(cb: CallbackQuery, session: AsyncSession):
+    await cb.answer()
+    groups = await _adopt_groups(session)
+    text = (
+        f"<b>گروه محصولات</b>\n\n{len(groups)} گروه:"
+        if groups else
+        "<b>گروه محصولات</b>\n\nهنوز گروهی ساخته نشده."
+    )
+    await cb.message.edit_text(text, parse_mode="HTML", reply_markup=groups_list_kb(groups))
+
+
+@router.callback_query(F.data.startswith("admin:group:"))
+async def cb_group_detail(cb: CallbackQuery, session: AsyncSession):
+    group = await session.get(ProductGroup, int(cb.data.split(":")[2]))
+    if not group:
+        await cb.answer("گروه یافت نشد.", show_alert=True)
+        return
+    await cb.answer()
+    await _render_group_detail(cb.message, session, group)
+
+
+@router.callback_query(F.data == "admin:group_add")
+async def cb_group_add(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(GroupFSM.add_name)
+    await cb.message.edit_text(
+        "<b>گروه جدید</b>\n\nنام گروه محصول را وارد کنید:",
+        parse_mode="HTML", reply_markup=cancel_admin_kb(),
     )
     await cb.answer()
+
+
+@router.message(GroupFSM.add_name)
+async def group_add_name(message: Message, state: FSMContext, session: AsyncSession):
+    name = (message.text or "").strip()
+    if not name or len(name) > 60:
+        await message.answer("نام معتبر نیست (حداکثر ۶۰ کاراکتر). دوباره وارد کنید:")
+        return
+    existing = (await session.execute(
+        select(ProductGroup).where(ProductGroup.name == name)
+    )).scalar_one_or_none()
+    if existing:
+        await message.answer("گروهی با این نام از قبل وجود دارد.", reply_markup=back_to_admin_kb("admin:groups"))
+        await state.clear()
+        return
+    await state.update_data(group_name=name)
+    await state.set_state(GroupFSM.add_emoji)
+    await message.answer(
+        "هش اموجی مخصوص گروه محصول را وارد کنید:\n"
+        "<i>مثال: 5258503720928288433</i>",
+        parse_mode="HTML", reply_markup=skip_or_cancel_kb(),
+    )
+
+
+async def _finish_group_add(msg, state: FSMContext, session: AsyncSession, emoji_id: str | None):
+    data = await state.get_data()
+    await state.clear()
+    group = ProductGroup(name=data["group_name"], emoji_id=emoji_id)
+    session.add(group)
+    await session.flush()
+    await _render_group_detail(msg, session, group, edit=False)
+
+
+@router.message(GroupFSM.add_emoji)
+async def group_add_emoji(message: Message, state: FSMContext, session: AsyncSession):
+    raw = (message.text or "").strip()
+    if not raw.isdigit():
+        await message.answer("هش اموجی باید فقط عدد باشد. دوباره وارد کنید یا «رد کردن» را بزنید:")
+        return
+    await _finish_group_add(message, state, session, raw)
+
+
+@router.callback_query(GroupFSM.add_emoji, F.data == "admin:skip")
+async def group_add_emoji_skip(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
+    await cb.answer()
+    await _finish_group_add(cb.message, state, session, None)
+
+
+@router.callback_query(F.data.startswith("admin:group_edit:"))
+async def cb_group_edit(cb: CallbackQuery, state: FSMContext):
+    parts = cb.data.split(":")
+    gid, field = int(parts[2]), parts[3]
+    await state.update_data(group_id=gid)
+    if field == "name":
+        await state.set_state(GroupFSM.edit_name)
+        await cb.message.edit_text(
+            "<b>ویرایش نام گروه</b>\n\nنام جدید را وارد کنید:\n"
+            "<i>دسته‌بندی همه محصولات این گروه هم به‌روز می‌شود.</i>",
+            parse_mode="HTML", reply_markup=cancel_admin_kb(),
+        )
+    else:
+        await state.set_state(GroupFSM.edit_emoji)
+        await cb.message.edit_text(
+            "<b>ویرایش اموجی گروه</b>\n\n"
+            "هش اموجی جدید را وارد کنید:\n"
+            "<i>مثال: 5258503720928288433</i>\n\n"
+            "برای حذف اموجی، «رد کردن» را بزنید.",
+            parse_mode="HTML", reply_markup=skip_or_cancel_kb(),
+        )
+    await cb.answer()
+
+
+@router.message(GroupFSM.edit_name)
+async def group_edit_name(message: Message, state: FSMContext, session: AsyncSession):
+    new_name = (message.text or "").strip()
+    if not new_name or len(new_name) > 60:
+        await message.answer("نام معتبر نیست. دوباره وارد کنید:")
+        return
+    data = await state.get_data()
+    await state.clear()
+    group = await session.get(ProductGroup, data["group_id"])
+    if not group:
+        await message.answer("گروه یافت نشد.")
+        return
+    dup = (await session.execute(
+        select(ProductGroup).where(ProductGroup.name == new_name, ProductGroup.id != group.id)
+    )).scalar_one_or_none()
+    if dup:
+        await message.answer("گروهی با این نام از قبل وجود دارد.", reply_markup=back_to_admin_kb("admin:groups"))
+        return
+    old_name = group.name
+    group.name = new_name
+    await session.execute(
+        update(ServerPlan).where(ServerPlan.category == old_name).values(category=new_name)
+    )
+    await session.flush()
+    await _render_group_detail(message, session, group, edit=False)
+
+
+@router.message(GroupFSM.edit_emoji)
+async def group_edit_emoji(message: Message, state: FSMContext, session: AsyncSession):
+    raw = (message.text or "").strip()
+    if not raw.isdigit():
+        await message.answer("هش اموجی باید فقط عدد باشد. دوباره وارد کنید یا «رد کردن» را بزنید:")
+        return
+    data = await state.get_data()
+    await state.clear()
+    group = await session.get(ProductGroup, data["group_id"])
+    if not group:
+        await message.answer("گروه یافت نشد.")
+        return
+    group.emoji_id = raw
+    await session.flush()
+    await _render_group_detail(message, session, group, edit=False)
+
+
+@router.callback_query(GroupFSM.edit_emoji, F.data == "admin:skip")
+async def group_edit_emoji_remove(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    await state.clear()
+    await cb.answer("اموجی حذف شد.")
+    group = await session.get(ProductGroup, data["group_id"])
+    if not group:
+        return
+    group.emoji_id = None
+    await session.flush()
+    await _render_group_detail(cb.message, session, group)
+
+
+@router.callback_query(F.data.startswith("admin:group_hide:"))
+async def cb_group_hide(cb: CallbackQuery, session: AsyncSession):
+    group = await session.get(ProductGroup, int(cb.data.split(":")[2]))
+    if not group:
+        await cb.answer("گروه یافت نشد.", show_alert=True)
+        return
+    group.is_hidden = not group.is_hidden
+    await session.flush()
+    await cb.answer("گروه مخفی شد." if group.is_hidden else "گروه نمایان شد.")
+    await _render_group_detail(cb.message, session, group)
+
+
+@router.callback_query(F.data.startswith("admin:group_del_do:"))
+async def cb_group_del_do(cb: CallbackQuery, session: AsyncSession):
+    await cb.answer()
+    group = await session.get(ProductGroup, int(cb.data.split(":")[2]))
+    if group:
+        await session.delete(group)
+        await session.flush()
+    await cb.message.edit_text("گروه حذف شد.", reply_markup=back_to_admin_kb("admin:groups"))
+
+
+@router.callback_query(F.data.startswith("admin:group_del:"))
+async def cb_group_del(cb: CallbackQuery, session: AsyncSession):
+    group = await session.get(ProductGroup, int(cb.data.split(":")[2]))
+    if not group:
+        await cb.answer("گروه یافت نشد.", show_alert=True)
+        return
+    count = (await session.execute(
+        select(func.count(ServerPlan.id)).where(ServerPlan.category == group.name)
+    )).scalar() or 0
+    if count:
+        await cb.answer(f"این گروه {count} محصول دارد. ابتدا محصولات را منتقل یا حذف کنید.", show_alert=True)
+        return
+    await cb.answer()
+    await cb.message.edit_text(
+        f"حذف گروه <b>{group.name}</b>؟",
+        parse_mode="HTML",
+        reply_markup=confirm_kb(f"admin:group_del_do:{group.id}", "admin:groups"),
+    )
 
 
 @router.callback_query(F.data.startswith("admin:plan:"))
@@ -543,23 +814,99 @@ async def cb_plan_detail(cb: CallbackQuery, session: AsyncSession):
 # ─── Add plan FSM ─────────────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "admin:plan_add")
-async def cb_plan_add_start(cb: CallbackQuery, state: FSMContext):
+async def cb_plan_add_start(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
+    groups = await _adopt_groups(session)
     await state.set_state(PlanFSM.add_category)
     await cb.message.edit_text(
-        "<b>افزودن محصول</b>\n\nمرحله ۱ — دسته‌بندی:\n<i>مثال: سرور مجازی هلند</i>",
-        parse_mode="HTML", reply_markup=cancel_admin_kb(),
+        "<b>افزودن محصول</b>\n\nمرحله ۱ — گروه محصول را انتخاب کنید:",
+        parse_mode="HTML",
+        reply_markup=group_pick_kb(groups, "admin:plan_grpsel"),
     )
     await cb.answer()
 
 
-@router.message(PlanFSM.add_category)
-async def plan_add_category(message: Message, state: FSMContext):
-    await state.update_data(category=message.text.strip())
-    await state.set_state(PlanFSM.add_name)
-    await message.answer(
+async def _plan_ask_name(msg):
+    await msg.answer(
         "مرحله ۲ — نام داخلی (slug):\n<i>مثال: NL-Basic</i>",
         parse_mode="HTML", reply_markup=cancel_admin_kb(),
     )
+
+
+@router.callback_query(PlanFSM.add_category, F.data.startswith("admin:plan_grpsel:"))
+async def plan_pick_group(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
+    key = cb.data.split(":")[2]
+    if key == "new":
+        await state.set_state(PlanFSM.add_group_name)
+        await cb.message.edit_text(
+            "نام گروه جدید را وارد کنید:",
+            reply_markup=cancel_admin_kb(),
+        )
+        await cb.answer()
+        return
+    group = await session.get(ProductGroup, int(key))
+    if not group:
+        await cb.answer("گروه یافت نشد.", show_alert=True)
+        return
+    await cb.answer()
+    await state.update_data(category=group.name)
+    await state.set_state(PlanFSM.add_name)
+    await cb.message.edit_text(
+        "مرحله ۲ — نام داخلی (slug):\n<i>مثال: NL-Basic</i>",
+        parse_mode="HTML", reply_markup=cancel_admin_kb(),
+    )
+
+
+@router.message(PlanFSM.add_group_name)
+async def plan_new_group_name(message: Message, state: FSMContext, session: AsyncSession):
+    name = (message.text or "").strip()
+    if not name or len(name) > 60:
+        await message.answer("نام معتبر نیست (حداکثر ۶۰ کاراکتر). دوباره وارد کنید:")
+        return
+    existing = (await session.execute(
+        select(ProductGroup).where(ProductGroup.name == name)
+    )).scalar_one_or_none()
+    if existing:
+        # گروه از قبل هست — همان را انتخاب کن و ادامه بده
+        await state.update_data(category=existing.name)
+        await state.set_state(PlanFSM.add_name)
+        await message.answer("گروه از قبل موجود بود و انتخاب شد.")
+        await _plan_ask_name(message)
+        return
+    await state.update_data(new_group_name=name)
+    await state.set_state(PlanFSM.add_group_emoji)
+    await message.answer(
+        "هش اموجی مخصوص گروه محصول را وارد کنید:\n"
+        "<i>مثال: 5258503720928288433</i>",
+        parse_mode="HTML", reply_markup=skip_or_cancel_kb(),
+    )
+
+
+async def _plan_create_group(state: FSMContext, session: AsyncSession, emoji_id: str | None) -> None:
+    data = await state.get_data()
+    group = ProductGroup(name=data["new_group_name"], emoji_id=emoji_id)
+    session.add(group)
+    await session.flush()
+    await state.update_data(category=group.name)
+    await state.set_state(PlanFSM.add_name)
+
+
+@router.message(PlanFSM.add_group_emoji)
+async def plan_new_group_emoji(message: Message, state: FSMContext, session: AsyncSession):
+    raw = (message.text or "").strip()
+    if not raw.isdigit():
+        await message.answer("هش اموجی باید فقط عدد باشد. دوباره وارد کنید یا «رد کردن» را بزنید:")
+        return
+    await _plan_create_group(state, session, raw)
+    await message.answer("گروه ساخته شد.")
+    await _plan_ask_name(message)
+
+
+@router.callback_query(PlanFSM.add_group_emoji, F.data == "admin:skip")
+async def plan_new_group_emoji_skip(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
+    await cb.answer()
+    await _plan_create_group(state, session, None)
+    await cb.message.answer("گروه (بدون اموجی) ساخته شد.")
+    await _plan_ask_name(cb.message)
 
 
 @router.message(PlanFSM.add_name)
@@ -858,15 +1205,28 @@ async def _save_new_plan(msg, state: FSMContext, session: AsyncSession, location
 # ─── Edit plan ────────────────────────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("admin:plan_edit:"))
-async def cb_plan_edit_start(cb: CallbackQuery, state: FSMContext):
+async def cb_plan_edit_start(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
     parts = cb.data.split(":")
     plan_id, field = int(parts[2]), parts[3]
+
+    # گروه محصول از لیست انتخاب می‌شود (نه تایپ متن)
+    if field == "category":
+        groups = await _adopt_groups(session)
+        await cb.message.edit_text(
+            "<b>تغییر گروه محصول</b>\n\nگروه جدید را انتخاب کنید:",
+            parse_mode="HTML",
+            reply_markup=group_pick_kb(groups, f"admin:plan_setgrp:{plan_id}",
+                                       allow_new=False, cancel_cb=f"admin:plan:{plan_id}"),
+        )
+        await cb.answer()
+        return
+
     labels = {
         "price_hourly": "قیمت ساعتی (تومان)",
         "price_monthly": "قیمت ماهانه (تومان)",
         "ram": "RAM (MB)", "cpu": "CPU", "disk": "Disk (GB)",
         "bandwidth": "Bandwidth (GB)", "location": "موقعیت",
-        "category": "دسته‌بندی", "display_name": "نام نمایشی",
+        "display_name": "نام نمایشی",
         "provider_plan_id": "Plan ID ویرچولایزور",
     }
     await state.update_data(edit_plan_id=plan_id, edit_field=field)
@@ -876,6 +1236,22 @@ async def cb_plan_edit_start(cb: CallbackQuery, state: FSMContext):
         parse_mode="HTML", reply_markup=cancel_admin_kb(),
     )
     await cb.answer()
+
+
+@router.callback_query(F.data.startswith("admin:plan_setgrp:"))
+async def cb_plan_setgrp(cb: CallbackQuery, session: AsyncSession):
+    parts = cb.data.split(":")
+    plan_id, gid = int(parts[2]), parts[3]
+    plan = await session.get(ServerPlan, plan_id)
+    group = await session.get(ProductGroup, int(gid)) if gid.isdigit() else None
+    if not plan or not group:
+        await cb.answer("یافت نشد.", show_alert=True)
+        return
+    plan.category = group.name
+    await session.flush()
+    await cb.answer("گروه محصول تغییر کرد.")
+    cb.data = f"admin:plan:{plan_id}"
+    await cb_plan_detail(cb, session)
 
 
 @router.message(PlanFSM.edit_value)

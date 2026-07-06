@@ -1062,7 +1062,7 @@ async def cb_change_ip_do(cb: CallbackQuery, user: User, session: AsyncSession):
                 InlineKeyboardButton(text="بازگشت", callback_data=f"server:{server_id}", **{"icon_custom_emoji_id": "5258236805890710909"}),
             ]]),
         )
-        await LogService(cb.bot, session).log_ip_change(user, server, old_ip, new_ip)
+        await LogService(cb.bot, session).log_ip_change(user, server, old_ip, new_ip, fee)
     except Exception as e:
         if fee > 0:
             await billing.credit(user.id, fee, description=f"برگشت وجه تغییر IP — {server.name}")
@@ -1170,7 +1170,7 @@ async def cb_add_ip_do(cb: CallbackQuery, user: User, session: AsyncSession):
                 InlineKeyboardButton(text="بازگشت", callback_data=f"server:{server_id}", **{"icon_custom_emoji_id": "5258236805890710909"}),
             ]]),
         )
-        await LogService(cb.bot, session).log_server_action(user, server, "add_ip")
+        await LogService(cb.bot, session).log_extra_ip(user, server, new_ip, fee)
     except Exception as e:
         if fee > 0:
             await billing.credit(user.id, fee, description=f"برگشت وجه IP اضافه — {server.name}")

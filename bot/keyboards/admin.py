@@ -59,19 +59,53 @@ def provider_detail_kb(provider_id: int, is_active: bool = True, strict_kyc: boo
     return builder.as_markup()
 
 
-# ── Plan keyboards ────────────────────────────────────────────────────────────
+# ── Plan / group keyboards ────────────────────────────────────────────────────
 
-def plans_categories_kb(categories: list[str]) -> InlineKeyboardMarkup:
+def plans_menu_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    for cat in categories:
-        builder.button(text=cat, callback_data=f"admin:plans_cat:{cat}")
+    builder.button(text="گروه محصولات", callback_data="admin:groups")
+    builder.button(text="محصولات", callback_data="admin:plans_list")
     builder.button(text="افزودن محصول", callback_data="admin:plan_add")
     builder.button(text="بازگشت", callback_data="admin_panel")
+    builder.adjust(2, 1, 1)
+    return builder.as_markup()
+
+
+def groups_list_kb(groups: list) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for g in groups:
+        tag = "❌ " if g.is_hidden else "✅ "
+        builder.button(text=f"{tag}{g.name}", callback_data=f"admin:group:{g.id}")
+    builder.button(text="گروه جدید", callback_data="admin:group_add")
+    builder.button(text="بازگشت", callback_data="admin:plans")
     builder.adjust(1)
     return builder.as_markup()
 
 
-def plans_in_category_kb(plans: list, category: str) -> InlineKeyboardMarkup:
+def group_detail_kb(group_id: int, is_hidden: bool) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="ویرایش نام", callback_data=f"admin:group_edit:{group_id}:name")
+    builder.button(text="ویرایش اموجی", callback_data=f"admin:group_edit:{group_id}:emoji")
+    builder.button(text=("نمایش گروه" if is_hidden else "مخفی کردن گروه"),
+                   callback_data=f"admin:group_hide:{group_id}")
+    builder.button(text="حذف گروه", callback_data=f"admin:group_del:{group_id}")
+    builder.button(text="بازگشت", callback_data="admin:groups")
+    builder.adjust(2, 1, 1, 1)
+    return builder.as_markup()
+
+
+def plans_groups_kb(entries: list) -> InlineKeyboardMarkup:
+    """entries: (key, label) — key = group id or 'none' (بدون گروه)."""
+    builder = InlineKeyboardBuilder()
+    for key, label in entries:
+        builder.button(text=label, callback_data=f"admin:plans_grp:{key}")
+    builder.button(text="افزودن محصول", callback_data="admin:plan_add")
+    builder.button(text="بازگشت", callback_data="admin:plans")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def plans_in_group_kb(plans: list) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for p in plans:
         builder.button(
@@ -79,7 +113,20 @@ def plans_in_category_kb(plans: list, category: str) -> InlineKeyboardMarkup:
             callback_data=f"admin:plan:{p.id}",
         )
     builder.button(text="افزودن محصول", callback_data="admin:plan_add")
-    builder.button(text="بازگشت", callback_data="admin:plans")
+    builder.button(text="بازگشت", callback_data="admin:plans_list")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def group_pick_kb(groups: list, prefix: str, allow_new: bool = True,
+                  cancel_cb: str = "admin_panel") -> InlineKeyboardMarkup:
+    """Group selector — callback: {prefix}:{group_id} (+ {prefix}:new)."""
+    builder = InlineKeyboardBuilder()
+    for g in groups:
+        builder.button(text=g.name, callback_data=f"{prefix}:{g.id}")
+    if allow_new:
+        builder.button(text="ساخت گروه جدید", callback_data=f"{prefix}:new")
+    builder.button(text="انصراف", callback_data=cancel_cb)
     builder.adjust(1)
     return builder.as_markup()
 

@@ -29,6 +29,9 @@ from bot.utils.loading import answer_loading, edit_loading
 
 router = Router(name="servers")
 
+# تبدیل ارقام لاتین به فارسی برای نمایش مشخصات پلن
+_FA_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+
 
 class BuyServerStates(StatesGroup):
     selecting_category = State()
@@ -503,8 +506,16 @@ async def _select_category(cb: CallbackQuery, user: User, state: FSMContext,
 
     builder = InlineKeyboardBuilder()
     for plan in plans:
-        ram_display = plan.ram // 1024 if plan.ram >= 1024 else plan.ram
-        label = f"{plan.display_name or plan.name} | {ram_display}GB/{plan.cpu}C/{plan.disk}G"
+        ram_gb = plan.ram // 1024 if plan.ram >= 1024 else plan.ram
+        if plan.bandwidth and plan.bandwidth >= 1000:
+            traffic = f"{plan.bandwidth / 1000:g}ترابایت"
+        else:
+            traffic = f"{plan.bandwidth}گیگ"
+        if plan.price_monthly:
+            price = f"{plan.price_monthly:,.0f} تومان"
+        else:
+            price = f"{plan.price_hourly or 0:,.0f} تومان/ساعت"
+        label = f"{plan.cpu}هسته | {ram_gb}رم | {traffic} | {price}".translate(_FA_DIGITS)
         builder.button(text=label, callback_data=f"buyplan:{plan.id}", **{"icon_custom_emoji_id": "5260726538302660868"})
     builder.button(text="بازگشت", callback_data="buy_server", **{"icon_custom_emoji_id": "5258236805890710909"})
     builder.adjust(1)
@@ -741,9 +752,8 @@ async def _ask_email_or_confirm(msg, state: FSMContext, session, user: User, fro
     else:
         await state.set_state(BuyServerStates.entering_email)
         text = (
-            "📧 <b>ایمیل شما</b>\n\n"
-            "برای ساخت سرور، ایمیل خود را وارد کنید.\n"
-            "این ایمیل برای ورود به پنل مدیریت سرور (Virtualizor) استفاده می‌شود."
+            '‏<tg-emoji emoji-id="5348348681504441752">📧</tg-emoji> <b>ایمیل</b>\n\n'
+            "لطفا برای ساخت سرور، ایمیل خود را وارد کنید"
         )
         if from_message:
             await msg.answer(text, parse_mode="HTML")
@@ -831,11 +841,11 @@ async def _show_confirm(msg, state: FSMContext, session, from_message=False, use
 
     text = (
         f'<tg-emoji emoji-id="4987757216040747796">💎</tg-emoji> <b>تأیید سفارش</b>\n\n'
-        f"• {plan.display_name or plan.name}\n"
-        f"• {plan.category or ''}\n"
+        f"• پلن: {plan.display_name or plan.name}\n"
+        f"• ارائه دهنده: {plan.category or ''}\n"
         f"• رم: {plan.ram} MB | پردازنده: {plan.cpu} | دیسک: {plan.disk} GB\n"
         f"• ترافیک: {plan.bandwidth} GB\n"
-        f"• {plan.location or 'نامشخص'}\n"
+        f"• موقعیت: {plan.location or 'نامشخص'}\n"
         f"{hostname_line}"
         f"{os_line}\n"
         f"{discount_line}"

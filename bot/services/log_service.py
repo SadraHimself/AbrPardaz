@@ -142,6 +142,7 @@ class LogService:
             "stop":            "⏹ خاموش کردن",
             "delete":          "🗑 حذف",
             "change_password": "🔑 تغییر رمز",
+            "add_ip":          "🌐 افزودن IP",
             "unsuspend":       "✅ رفع ساسپند",
         }
         await self._send(
@@ -150,4 +151,20 @@ class LogService:
             f"{self._user_line(user)}\n"
             f"🖥 سرور: {server.name} (<code>{server.ip_address or '—'}</code>)\n"
             f"⚡ عملیات: {labels.get(action, action)}",
+        )
+
+    async def log_provider_down(self, name: str, reason: str = "") -> None:
+        await self._send(
+            "server",
+            f"🔴 <b>قطعی سرور ویرچولایزور</b>\n\n"
+            f"🖥 سرور: <b>{name}</b>\n"
+            f"وضعیت: ارتباط برقرار نشد (سرور خاموش است یا اتصال قطع است)\n"
+            f"دلیل احتمالی: <code>{reason or 'نامشخص'}</code>",
+        )
+
+    async def log_provider_up(self, name: str) -> None:
+        await self._send(
+            "server",
+            f"🟢 <b>سرور ویرچولایزور دوباره وصل شد</b>\n\n"
+            f"🖥 سرور: <b>{name}</b>",
         )

@@ -913,7 +913,7 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
             )
             return
 
-    await cb.message.edit_text("⏳ در حال ساخت سرور...")
+    await edit_loading(cb.message)
     await cb.answer()
     await state.clear()
 

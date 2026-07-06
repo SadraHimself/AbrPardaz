@@ -131,6 +131,15 @@ class BillingService:
                                currency, server.id)
                 return True
 
+        # هزینه IPهای اضافه (تومانی، از تنظیمات پروایدر) در هر تمدید ماهانه هم اعمال می‌شود
+        extra_ips = (server.extra_data or {}).get("extra_ips") or []
+        if extra_ips and server.provider_account_id:
+            from bot.database.models import ProviderAccount
+            acc = await self.session.get(ProviderAccount, server.provider_account_id)
+            ip_fee = float(((acc.extra_config or {}) if acc else {}).get("extra_ip_fee", 0) or 0)
+            if ip_fee > 0:
+                amount_toman += ip_fee * len(extra_ips)
+
         success = await self.debit(
             server.user_id, amount_toman,
             server_id=server.id,

@@ -73,6 +73,8 @@ class PlanFSM(StatesGroup):
     add_price_monthly = State()
     add_location = State()
     edit_value = State()
+    edit_plan_id = State()          # ورود Plan ID جدید → fetch از ویرچولایزور
+    edit_plan_id_confirm = State()  # تأیید مشخصات پلن خوانده‌شده
 
 
 class GroupFSM(StatesGroup):
@@ -779,7 +781,10 @@ async def cb_group_del(cb: CallbackQuery, session: AsyncSession):
 
 @router.callback_query(F.data.startswith("admin:plan:"))
 async def cb_plan_detail(cb: CallbackQuery, session: AsyncSession):
-    plan_id = int(cb.data.split(":")[2])
+    await _render_plan_detail(cb, session, int(cb.data.split(":")[2]))
+
+
+async def _render_plan_detail(cb: CallbackQuery, session: AsyncSession, plan_id: int):
     plan = await session.get(ServerPlan, plan_id)
     if not plan:
         await cb.answer("محصول یافت نشد.", show_alert=True)
@@ -808,7 +813,10 @@ async def cb_plan_detail(cb: CallbackQuery, session: AsyncSession):
         parse_mode="HTML",
         reply_markup=plan_detail_kb(plan_id, plan.is_active),
     )
-    await cb.answer()
+    try:
+        await cb.answer()
+    except Exception:
+        pass  # already answered by the caller (toggle/setgrp)
 
 
 # ─── Add plan FSM ─────────────────────────────────────────────────────────────
@@ -1221,13 +1229,24 @@ async def cb_plan_edit_start(cb: CallbackQuery, state: FSMContext, session: Asyn
         await cb.answer()
         return
 
+    # تغییر Plan ID: مشخصات از ویرچولایزور خوانده و بعد از تأیید اعمال می‌شود
+    if field == "provider_plan_id":
+        await state.update_data(edit_plan_id=plan_id)
+        await state.set_state(PlanFSM.edit_plan_id)
+        await cb.message.edit_text(
+            "<b>تغییر Plan ID ویرچولایزور</b>\n\n"
+            "Plan ID جدید را وارد کنید:\n"
+            "<i>مشخصات (RAM/CPU/Disk/BW) خودکار از پلن خوانده می‌شود.</i>",
+            parse_mode="HTML", reply_markup=cancel_admin_kb(),
+        )
+        await cb.answer()
+        return
+
     labels = {
         "price_hourly": "قیمت ساعتی (تومان)",
         "price_monthly": "قیمت ماهانه (تومان)",
-        "ram": "RAM (MB)", "cpu": "CPU", "disk": "Disk (GB)",
-        "bandwidth": "Bandwidth (GB)", "location": "موقعیت",
+        "location": "موقعیت",
         "display_name": "نام نمایشی",
-        "provider_plan_id": "Plan ID ویرچولایزور",
     }
     await state.update_data(edit_plan_id=plan_id, edit_field=field)
     await state.set_state(PlanFSM.edit_value)
@@ -1236,6 +1255,78 @@ async def cb_plan_edit_start(cb: CallbackQuery, state: FSMContext, session: Asyn
         parse_mode="HTML", reply_markup=cancel_admin_kb(),
     )
     await cb.answer()
+
+
+@router.message(PlanFSM.edit_plan_id)
+async def plan_edit_plan_id_input(message: Message, state: FSMContext, session: AsyncSession):
+    new_id = (message.text or "").strip()
+    data = await state.get_data()
+    plan = await session.get(ServerPlan, data["edit_plan_id"])
+    if not plan:
+        await state.clear()
+        await message.answer("محصول یافت نشد.")
+        return
+    account = await session.get(ProviderAccount, plan.provider_account_id) if plan.provider_account_id else None
+    if not account:
+        await state.clear()
+        await message.answer("سرور ویرچولایزور این محصول یافت نشد.",
+                             reply_markup=back_to_admin_kb("admin:plans_list"))
+        return
+
+    wait = await message.answer("در حال خواندن پلن از Virtualizor...")
+    try:
+        prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
+        virt_plans = await asyncio.wait_for(prov.list_plans(), timeout=15)
+        matched = next((p for p in virt_plans if str(p.provider_plan_id) == new_id), None)
+    except Exception as e:
+        await wait.edit_text(f"❌ خطا در اتصال به Virtualizor: {e}\n\nدوباره Plan ID را وارد کنید:",
+                             reply_markup=cancel_admin_kb())
+        return
+
+    if not matched:
+        available = ", ".join(str(p.provider_plan_id) for p in virt_plans[:15])
+        await wait.edit_text(
+            f"❌ Plan ID <code>{new_id}</code> یافت نشد.\n"
+            f"IDهای موجود: <code>{available or 'هیچ'}</code>\n\nدوباره وارد کنید:",
+            parse_mode="HTML", reply_markup=cancel_admin_kb(),
+        )
+        return
+
+    await state.update_data(
+        pending_plan_id=new_id,
+        pending_ram=matched.ram, pending_cpu=matched.cpu,
+        pending_disk=matched.disk, pending_bandwidth=matched.bandwidth,
+    )
+    await state.set_state(PlanFSM.edit_plan_id_confirm)
+    ram_label = f"{matched.ram // 1024}GB" if matched.ram >= 1024 else f"{matched.ram}MB"
+    await wait.edit_text(
+        f"<b>پلنی که ID آن را وارد کردید:</b> {matched.name}\n\n"
+        f"RAM: {ram_label} ({matched.ram} MB)\n"
+        f"CPU: {matched.cpu} هسته\n"
+        f"Disk: {matched.disk} GB\n"
+        f"Bandwidth: {matched.bandwidth} GB\n\n"
+        "تأیید می‌کنید؟ (مشخصات محصول با این مقادیر جایگزین می‌شود)",
+        parse_mode="HTML",
+        reply_markup=confirm_kb("admin:planid_apply", f"admin:plan:{plan.id}"),
+    )
+
+
+@router.callback_query(PlanFSM.edit_plan_id_confirm, F.data == "admin:planid_apply")
+async def plan_edit_plan_id_apply(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    await state.clear()
+    plan = await session.get(ServerPlan, data["edit_plan_id"])
+    if not plan:
+        await cb.answer("محصول یافت نشد.", show_alert=True)
+        return
+    plan.provider_plan_id = data["pending_plan_id"]
+    plan.ram = data["pending_ram"]
+    plan.cpu = data["pending_cpu"]
+    plan.disk = data["pending_disk"]
+    plan.bandwidth = data["pending_bandwidth"]
+    await session.flush()
+    await cb.answer("Plan ID و مشخصات به‌روز شد.")
+    await _render_plan_detail(cb, session, plan.id)
 
 
 @router.callback_query(F.data.startswith("admin:plan_setgrp:"))
@@ -1250,8 +1341,7 @@ async def cb_plan_setgrp(cb: CallbackQuery, session: AsyncSession):
     plan.category = group.name
     await session.flush()
     await cb.answer("گروه محصول تغییر کرد.")
-    cb.data = f"admin:plan:{plan_id}"
-    await cb_plan_detail(cb, session)
+    await _render_plan_detail(cb, session, plan_id)
 
 
 @router.message(PlanFSM.edit_value)
@@ -1287,8 +1377,7 @@ async def cb_plan_toggle(cb: CallbackQuery, session: AsyncSession):
     plan.is_active = not plan.is_active
     await session.flush()
     await cb.answer(f"{'فعال' if plan.is_active else 'غیرفعال'} شد.")
-    cb.data = f"admin:plan:{plan_id}"
-    await cb_plan_detail(cb, session)
+    await _render_plan_detail(cb, session, plan_id)
 
 
 @router.callback_query(F.data.startswith("admin:plan_del:"))
@@ -1343,7 +1432,10 @@ async def cb_subproducts(cb: CallbackQuery, session: AsyncSession):
 
 @router.callback_query(F.data.startswith("admin:subprod:"))
 async def cb_subprod_detail(cb: CallbackQuery, session: AsyncSession):
-    sp_id = int(cb.data.split(":")[2])
+    await _render_subprod_detail(cb, session, int(cb.data.split(":")[2]))
+
+
+async def _render_subprod_detail(cb: CallbackQuery, session: AsyncSession, sp_id: int):
     sp = await session.get(SubProduct, sp_id)
     if not sp:
         await cb.answer("ریز-محصول یافت نشد.", show_alert=True)
@@ -1359,7 +1451,10 @@ async def cb_subprod_detail(cb: CallbackQuery, session: AsyncSession):
         parse_mode="HTML",
         reply_markup=subprod_detail_kb(sp_id, sp.plan_id, sp.is_active),
     )
-    await cb.answer()
+    try:
+        await cb.answer()
+    except Exception:
+        pass
 
 
 @router.callback_query(F.data.startswith("admin:subprod_add:"))
@@ -1469,8 +1564,7 @@ async def cb_subprod_toggle(cb: CallbackQuery, session: AsyncSession):
     sp.is_active = not sp.is_active
     await session.flush()
     await cb.answer(f"{'فعال' if sp.is_active else 'غیرفعال'} شد.")
-    cb.data = f"admin:subprod:{sp_id}"
-    await cb_subprod_detail(cb, session)
+    await _render_subprod_detail(cb, session, sp_id)
 
 
 @router.callback_query(F.data.startswith("admin:subprod_del:"))
@@ -1606,7 +1700,10 @@ async def _save_discount(msg, state: FSMContext, session: AsyncSession, max_uses
 
 @router.callback_query(F.data.startswith("admin:disc:"))
 async def cb_disc_detail(cb: CallbackQuery, session: AsyncSession):
-    disc_id = int(cb.data.split(":")[2])
+    await _render_disc_detail(cb, session, int(cb.data.split(":")[2]))
+
+
+async def _render_disc_detail(cb: CallbackQuery, session: AsyncSession, disc_id: int):
     code = await session.get(DiscountCode, disc_id)
     if not code:
         await cb.answer("کد یافت نشد.", show_alert=True)
@@ -1623,7 +1720,10 @@ async def cb_disc_detail(cb: CallbackQuery, session: AsyncSession):
         parse_mode="HTML",
         reply_markup=discount_detail_kb(disc_id, code.is_active),
     )
-    await cb.answer()
+    try:
+        await cb.answer()
+    except Exception:
+        pass
 
 
 @router.callback_query(F.data.startswith("admin:disc_toggle:"))
@@ -1636,8 +1736,7 @@ async def cb_disc_toggle(cb: CallbackQuery, session: AsyncSession):
     code.is_active = not code.is_active
     await session.flush()
     await cb.answer(f"{'فعال' if code.is_active else 'غیرفعال'} شد.")
-    cb.data = f"admin:disc:{disc_id}"
-    await cb_disc_detail(cb, session)
+    await _render_disc_detail(cb, session, disc_id)
 
 
 @router.callback_query(F.data.startswith("admin:disc_del:"))

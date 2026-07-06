@@ -63,10 +63,11 @@ app.conf.update(
             "task": "bot.tasks.backup.run_database_backup",
             "schedule": crontab(minute=0, hour="*/4"),
         },
-        # هر ۷۲ ساعت تراکنش‌های قدیمی پاک می‌شوند
+        # هر ساعت تراکنش‌های قدیمی‌تر از ۷۲ ساعت پاک می‌شوند
+        # (قبلاً فقط ۳ روزِ هفته اجرا می‌شد و commit هم نداشت → هیچ‌وقت پاک نمی‌شد)
         "cleanup-transactions": {
             "task": "bot.tasks.billing.cleanup_old_transactions",
-            "schedule": crontab(hour=4, minute=0, day_of_week="*/3"),
+            "schedule": crontab(minute=20),
         },
         # هر ۵ دقیقه پرداخت‌های کریپتوی معلق بررسی می‌شوند (fallback IPN + expiry check)
         "crypto-payment-poll": {

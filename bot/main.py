@@ -38,6 +38,21 @@ async def on_shutdown(bot: Bot) -> None:
     await engine.dispose()
 
 
+async def on_error(event) -> bool:
+    """Global safety net: log every unhandled handler exception and ALWAYS answer
+    the callback query so buttons never spin forever."""
+    logger.exception("Unhandled error while processing update", exc_info=event.exception)
+    try:
+        upd = event.update
+        if upd.callback_query:
+            await upd.callback_query.answer("⚠️ خطایی رخ داد. دوباره تلاش کنید.", show_alert=True)
+        elif upd.message:
+            await upd.message.answer("⚠️ خطایی رخ داد. دوباره تلاش کنید.")
+    except Exception:
+        pass
+    return True  # mark as handled
+
+
 async def main() -> None:
     bot = Bot(
         token=settings.BOT_TOKEN,
@@ -56,6 +71,7 @@ async def main() -> None:
 
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
+    dp.errors.register(on_error)
 
     # Start the webhook/callback server alongside the bot when any gateway needs it
     # (NOWPayments IPN and/or Zarinpal return callback).

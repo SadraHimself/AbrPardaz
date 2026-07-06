@@ -614,7 +614,6 @@ async def cb_user_disc_del(cb: CallbackQuery, session: AsyncSession):
         await session.delete(disc)
         await session.flush()
     await cb.answer("کد تخفیف حذف شد.")
-    cb.data = f"admin:user:{user_id}"
     user = await session.get(User, user_id)
     if user:
         await _show_user_detail(cb.message, session, user, edit=True)

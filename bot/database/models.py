@@ -187,6 +187,20 @@ class ProviderAccount(Base):
     servers: Mapped[list[Server]] = relationship("Server", back_populates="provider_account")
 
 
+class ProductGroup(Base):
+    """گروه محصولات — دسته‌بندی پلن‌ها + اموجی پریمیوم + مخفی‌سازی.
+
+    ServerPlan.category (رشته) با ProductGroup.name مچ می‌شود؛ به همین دلیل
+    نیازی به تغییر ساختار جدول پلن‌ها نیست."""
+    __tablename__ = "product_groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    emoji_id: Mapped[Optional[str]] = mapped_column(String(64))   # premium custom-emoji id
+    is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class ServerPlan(Base):
     __tablename__ = "server_plans"
 

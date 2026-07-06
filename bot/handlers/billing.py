@@ -257,14 +257,28 @@ async def cb_tx_srv_detail(cb: CallbackQuery, user: User, session: AsyncSession)
     count = len(hourly_txs)
     total = sum(t.amount for t in hourly_txs)
 
+    # سرورِ با قیمت ارزی (دلار/یورو): نرخ ساعتیِ تعریف‌شده به همان ارز نمایش داده می‌شود
+    from bot.services.currency import CURRENCY_LABELS, obj_currency
+    _cur = obj_currency(server) if server else "irt"
+    if _cur != "irt" and server and server.price_hourly:
+        unit = CURRENCY_LABELS[_cur]
+        duration_line = f"مدت: {count} ساعت × {server.price_hourly:g} {unit}\n"
+        total_line = (
+            f"مجموع: <b>{count * server.price_hourly:g} {unit}</b>\n"
+            f"مجموع ریالی: <b>{total:,.0f} تومان</b>"
+        )
+    else:
+        duration_line = f"مدت: {count} ساعت × {rate:,.0f} تومان\n"
+        total_line = f"مجموع: <b>{total:,.0f} تومان</b>"
+
     back_row = [[InlineKeyboardButton(text="بازگشت", callback_data=f"tx_page:{back_page}", **{"icon_custom_emoji_id": "5258236805890710909"})]]
     await cb.message.edit_text(
         f"<b>جزئیات برداشت</b>\n\n"
         f"سرور: <b>{srv_name}</b>\n"
         f"آی‌پی: <code>{srv_ip}</code>\n"
         f"نوع: ساعتی\n"
-        f"مدت: {count} ساعت × {rate:,.0f} تومان\n"
-        f"مجموع: <b>{total:,.0f} تومان</b>",
+        f"{duration_line}"
+        f"{total_line}",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=back_row),
     )

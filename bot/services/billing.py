@@ -1,6 +1,7 @@
 """Billing service: charge, credit, suspend logic."""
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -11,6 +12,9 @@ from bot.database.models import (
     BillingType, Server, ServerStatus, SuspendReason,
     Transaction, TransactionType, User,
 )
+from bot.services.currency import obj_currency, to_toman
+
+logger = logging.getLogger(__name__)
 
 
 class BillingService:
@@ -74,15 +78,28 @@ class BillingService:
 
     async def charge_hourly(self, server: Server) -> bool:
         """
-        Charge one hour of usage. Returns False if balance insufficient
-        (caller should suspend the server).
+        Charge one hour of usage (always debited in Toman; currency-priced
+        servers are converted with the live rate). Returns False if balance
+        insufficient (caller should suspend the server).
         """
         amount = server.price_hourly or 0.0
         if amount <= 0:
             return True
 
+        currency = obj_currency(server)
+        if currency == "irt":
+            amount_toman = amount
+        else:
+            amount_toman = await to_toman(self.session, amount, currency)
+            if amount_toman <= 0:
+                # نرخ ارز در دسترس نیست — این ساعت را رد نکن؛ بدون advance کردن
+                # last_billed_at برگرد تا اجرای بعدی (بعد از آپدیت نرخ) جبران شود.
+                logger.warning("charge_hourly: no %s rate — postponing billing for server %s",
+                               currency, server.id)
+                return True
+
         success = await self.debit(
-            server.user_id, amount,
+            server.user_id, amount_toman,
             server_id=server.id,
             description=f"ساعتی — {server.name}",
         )
@@ -104,8 +121,18 @@ class BillingService:
         if amount <= 0:
             return True
 
+        currency = obj_currency(server)
+        if currency == "irt":
+            amount_toman = amount
+        else:
+            amount_toman = await to_toman(self.session, amount, currency)
+            if amount_toman <= 0:
+                logger.warning("charge_monthly: no %s rate — postponing billing for server %s",
+                               currency, server.id)
+                return True
+
         success = await self.debit(
-            server.user_id, amount,
+            server.user_id, amount_toman,
             server_id=server.id,
             description=f"ماهیانه — {server.name}",
         )

@@ -85,6 +85,7 @@ class PlanFSM(StatesGroup):
     add_price_monthly = State()
     add_location = State()
     edit_value = State()
+    edit_price_currency = State()   # انتخاب واحد ارز هنگام ویرایش قیمت
     edit_plan_id = State()          # ورود Plan ID جدید → fetch از ویرچولایزور
     edit_plan_id_confirm = State()  # تأیید مشخصات پلن خوانده‌شده
 
@@ -1280,11 +1281,23 @@ async def cb_plan_edit_start(cb: CallbackQuery, state: FSMContext, session: Asyn
         await cb.answer()
         return
 
-    _plan = await session.get(ServerPlan, plan_id)
-    _unit = CURRENCY_LABELS.get(obj_currency(_plan) if _plan else "irt", "تومان")
+    # ویرایش قیمت: اول واحد ارز پرسیده می‌شود (قابل تغییر از یورو به تومان/دلار و برعکس)
+    if field in ("price_hourly", "price_monthly"):
+        _plan = await session.get(ServerPlan, plan_id)
+        _cur_now = CURRENCY_LABELS.get(obj_currency(_plan) if _plan else "irt", "تومان")
+        await state.update_data(edit_plan_id=plan_id, edit_field=field)
+        await state.set_state(PlanFSM.edit_price_currency)
+        await cb.message.edit_text(
+            f"<b>ویرایش {'قیمت ساعتی' if field == 'price_hourly' else 'قیمت ماهانه'}</b>\n\n"
+            f"واحد فعلی: <b>{_cur_now}</b>\n"
+            "واحد قیمت جدید را انتخاب کنید:",
+            parse_mode="HTML",
+            reply_markup=_currency_pick_kb(),
+        )
+        await cb.answer()
+        return
+
     labels = {
-        "price_hourly": f"قیمت ساعتی ({_unit})",
-        "price_monthly": f"قیمت ماهانه ({_unit})",
         "location": "موقعیت",
         "display_name": "نام نمایشی",
     }
@@ -1292,6 +1305,23 @@ async def cb_plan_edit_start(cb: CallbackQuery, state: FSMContext, session: Asyn
     await state.set_state(PlanFSM.edit_value)
     await cb.message.edit_text(
         f"<b>ویرایش {labels.get(field, field)}</b>\n\nمقدار جدید:",
+        parse_mode="HTML", reply_markup=cancel_admin_kb(),
+    )
+    await cb.answer()
+
+
+@router.callback_query(PlanFSM.edit_price_currency, F.data.startswith("admin:plancur:"))
+async def plan_edit_price_currency(cb: CallbackQuery, state: FSMContext):
+    cur = cb.data.split(":")[2]
+    if cur not in CURRENCY_LABELS:
+        await cb.answer("واحد نامعتبر.", show_alert=True)
+        return
+    await state.update_data(edit_currency=cur)
+    await state.set_state(PlanFSM.edit_value)
+    data = await state.get_data()
+    label = "قیمت ساعتی" if data.get("edit_field") == "price_hourly" else "قیمت ماهانه"
+    await cb.message.edit_text(
+        f"<b>{label} ({CURRENCY_LABELS[cur]})</b>\n\nمقدار جدید:",
         parse_mode="HTML", reply_markup=cancel_admin_kb(),
     )
     await cb.answer()
@@ -1394,15 +1424,32 @@ async def plan_edit_value(message: Message, state: FSMContext, session: AsyncSes
         return
     field, raw = data["edit_field"], message.text.strip()
     try:
+        warn = ""
         if field in ("price_hourly", "price_monthly"):
             val = float(raw)
             setattr(plan, field, val if val > 0 else None)
+            # اگر واحد ارز جدیدی انتخاب شده، روی پلن اعمال می‌شود
+            # (واحد در سطح پلن است و هر دو قیمت را شامل می‌شود)
+            new_cur = data.get("edit_currency")
+            if new_cur and new_cur in CURRENCY_LABELS:
+                old_cur = obj_currency(plan)
+                extra = dict(plan.extra_data or {})
+                extra["currency"] = new_cur
+                plan.extra_data = extra
+                other_field = "price_monthly" if field == "price_hourly" else "price_hourly"
+                other_label = "ماهانه" if field == "price_hourly" else "ساعتی"
+                if new_cur != old_cur and getattr(plan, other_field):
+                    warn = (
+                        f"\n\n⚠️ واحد قیمت در سطح محصول است — قیمت {other_label} هم از این پس "
+                        f"به {CURRENCY_LABELS[new_cur]} تفسیر می‌شود؛ در صورت نیاز آن را هم ویرایش کنید."
+                    )
         elif field in ("ram", "cpu", "disk", "bandwidth"):
             setattr(plan, field, int(raw))
         else:
             setattr(plan, field, raw if raw not in ("-", "—", "none", "0") else None)
         await session.flush()
-        await message.answer("ذخیره شد.", reply_markup=plan_detail_kb(data["edit_plan_id"], plan.is_active))
+        await message.answer(f"ذخیره شد.{warn}",
+                             reply_markup=plan_detail_kb(data["edit_plan_id"], plan.is_active))
     except ValueError:
         await message.answer("مقدار نامعتبر.")
 

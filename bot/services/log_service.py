@@ -105,14 +105,29 @@ class LogService:
         )
 
     async def log_ip_change(self, user: User, server: Server,
-                            old_ip: str, new_ip: str) -> None:
+                            old_ip: str, new_ip: str, fee: float = 0) -> None:
+        fee_line = f"\n💵 هزینه: <b>{fee:,.0f} تومان</b>" if fee > 0 else "\n💵 هزینه: رایگان"
         await self._send(
             "purchase",
             f"🌐 <b>تغییر IP</b>\n\n"
             f"{self._user_line(user)}\n"
             f"🖥 سرور: {server.name}\n"
             f"⬅️ IP قدیم: <code>{old_ip or '—'}</code>\n"
-            f"➡️ IP جدید: <code>{new_ip}</code>",
+            f"➡️ IP جدید: <code>{new_ip}</code>"
+            f"{fee_line}",
+        )
+
+    async def log_extra_ip(self, user: User, server: Server,
+                           new_ip: str, fee: float = 0) -> None:
+        fee_line = f"\n💵 هزینه: <b>{fee:,.0f} تومان</b>" if fee > 0 else "\n💵 هزینه: رایگان"
+        await self._send(
+            "purchase",
+            f"➕ <b>خرید IP اضافه</b>\n\n"
+            f"{self._user_line(user)}\n"
+            f"🖥 سرور: {server.name}\n"
+            f"🌐 IP اصلی: <code>{server.ip_address or '—'}</code>\n"
+            f"🆕 IP اضافه: <code>{new_ip}</code>"
+            f"{fee_line}",
         )
 
     async def log_ban_user(self, target: User, reason: str, days: int, admin_id: int) -> None:

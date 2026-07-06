@@ -80,7 +80,10 @@ async def msg_my_servers(message: Message, user: User, session: AsyncSession):
 
 @router.callback_query(F.data.startswith("server:"))
 async def cb_server_detail(cb: CallbackQuery, user: User, session: AsyncSession):
-    server_id = int(cb.data.split(":")[1])
+    await _render_server_detail(cb, user, session, int(cb.data.split(":")[1]))
+
+
+async def _render_server_detail(cb: CallbackQuery, user: User, session: AsyncSession, server_id: int):
     server = await session.get(Server, server_id)
     if not server or server.user_id != user.id:
         await cb.answer("سرور یافت نشد.", show_alert=True)
@@ -131,7 +134,10 @@ async def cb_server_detail(cb: CallbackQuery, user: User, session: AsyncSession)
         parse_mode="HTML",
         reply_markup=server_actions_kb(server),
     )
-    await cb.answer()
+    try:
+        await cb.answer()
+    except Exception:
+        pass  # callback may already be answered by the caller (e.g. refresh)
 
 
 @router.callback_query(F.data.startswith("srv_refresh:"))
@@ -148,8 +154,7 @@ async def cb_server_refresh(cb: CallbackQuery, user: User, session: AsyncSession
     except Exception as e:
         await cb.answer(f"خطا: {e}", show_alert=True)
         return
-    cb.data = f"server:{server_id}"
-    await cb_server_detail(cb, user, session)
+    await _render_server_detail(cb, user, session, server_id)
 
 
 # ── Server actions ────────────────────────────────────────────────────────────
@@ -445,19 +450,21 @@ async def msg_buy_server(message: Message, user: User, state: FSMContext, sessio
 
 @router.callback_query(BuyServerStates.selecting_category, F.data.startswith("buygrp:"))
 async def cb_select_group(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
-    """ID-based group selection — resolves the group name then reuses cb_select_category."""
+    """ID-based group selection — resolves the group name then shows its plans."""
     group = await session.get(ProductGroup, int(cb.data.split(":")[1]))
     if not group:
         await cb.answer("گروه یافت نشد.", show_alert=True)
         return
-    cb.data = f"buycat:{group.name}"
-    await cb_select_category(cb, user, state, session)
+    await _select_category(cb, user, state, session, group.name)
 
 
 @router.callback_query(BuyServerStates.selecting_category, F.data.startswith("buycat:"))
 async def cb_select_category(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
-    category = cb.data[len("buycat:"):]
+    await _select_category(cb, user, state, session, cb.data[len("buycat:"):])
 
+
+async def _select_category(cb: CallbackQuery, user: User, state: FSMContext,
+                           session: AsyncSession, category: str):
     # گروه مخفی‌شده قابل خرید نیست (حتی از روی کیبورد قدیمی)
     _grp = (await session.execute(
         select(ProductGroup).where(ProductGroup.name == category)
@@ -1110,8 +1117,7 @@ async def cb_buy_subprod(cb: CallbackQuery, user: User, session: AsyncSession):
                 server.traffic_limit_gb += sp.value
         await session.flush()
         await cb.answer(f"✅ {sp.name} فعال شد!", show_alert=True)
-        cb.data = f"server:{server_id}"
-        await cb_server_detail(cb, user, session)
+        await _render_server_detail(cb, user, session, server_id)
     except Exception as e:
         # refund on failure
         await billing.credit(user.id, sp.price, description=f"برگشت وجه {sp.name}")

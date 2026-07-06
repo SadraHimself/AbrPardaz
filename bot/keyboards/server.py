@@ -59,8 +59,10 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
         ])
         if is_hourly:
             # تغییر/افزودن IP فقط برای سیکل ماهانه است
-            rows.append([_btn("تغییر رمز", f"srv_chpass:{sid}", icon="4904500559203009298")])
-            rows.append([_btn("آمار مصرف", f"srv_usage:{sid}", icon="5936143551854285132")])
+            rows.append([
+                _btn("تغییر رمز", f"srv_chpass:{sid}", icon="4904500559203009298"),
+                _btn("آمار مصرف", f"srv_usage:{sid}", icon="5936143551854285132"),
+            ])
             rows.append([_btn("حذف سرور", f"srv_action:{sid}:delete_confirm", "danger", "5258130763148172425")])
         else:
             rows.append([
@@ -68,7 +70,7 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
                 _btn("تغییر رمز", f"srv_chpass:{sid}", icon="4904500559203009298"),
             ])
             rows.append([
-                _btn("IP اضافه", f"srv_addip:{sid}", icon="5346024644635804737"),
+                _btn("آیپی اضافه", f"srv_addip:{sid}", icon="5346024644635804737"),
                 _btn("آمار مصرف", f"srv_usage:{sid}", icon="5936143551854285132"),
             ])
 

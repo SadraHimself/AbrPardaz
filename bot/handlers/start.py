@@ -21,7 +21,7 @@ from bot.config import settings
 from bot.database.models import BotSettings, Server, ServerStatus, User
 from bot.keyboards.main import back_kb, main_menu_kb
 from bot.services.log_service import LogService
-from bot.utils.loading import answer_loading, edit_loading
+from bot.utils.loading import ERR, answer_loading, edit_loading
 
 router = Router(name="start")
 
@@ -157,8 +157,9 @@ async def cb_accept_terms(cb: CallbackQuery, user: User, session: AsyncSession):
 @router.callback_query(F.data == "decline_terms")
 async def cb_decline_terms(cb: CallbackQuery):
     await cb.message.edit_text(
-        "❌ متأسفانه بدون قبول قوانین امکان استفاده از ربات وجود ندارد.\n"
-        "هرگاه آماده بودید /start را بزنید."
+        f"{ERR} متأسفانه بدون قبول قوانین امکان استفاده از ربات وجود ندارد.\n"
+        "هرگاه آماده بودید /start را بزنید.",
+        parse_mode="HTML",
     )
     await cb.answer()
 

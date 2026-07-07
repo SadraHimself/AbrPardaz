@@ -12,6 +12,12 @@ def pe(emoji_id: str, fallback: str) -> str:
     return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
 
 
+# قرارداد اموجی خطا/هشدار — اول پیام‌های HTML (با RLM تا سمت راست بیفتد).
+# فقط برای متن پیام؛ toastهای cb.answer و دکمه‌ها tg-emoji پشتیبانی نمی‌کنند.
+ERR = "‏" + pe("4956612582816351459", "❌")
+WARN = "‏" + pe("4956611513369494230", "⚠️")
+
+
 # Premium emoji map — use in message text with parse_mode="HTML"
 # Button text (ReplyKeyboard) does not support HTML; buttons keep plain Unicode.
 P = {

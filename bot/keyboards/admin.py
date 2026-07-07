@@ -141,6 +141,7 @@ def plan_detail_kb(plan_id: int, is_active: bool) -> InlineKeyboardMarkup:
     builder.button(text="موقعیت", callback_data=f"admin:plan_edit:{plan_id}:location")
     builder.button(text="گروه محصول", callback_data=f"admin:plan_edit:{plan_id}:category")
     builder.button(text="نام نمایشی", callback_data=f"admin:plan_edit:{plan_id}:display_name")
+    builder.button(text="اموجی محصول", callback_data=f"admin:plan_edit:{plan_id}:emoji")
     builder.button(text="Plan ID ویرچو", callback_data=f"admin:plan_edit:{plan_id}:provider_plan_id")
     toggle_text = "غیرفعال کردن" if is_active else "فعال کردن"
     builder.button(text=toggle_text, callback_data=f"admin:plan_toggle:{plan_id}")

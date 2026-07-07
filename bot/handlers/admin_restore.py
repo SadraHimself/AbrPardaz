@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import io
 import os
+import re
 import subprocess
 import zipfile
 from urllib.parse import unquote, urlparse
@@ -89,22 +90,32 @@ def _run_psql(sql_bytes: bytes) -> tuple[bool, str]:
     except Exception:
         pass  # اگر نشد، lock_timeout پایین جلوی هنگ را می‌گیرد
 
-    # ۲) ریستور اتمیک — lock_timeout داخل تراکنش تا در بدترین حالت هم هنگ نکند
+    # ۲) ریستور اتمیک — lock_timeout داخل تراکنش تا در بدترین حالت هم هنگ نکند.
+    # اگر دامپ با PostgreSQL جدیدتر گرفته شده باشد، هدرش SETهایی دارد که نسخه
+    # قدیمی‌تر نمی‌شناسد (مثل transaction_timeout در PG17) — این SETها صرفاً
+    # تنظیم session هستند؛ خط خاطی حذف و خودکار دوباره تلاش می‌شود.
     sql = b"SET lock_timeout = '60s';\n" + sql_bytes
-    try:
-        result = subprocess.run(
-            base_cmd + ["-v", "ON_ERROR_STOP=1", "--single-transaction"],
-            input=sql,
-            capture_output=True,
-            env=env,
-            timeout=300,
-        )
-    except subprocess.TimeoutExpired:
-        return False, ("زمان بازیابی از ۵ دقیقه گذشت و متوقف شد. "
-                       "تراکنش برگشت خورد — دیتای فعلی دست‌نخورده است.")
-    if result.returncode != 0:
-        return False, result.stderr.decode("utf-8", errors="replace")
-    return True, ""
+    for _attempt in range(6):
+        try:
+            result = subprocess.run(
+                base_cmd + ["-v", "ON_ERROR_STOP=1", "--single-transaction"],
+                input=sql,
+                capture_output=True,
+                env=env,
+                timeout=300,
+            )
+        except subprocess.TimeoutExpired:
+            return False, ("زمان بازیابی از ۵ دقیقه گذشت و متوقف شد. "
+                           "تراکنش برگشت خورد — دیتای فعلی دست‌نخورده است.")
+        if result.returncode == 0:
+            return True, ""
+        err = result.stderr.decode("utf-8", errors="replace")
+        m = re.search(r'unrecognized configuration parameter "([^"]+)"', err)
+        if not m:
+            return False, err
+        param = m.group(1).encode()
+        sql = re.sub(rb"(?m)^SET\s+" + re.escape(param) + rb"\s*=[^;]*;\s*\n?", b"", sql)
+    return False, err
 
 
 async def _resync_servers() -> dict[str, int]:

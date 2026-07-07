@@ -47,7 +47,10 @@ async def on_error(event) -> bool:
         if upd.callback_query:
             await upd.callback_query.answer("⚠️ خطایی رخ داد. دوباره تلاش کنید.", show_alert=True)
         elif upd.message:
-            await upd.message.answer("⚠️ خطایی رخ داد. دوباره تلاش کنید.")
+            await upd.message.answer(
+                '‏<tg-emoji emoji-id="4956611513369494230">⚠️</tg-emoji> خطایی رخ داد. دوباره تلاش کنید.',
+                parse_mode="HTML",
+            )
     except Exception:
         pass
     return True  # mark as handled

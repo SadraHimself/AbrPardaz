@@ -108,13 +108,15 @@ def plans_groups_kb(entries: list) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def plans_in_group_kb(plans: list) -> InlineKeyboardMarkup:
+def plans_in_group_kb(plans: list, group_key: str = "") -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for p in plans:
         builder.button(
             text=f"{_st(p.is_active)}{p.display_name or p.name}",
             callback_data=f"admin:plan:{p.id}",
         )
+    if group_key and len(plans) > 1:
+        builder.button(text="ترتیب محصولات", callback_data=f"admin:plans_sort:{group_key}")
     builder.button(text="افزودن محصول", callback_data="admin:plan_add")
     builder.button(text="بازگشت", callback_data="admin:plans_list")
     builder.adjust(1)

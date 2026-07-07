@@ -6,16 +6,27 @@ import io
 import os
 import subprocess
 import zipfile
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.database.models import ServerStatus, User
 
 router = Router(name="admin_restore")
+
+# محدودیت دانلود Bot API تلگرام برای فایل‌ها
+_TG_DOWNLOAD_LIMIT = 20 * 1024 * 1024
+
+
+def _is_admin(user: User) -> bool:
+    """مثل بقیه بخش‌های ادمین: فلگ DB یا ADMIN_IDS از env —
+    تا بعد از ریستورِ بکاپی که فلگ ادمین ندارد هم دسترسی قطع نشود."""
+    from bot.config import settings
+    return user.is_admin or (user.telegram_id in settings.admin_ids)
 
 
 class RestoreFSM(StatesGroup):
@@ -37,7 +48,16 @@ def _confirm_kb() -> InlineKeyboardMarkup:
 
 
 def _run_psql(sql_bytes: bytes) -> tuple[bool, str]:
-    """Run psql restore. Returns (success, error_message)."""
+    """Run psql restore atomically. Returns (success, error_message).
+
+    ایمنی:
+    - --single-transaction: یا کل بکاپ اعمال می‌شود یا هیچ (شکست وسط کار،
+      دیتای فعلی را نابود نمی‌کند)
+    - ON_ERROR_STOP=1: بدون آن psql با وجود خطا exit=0 می‌داد و ریستورِ
+      خراب «موفق» گزارش می‌شد
+    - قبل از شروع، سایر اتصال‌ها (سلری/بات) قطع می‌شوند تا DROP TABLE پشت
+      قفل نماند؛ سلری در اجرای بعدی خودش دوباره وصل می‌شود
+    """
     from bot.config import settings as cfg
     url = (
         cfg.DATABASE_URL
@@ -47,22 +67,41 @@ def _run_psql(sql_bytes: bytes) -> tuple[bool, str]:
     parsed = urlparse(url)
     env = os.environ.copy()
     if parsed.password:
-        env["PGPASSWORD"] = parsed.password
+        env["PGPASSWORD"] = unquote(parsed.password)
 
-    result = subprocess.run(
-        [
-            "psql",
-            "-h", parsed.hostname or "localhost",
-            "-p", str(parsed.port or 5432),
-            "-U", parsed.username or "postgres",
-            "-d", parsed.path.lstrip("/"),
-            "--no-password",
-        ],
-        input=sql_bytes,
-        capture_output=True,
-        env=env,
-        timeout=300,
-    )
+    base_cmd = [
+        "psql",
+        "-h", parsed.hostname or "localhost",
+        "-p", str(parsed.port or 5432),
+        "-U", parsed.username or "postgres",
+        "-d", parsed.path.lstrip("/"),
+        "--no-password",
+    ]
+
+    # ۱) قطع اتصال‌های دیگر به همین دیتابیس (به‌جز اتصال خودِ این psql)
+    try:
+        subprocess.run(
+            base_cmd + ["-c",
+                        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                        "WHERE datname = current_database() AND pid <> pg_backend_pid();"],
+            capture_output=True, env=env, timeout=30,
+        )
+    except Exception:
+        pass  # اگر نشد، lock_timeout پایین جلوی هنگ را می‌گیرد
+
+    # ۲) ریستور اتمیک — lock_timeout داخل تراکنش تا در بدترین حالت هم هنگ نکند
+    sql = b"SET lock_timeout = '60s';\n" + sql_bytes
+    try:
+        result = subprocess.run(
+            base_cmd + ["-v", "ON_ERROR_STOP=1", "--single-transaction"],
+            input=sql,
+            capture_output=True,
+            env=env,
+            timeout=300,
+        )
+    except subprocess.TimeoutExpired:
+        return False, ("زمان بازیابی از ۵ دقیقه گذشت و متوقف شد. "
+                       "تراکنش برگشت خورد — دیتای فعلی دست‌نخورده است.")
     if result.returncode != 0:
         return False, result.stderr.decode("utf-8", errors="replace")
     return True, ""
@@ -138,10 +177,24 @@ async def _resync_servers() -> dict[str, int]:
 
 @router.message(F.document)
 async def handle_zip_upload(message: Message, user: User, state: FSMContext):
-    if not user.is_admin:
+    if not _is_admin(user):
+        return
+    # فقط در چت خصوصی — فوروارد بکاپ داخل گروه لاگ نباید prompt ریستور باز کند
+    if message.chat.type != "private":
         return
     doc = message.document
     if not doc or not doc.file_name or not doc.file_name.endswith(".zip"):
+        return
+
+    if (doc.file_size or 0) > _TG_DOWNLOAD_LIMIT:
+        await message.answer(
+            '‏<tg-emoji emoji-id="4956612582816351459">❌</tg-emoji> '
+            "حجم فایل بیش از ۲۰ مگابایت است — Bot API تلگرام اجازه دانلود نمی‌دهد.\n"
+            "بکاپ را مستقیم روی سرور بازیابی کنید:\n"
+            "<code>unzip backup.zip && psql -U abrpardaz -d abrpardaz "
+            "-v ON_ERROR_STOP=1 --single-transaction -f backup_*.sql</code>",
+            parse_mode="HTML",
+        )
         return
 
     size_kb = (doc.file_size or 0) // 1024
@@ -161,8 +214,9 @@ async def handle_zip_upload(message: Message, user: User, state: FSMContext):
 
 
 @router.callback_query(RestoreFSM.confirm, F.data == "restore_do")
-async def cb_restore_confirm(cb: CallbackQuery, user: User, bot: Bot, state: FSMContext):
-    if not user.is_admin:
+async def cb_restore_confirm(cb: CallbackQuery, user: User, bot: Bot,
+                             state: FSMContext, session: AsyncSession):
+    if not _is_admin(user):
         await cb.answer("دسترسی ندارید", show_alert=True)
         return
 
@@ -182,22 +236,25 @@ async def cb_restore_confirm(cb: CallbackQuery, user: User, bot: Bot, state: FSM
         buf.seek(0)
     except Exception as e:
         await cb.message.edit_text(
+            f'‏<tg-emoji emoji-id="4956612582816351459">❌</tg-emoji> '
             f"خطا در دریافت فایل:\n<code>{e}</code>",
             parse_mode="HTML",
         )
         return
 
-    # 2. Extract SQL from ZIP
+    # 2. Extract SQL from ZIP (بزرگ‌ترین فایل sql = دامپ اصلی)
     try:
         with zipfile.ZipFile(buf) as zf:
             sql_names = [n for n in zf.namelist() if n.endswith(".sql")]
             if not sql_names:
                 await cb.message.edit_text("فایل SQL داخل ZIP پیدا نشد.")
                 return
+            sql_names.sort(key=lambda n: zf.getinfo(n).file_size, reverse=True)
             sql_bytes = zf.read(sql_names[0])
             sql_kb = len(sql_bytes) // 1024
     except Exception as e:
         await cb.message.edit_text(
+            f'‏<tg-emoji emoji-id="4956612582816351459">❌</tg-emoji> '
             f"خطا در باز کردن ZIP:\n<code>{e}</code>",
             parse_mode="HTML",
         )
@@ -209,20 +266,42 @@ async def cb_restore_confirm(cb: CallbackQuery, user: User, bot: Bot, state: FSM
         parse_mode="HTML",
     )
 
-    # 3. Run psql restore in a thread (blocking subprocess)
-    ok, err = await asyncio.to_thread(_run_psql, sql_bytes)
+    # 3. سشنِ همین آپدیت را می‌بندیم و pool را خالی می‌کنیم تا اتصال زنده‌ای از
+    #    خود بات پشت DROP TABLE قفل نماند. (کامیت پایانیِ middleware بعداً روی
+    #    اتصال تازه انجام می‌شود و بی‌ضرر است.)
+    try:
+        await session.commit()
+        await session.close()
+    except Exception:
+        pass
+    try:
+        from bot.database.session import engine
+        await engine.dispose()
+    except Exception:
+        pass
+
+    # 4. Run psql restore in a thread (blocking subprocess)
+    try:
+        ok, err = await asyncio.to_thread(_run_psql, sql_bytes)
+    except Exception as e:
+        ok, err = False, str(e)
 
     if not ok:
         await cb.message.edit_text(
-            f"<b>خطا در بازیابی</b>\n\n<code>{err[:800]}</code>",
+            f'‏<tg-emoji emoji-id="4956612582816351459">❌</tg-emoji> '
+            f"<b>خطا در بازیابی</b>\n\n<code>{err[:800]}</code>\n\n"
+            "<i>بازیابی اتمیک است — دیتای فعلی دست‌نخورده باقی مانده.</i>",
             parse_mode="HTML",
         )
         return
 
-    # 4. Dispose SQLAlchemy pool so next queries get fresh connections
+    # 5. Pool تازه + ساخت جدول‌هایی که در بکاپ قدیمی نبوده‌اند (مثلاً جدول‌های جدید)
     try:
+        from bot.database.models import Base
         from bot.database.session import engine
         await engine.dispose()
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
     except Exception:
         pass
 
@@ -230,7 +309,7 @@ async def cb_restore_confirm(cb: CallbackQuery, user: User, bot: Bot, state: FSM
         "دیتابیس بازیابی شد.\nدر حال همگام‌سازی سرورها با Virtualizor..."
     )
 
-    # 5. Re-sync all servers with live Virtualizor status
+    # 6. Re-sync all servers with live Virtualizor status
     sync = await _resync_servers()
 
     await cb.message.edit_text(
@@ -238,7 +317,8 @@ async def cb_restore_confirm(cb: CallbackQuery, user: User, bot: Bot, state: FSM
         f"فایل: <code>{file_name}</code>\n"
         f"سرورهای همگام‌شده: <b>{sync['synced']}</b>\n"
         f"خطا در همگام‌سازی: <b>{sync['errors']}</b>\n\n"
-        f"ربات آماده به کار است.",
+        "برای اطمینان از پاک‌شدن کش‌ها، سرویس‌ها را ریستارت کنید:\n"
+        "<code>systemctl restart abrpardaz-bot abrpardaz-worker abrpardaz-beat</code>",
         parse_mode="HTML",
     )
 

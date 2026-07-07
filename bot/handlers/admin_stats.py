@@ -22,7 +22,7 @@ from bot.keyboards.admin import (
     finance_kb, np_gateway_kb, price_adj_categories_kb, settings_menu_kb, stats_kb,
 )
 from bot.services.billing import BillingService
-from bot.utils.loading import edit_loading
+from bot.utils.loading import ERR, edit_loading
 
 router = Router(name="admin_stats")
 
@@ -605,7 +605,7 @@ async def cb_admin_log_group(cb: CallbackQuery, session: AsyncSession):
         ])
         await cb.message.edit_text(
             "<b>تاپیک اطلاعات</b>\n\n"
-            "❌ هنوز گروهی متصل نشده.\n\n"
+            f"{ERR} هنوز گروهی متصل نشده.\n\n"
             "<b>راهنما:</b>\n"
             "۱. ربات را به یک سوپرگروه تاپیک‌دار اضافه کنید\n"
             "۲. به ربات دسترسی <b>ادمین کامل</b> بدهید\n"
@@ -648,7 +648,7 @@ async def msg_log_group_id(message: Message, state: FSMContext, session: AsyncSe
         )
     except Exception as e:
         await message.answer(
-            f"❌ اتصال به گروه ناموفق بود:\n<code>{e}</code>\n\n"
+            f"{ERR} اتصال به گروه ناموفق بود:\n<code>{e}</code>\n\n"
             "مطمئن شوید ربات ادمین گروه است.",
             parse_mode="HTML",
         )

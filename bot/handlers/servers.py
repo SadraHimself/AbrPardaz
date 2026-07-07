@@ -518,7 +518,10 @@ async def _select_category(cb: CallbackQuery, user: User, state: FSMContext,
             traffic = f"{plan.bandwidth}گیگ"
         specs = f"{plan.cpu}هسته | {ram_gb}رم | {traffic}".translate(_FA_DIGITS)
         label = f"{specs} | {plan.display_name or plan.name}"
-        builder.button(text=label, callback_data=f"buyplan:{plan.id}", **{"icon_custom_emoji_id": "5260726538302660868"})
+        # اموجی پریمیوم اختصاصی هر محصول (اختیاری — موقع ساخت/ویرایش تعیین می‌شود)
+        _pe = (plan.extra_data or {}).get("emoji_id")
+        _kw = {"icon_custom_emoji_id": _pe} if _pe else {}
+        builder.button(text=label, callback_data=f"buyplan:{plan.id}", **_kw)
     builder.button(text="بازگشت", callback_data="buy_server", **{"icon_custom_emoji_id": "5258236805890710909"})
     builder.adjust(1)
 

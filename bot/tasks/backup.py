@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import os
 import subprocess
 import zipfile
@@ -11,9 +12,60 @@ from urllib.parse import unquote, urlparse
 
 from bot.tasks.celery_app import app
 
+logger = logging.getLogger(__name__)
+
 
 def _run(coro):
     return asyncio.run(coro)
+
+
+def _notify_backup_failure(error_text: str) -> None:
+    """شکست بکاپ نباید بی‌صدا بماند — به تاپیک بکاپ (یا PM ادمین) اعلام می‌شود."""
+    async def _send():
+        from aiogram import Bot
+        from bot.config import settings as cfg
+        from bot.database.models import BotSettings
+        from bot.database.session import AsyncSessionFactory
+
+        group_id = topic_id = None
+        try:
+            async with AsyncSessionFactory() as session:
+                g = await session.get(BotSettings, "log_group_id")
+                t = await session.get(BotSettings, "log_topic_backup")
+                group_id = int(g.value) if g and g.value else None
+                topic_id = int(t.value) if t and t.value else None
+        except Exception:
+            pass
+
+        text = (
+            "⚠️ <b>بکاپ خودکار ناموفق بود!</b>\n\n"
+            f"<code>{error_text[:600]}</code>\n\n"
+            "تا رفع مشکل، بکاپ جدیدی ارسال نمی‌شود — لطفاً پیگیری کنید."
+        )
+        bot = Bot(token=cfg.BOT_TOKEN)
+        try:
+            sent = False
+            if group_id and topic_id:
+                try:
+                    await bot.send_message(group_id, text, parse_mode="HTML",
+                                           message_thread_id=topic_id)
+                    sent = True
+                except Exception:
+                    pass
+            if not sent:
+                for admin_id in (cfg.admin_ids or []):
+                    try:
+                        await bot.send_message(admin_id, text, parse_mode="HTML")
+                        break
+                    except Exception:
+                        continue
+        finally:
+            await bot.session.close()
+
+    try:
+        _run(_send())
+    except Exception:
+        logger.exception("backup failure notification also failed")
 
 
 def _pg_dump(database_url: str) -> bytes:
@@ -55,8 +107,8 @@ def _pg_dump(database_url: str) -> bytes:
     return result.stdout
 
 
-@app.task(name="bot.tasks.backup.run_database_backup")
-def run_database_backup():
+@app.task(name="bot.tasks.backup.run_database_backup", bind=True, max_retries=2)
+def run_database_backup(self):
     async def _do():
         from bot.database.session import AsyncSessionFactory
         from bot.database.models import BotSettings, Server, ServerStatus, Transaction, User
@@ -69,6 +121,7 @@ def run_database_backup():
             group_row = await session.get(BotSettings, "log_group_id")
             topic_row = await session.get(BotSettings, "log_topic_backup")
             if not group_row or not topic_row:
+                logger.warning("backup skipped: log group/topic not configured yet")
                 return
 
             group_id = int(group_row.value)
@@ -112,4 +165,10 @@ def run_database_backup():
         finally:
             await bot.session.close()
 
-    _run(_do())
+    try:
+        _run(_do())
+    except Exception as exc:
+        logger.exception("database backup failed")
+        _notify_backup_failure(f"{type(exc).__name__}: {exc}")
+        # ۵ دقیقه بعد دوباره تلاش می‌شود (تا ۲ بار)
+        raise self.retry(exc=exc, countdown=300)

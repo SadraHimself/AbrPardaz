@@ -16,7 +16,7 @@ from bot.utils.loading import ERR
 router = Router(name="zarinpal_payment")
 logger = logging.getLogger(__name__)
 
-_AMOUNTS = [50_000, 100_000, 200_000, 500_000, 1_000_000]
+_AMOUNTS = [300_000, 500_000, 1_000_000, 5_000_000, 10_000_000]
 _KYC_MSG = "برای پرداخت ریالی ابتدا باید احراز هویت کنید."
 
 _BACK = InlineKeyboardButton(text="بازگشت", callback_data="wallet",

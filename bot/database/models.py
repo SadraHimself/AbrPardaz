@@ -187,6 +187,11 @@ class ProviderAccount(Base):
     servers: Mapped[list[Server]] = relationship("Server", back_populates="provider_account")
 
 
+def plan_sort_key(plan) -> tuple:
+    """ترتیب نمایش دستی محصولات (extra_data["sort"]) — بدون sort، آخرِ لیست به‌ترتیب نام."""
+    return ((plan.extra_data or {}).get("sort", 10**9), plan.name or "")
+
+
 class ProductGroup(Base):
     """گروه محصولات — دسته‌بندی پلن‌ها + اموجی پریمیوم + مخفی‌سازی.
 

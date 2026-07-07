@@ -8,14 +8,15 @@ from aiogram import F, Router
 from aiogram.filters import Filter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, ReplyKeyboardRemove
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config import settings
 from bot.database.models import (
-    DiscountCode, PaymentOrder, Server, ServerStatus, Transaction, User, UserStatus,
+    BillingType, DiscountCode, PaymentOrder, ProviderAccount, Server, ServerStatus,
+    SuspendReason, Transaction, TransactionType, User, UserStatus,
 )
 from bot.keyboards.admin import (
     back_to_admin_kb, cancel_admin_kb, confirm_kb, user_detail_kb, users_list_kb,
@@ -514,34 +515,258 @@ async def msg_send_to_user(message: Message, state: FSMContext, session: AsyncSe
 
 # ── Payment history ───────────────────────────────────────────────────────────
 
+# ── Payment history (client-mirror view) ─────────────────────────────────────
+
+async def _render_admin_tx_page(msg, session: AsyncSession, user_id: int, page: int = 0):
+    """Same grouped/paginated view the client sees — admin-scoped callbacks."""
+    from bot.handlers.billing import _get_tx_items, _CLEANUP_HOURS, _PAGE_SIZE
+
+    items = await _get_tx_items(user_id, session)
+    if not items:
+        await msg.edit_text("هیچ تراکنشی وجود ندارد.",
+                            reply_markup=back_to_admin_kb(f"admin:user:{user_id}"))
+        return
+
+    total_pages = max(1, (len(items) + _PAGE_SIZE - 1) // _PAGE_SIZE)
+    page = max(0, min(page, total_pages - 1))
+    page_items = items[page * _PAGE_SIZE: (page + 1) * _PAGE_SIZE]
+
+    buttons = []
+    for item in page_items:
+        if item["kind"] == "srv":
+            buttons.append([InlineKeyboardButton(
+                text=f"برداشت — {item['total']:,.0f} تومان",
+                callback_data=f"admin:utxs:{user_id}:{item['server_id']}:{page}",
+                **{"style": "danger"},
+            )])
+        else:
+            is_debit = item["type"] == TransactionType.DEBIT
+            buttons.append([InlineKeyboardButton(
+                text=f"{'برداشت' if is_debit else 'واریز'} — {item['amount']:,.0f} تومان",
+                callback_data=f"admin:utxi:{user_id}:{item['tx_id']}:{page}",
+                **{"style": "danger" if is_debit else "success"},
+            )])
+
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="← قبلی", callback_data=f"admin:utxp:{user_id}:{page - 1}"))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton(text="بعدی →", callback_data=f"admin:utxp:{user_id}:{page + 1}"))
+    if nav:
+        buttons.append(nav)
+    buttons.append([InlineKeyboardButton(text="بازگشت", callback_data=f"admin:user:{user_id}")])
+
+    await msg.edit_text(
+        f"<b>تاریخچه تراکنش‌ها</b>  {page + 1}/{total_pages}\n\n"
+        f"<i>تراکنش‌ها هر {_CLEANUP_HOURS} ساعت پاک می‌شوند.</i>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
+
+
 @router.callback_query(F.data.startswith("admin:user_payments:"))
 async def cb_user_payments(cb: CallbackQuery, session: AsyncSession):
-    user_id = int(cb.data.split(":")[2])
-    result = await session.execute(
-        select(Transaction)
-        .where(Transaction.user_id == user_id)
-        .order_by(Transaction.created_at.desc())
-        .limit(10)
-    )
-    txs = list(result.scalars().all())
-    if not txs:
-        await cb.answer("هیچ تراکنشی یافت نشد.", show_alert=True)
-        return
-    lines = []
-    for tx in txs:
-        sign = "+" if tx.type.value == "credit" else "-"
-        lines.append(
-            f"{sign}{tx.amount:,.0f}T | {tx.description or '—'} | {tx.created_at.strftime('%m/%d %H:%M')}"
-        )
-    await cb.message.edit_text(
-        f"<b>آخرین ۱۰ تراکنش:</b>\n\n" + "\n".join(lines),
-        parse_mode="HTML",
-        reply_markup=back_to_admin_kb(f"admin:user:{user_id}"),
-    )
+    await cb.answer()
+    await _render_admin_tx_page(cb.message, session, int(cb.data.split(":")[2]), 0)
+
+
+@router.callback_query(F.data.startswith("admin:utxp:"))
+async def cb_admin_tx_page(cb: CallbackQuery, session: AsyncSession):
+    parts = cb.data.split(":")
+    await cb.answer()
+    await _render_admin_tx_page(cb.message, session, int(parts[2]), int(parts[3]))
+
+
+@router.callback_query(F.data.startswith("admin:utxs:"))
+async def cb_admin_tx_srv(cb: CallbackQuery, session: AsyncSession):
+    from bot.handlers.billing import _tz
+    parts = cb.data.split(":")
+    user_id, server_id, back_page = int(parts[2]), int(parts[3]), int(parts[4])
     await cb.answer()
 
+    result = await session.execute(
+        select(Transaction).where(
+            Transaction.user_id == user_id,
+            Transaction.server_id == server_id,
+            Transaction.type == TransactionType.DEBIT,
+        ).order_by(Transaction.created_at.asc())
+    )
+    hourly_txs = [t for t in result.scalars().all()
+                  if (t.description or "").startswith("ساعتی — ")]
+    server = await session.get(Server, server_id)
+    srv_name = server.name if server else f"سرور #{server_id}"
+    srv_ip = (server.ip_address or "—") if server else "—"
+    back_row = [[InlineKeyboardButton(text="بازگشت", callback_data=f"admin:utxp:{user_id}:{back_page}")]]
 
-# ── Active servers ────────────────────────────────────────────────────────────
+    if not hourly_txs:
+        await cb.message.edit_text("تراکنشی یافت نشد.",
+                                   reply_markup=InlineKeyboardMarkup(inline_keyboard=back_row))
+        return
+
+    rate = hourly_txs[0].amount
+    count = len(hourly_txs)
+    total = sum(t.amount for t in hourly_txs)
+
+    from bot.services.currency import CURRENCY_LABELS, obj_currency
+    _cur = obj_currency(server) if server else "irt"
+    if _cur != "irt" and server and server.price_hourly:
+        unit = CURRENCY_LABELS[_cur]
+        duration_line = f"مدت: {count} ساعت × {server.price_hourly:g} {unit}\n"
+        total_line = (f"مجموع: <b>{count * server.price_hourly:g} {unit}</b>\n"
+                      f"مجموع ریالی: <b>{total:,.0f} تومان</b>")
+    else:
+        duration_line = f"مدت: {count} ساعت × {rate:,.0f} تومان\n"
+        total_line = f"مجموع: <b>{total:,.0f} تومان</b>"
+
+    await cb.message.edit_text(
+        f"<b>جزئیات برداشت</b>\n\n"
+        f"سرور: <b>{srv_name}</b>\n"
+        f"آی‌پی: <code>{srv_ip}</code>\n"
+        f"نوع: ساعتی\n"
+        f"{duration_line}"
+        f"{total_line}",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=back_row),
+    )
+
+
+@router.callback_query(F.data.startswith("admin:utxi:"))
+async def cb_admin_tx_item(cb: CallbackQuery, session: AsyncSession):
+    from bot.handlers.billing import _tz, _TEHRAN
+    parts = cb.data.split(":")
+    user_id, tx_id, back_page = int(parts[2]), int(parts[3]), int(parts[4])
+    await cb.answer()
+
+    tx = await session.get(Transaction, tx_id)
+    back_row = [[InlineKeyboardButton(text="بازگشت", callback_data=f"admin:utxp:{user_id}:{back_page}")]]
+    if not tx or tx.user_id != user_id:
+        await cb.message.edit_text("تراکنش یافت نشد.",
+                                   reply_markup=InlineKeyboardMarkup(inline_keyboard=back_row))
+        return
+
+    server = await session.get(Server, tx.server_id) if tx.server_id else None
+    if tx.type == TransactionType.DEBIT:
+        label = "برداشت وجه"
+    elif tx.type == TransactionType.REFUND:
+        label = "برگشت وجه"
+    else:
+        label = "واریز"
+
+    date_str = ""
+    if tx.created_at:
+        d = _tz(tx.created_at).astimezone(_TEHRAN)
+        date_str = d.strftime("%Y/%m/%d — %H:%M")
+
+    lines = [f"<b>{label}</b>", "", f"مبلغ: <b>{tx.amount:,.0f} تومان</b>"]
+    if tx.description:
+        lines.append(f"شرح: {tx.description}")
+    if server:
+        lines.append(f"سرور: {server.name}")
+        if server.ip_address:
+            lines.append(f"آی‌پی: <code>{server.ip_address}</code>")
+    if date_str:
+        lines.append(f"{date_str}")
+
+    await cb.message.edit_text(
+        "\n".join(lines), parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=back_row),
+    )
+
+
+# ── Admin server management (full control over a user's VM) ──────────────────
+
+_BOT_FOOTER = '‏<tg-emoji emoji-id="5983580310292402968">🤖</tg-emoji> @abrmakerbot'
+
+
+async def _notify_admin_action(bot, target: User | None, text: str) -> None:
+    """پیام به کاربر بعد از هر اقدام مدیریتی روی سرویسش."""
+    if not target:
+        return
+    try:
+        await bot.send_message(
+            target.telegram_id,
+            f'‏<tg-emoji emoji-id="4915820259044230152">🔔</tg-emoji> {text}\n\n{_BOT_FOOTER}',
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+
+
+def _srv_label(server: Server) -> str:
+    return f"{server.name} ({server.ip_address or '—'})"
+
+
+async def _render_admin_server(msg, session: AsyncSession, server: Server):
+    """نمای سرور از دید ادمین — همان چیزی که کاربر می‌بیند + کنترل کامل."""
+    from bot.services.server import ServerService
+    # وضعیت زنده مثل نمای کاربر sync می‌شود
+    if server.status != ServerStatus.DELETED and server.provider_account_id and server.provider_server_id:
+        try:
+            await ServerService(session).sync_server_status(server)
+        except Exception:
+            pass
+
+    extra_data = server.extra_data or {}
+    is_running = str(extra_data.get("machine_status", "1")) == "1"
+    if server.status == ServerStatus.ACTIVE and not is_running:
+        status_label = "🔴 خاموش"
+    else:
+        status_label = {
+            ServerStatus.ACTIVE: "🟢 فعال",
+            ServerStatus.SUSPENDED: "🔴 ساسپند",
+            ServerStatus.BUILDING: "🔨 در حال ساخت",
+            ServerStatus.REBUILDING: "🔄 در حال ریبیلد",
+            ServerStatus.REBOOTING: "🔄 در حال ریبوت",
+            ServerStatus.DELETED: "⚫ حذف شده",
+            ServerStatus.PENDING: "⏳ در انتظار",
+        }.get(server.status, server.status.value)
+
+    traffic_text = ""
+    if server.traffic_limit_gb:
+        pct = int((server.traffic_used_gb or 0) / server.traffic_limit_gb * 100)
+        traffic_text = f"\n• ترافیک: {server.traffic_used_gb:.1f}/{server.traffic_limit_gb:.0f} GB ({pct}%)"
+
+    billing_label = "ساعتی" if server.billing_type == BillingType.HOURLY else "ماهیانه"
+    price = server.price_hourly if server.billing_type == BillingType.HOURLY else server.price_monthly
+    extra_ips = extra_data.get("extra_ips") or []
+    extra_ip_line = "".join(f"آیپی اضافه: <code>{ip}</code>\n" for ip in extra_ips)
+
+    sid = server.id
+    is_susp = server.status == ServerStatus.SUSPENDED
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="روشن", callback_data=f"admin:usrva:{sid}:start"),
+            InlineKeyboardButton(text="خاموش", callback_data=f"admin:usrva:{sid}:stop"),
+        ],
+        [
+            InlineKeyboardButton(text="ریبوت", callback_data=f"admin:usrva:{sid}:restart"),
+            InlineKeyboardButton(text="ریبیلد", callback_data=f"admin:usrv_rebuild:{sid}"),
+        ],
+        [InlineKeyboardButton(text=("رفع ساسپند" if is_susp else "ساسپند"),
+                              callback_data=f"admin:usrva:{sid}:{'unsuspend' if is_susp else 'suspend'}")],
+        [
+            InlineKeyboardButton(text="تغییر IP", callback_data=f"admin:usrva:{sid}:change_ip"),
+            InlineKeyboardButton(text="آیپی اضافه", callback_data=f"admin:usrva:{sid}:add_ip"),
+        ],
+        [InlineKeyboardButton(text="آمار مصرف", callback_data=f"admin:usrv_usage:{sid}")],
+        [InlineKeyboardButton(text="حذف سرور", callback_data=f"admin:usrva:{sid}:delete_confirm")],
+        [InlineKeyboardButton(text="بازگشت", callback_data=f"admin:user_servers:{server.user_id}")],
+    ])
+
+    await msg.edit_text(
+        f"<b>نام سرور:</b> {server.name}\n\n"
+        f"آیپی: <code>{server.ip_address or 'در حال تخصیص'}</code>\n"
+        f"{extra_ip_line}"
+        f"موقعیت: {server.location or 'نامشخص'}\n"
+        f"وضعیت: {status_label}\n\n"
+        f"• رم: {server.ram} MB | پردازنده: {server.cpu} | دیسک: {server.disk} GB"
+        f"{traffic_text}\n"
+        f"• {billing_label} — {(price or 0):,.0f}\n"
+        f"• ساخته شده: {server.created_at.strftime('%Y/%m/%d')}",
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
+
 
 @router.callback_query(F.data.startswith("admin:user_servers:"))
 async def cb_user_servers(cb: CallbackQuery, session: AsyncSession):
@@ -556,17 +781,268 @@ async def cb_user_servers(cb: CallbackQuery, session: AsyncSession):
     if not servers:
         await cb.answer("هیچ سروری یافت نشد.", show_alert=True)
         return
-    lines = []
+    builder = InlineKeyboardBuilder()
     for s in servers:
-        lines.append(
-            f"{s.name} | {s.ip_address or '—'} | {s.status.value}"
+        builder.button(
+            text=f"{s.name} | {s.ip_address or '—'} | {s.status.value}",
+            callback_data=f"admin:usrv:{s.id}",
         )
+    builder.button(text="بازگشت", callback_data=f"admin:user:{user_id}")
+    builder.adjust(1)
     await cb.message.edit_text(
-        f"<b>سرویس‌های کاربر ({len(servers)}):</b>\n\n" + "\n".join(lines),
+        f"<b>سرویس‌های کاربر ({len(servers)}):</b>\n\nبرای مدیریت، سرور را انتخاب کنید:",
         parse_mode="HTML",
-        reply_markup=back_to_admin_kb(f"admin:user:{user_id}"),
+        reply_markup=builder.as_markup(),
     )
     await cb.answer()
+
+
+@router.callback_query(F.data.startswith("admin:usrv:"))
+async def cb_admin_usrv_detail(cb: CallbackQuery, session: AsyncSession):
+    server = await session.get(Server, int(cb.data.split(":")[2]))
+    if not server:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    await cb.answer()
+    await _render_admin_server(cb.message, session, server)
+
+
+@router.callback_query(F.data.startswith("admin:usrva:"))
+async def cb_admin_usrv_action(cb: CallbackQuery, session: AsyncSession):
+    from bot.services.server import ServerService
+    from bot.providers.virtualizor import VirtualizorProvider
+
+    parts = cb.data.split(":")
+    server_id, action = int(parts[2]), parts[3]
+    server = await session.get(Server, server_id)
+    if not server:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    target = await session.get(User, server.user_id)
+    label = _srv_label(server)
+
+    if action == "delete_confirm":
+        await cb.answer()
+        await cb.message.edit_text(
+            f"حذف سرور <b>{server.name}</b> (کاربر <code>{target.telegram_id if target else '—'}</code>)؟\n"
+            "این عمل قابل بازگشت نیست! (سرور ماهانه هم حذف می‌شود)",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="بله، حذف شود", callback_data=f"admin:usrva:{server_id}:delete"),
+                InlineKeyboardButton(text="انصراف", callback_data=f"admin:usrv:{server_id}"),
+            ]]),
+        )
+        return
+
+    svc = ServerService(session)
+    await cb.answer("⏳ در حال انجام...")
+
+    try:
+        if action in ("start", "stop", "restart"):
+            ok = await svc.perform_action(server, action)
+            if ok and action in ("start", "stop"):
+                extra = dict(server.extra_data or {})
+                extra["machine_status"] = "1" if action == "start" else "0"
+                server.extra_data = extra
+                await session.flush()
+            verbs = {"start": "روشن شد", "stop": "خاموش شد", "restart": "ریبوت شد"}
+            if ok:
+                await _notify_admin_action(cb.bot, target,
+                                           f"کاربر گرامی، سرویس {label} توسط مدیریت {verbs[action]}")
+            await _render_admin_server(cb.message, session, server)
+
+        elif action in ("suspend", "unsuspend"):
+            ok = await svc.perform_action(server, action, reason=SuspendReason.ADMIN)
+            if ok:
+                text = ("از حالت تعلیق خارج شد" if action == "unsuspend" else "تعلیق شد")
+                await _notify_admin_action(cb.bot, target,
+                                           f"کاربر گرامی، سرویس {label} توسط مدیریت {text}")
+            await _render_admin_server(cb.message, session, server)
+
+        elif action == "change_ip":
+            old_ip = server.ip_address
+            ok = await svc.perform_action(server, "change_ip")
+            if ok:
+                try:
+                    account = await session.get(ProviderAccount, server.provider_account_id)
+                    if account:
+                        prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
+                        await prov.restart_server(server.provider_server_id)
+                except Exception:
+                    pass
+                await _notify_admin_action(
+                    cb.bot, target,
+                    f"کاربر گرامی، آیپی سرویس {server.name} توسط مدیریت تغییر کرد.\n"
+                    f"آیپی جدید: <code>{server.ip_address}</code>",
+                )
+                await cb.message.answer(
+                    f"✅ آیپی تغییر کرد: <code>{old_ip or '—'}</code> ← <code>{server.ip_address}</code>",
+                    parse_mode="HTML",
+                )
+            await _render_admin_server(cb.message, session, server)
+
+        elif action == "add_ip":
+            account = await session.get(ProviderAccount, server.provider_account_id) if server.provider_account_id else None
+            if not account:
+                await cb.message.answer("اطلاعات پروایدر یافت نشد.")
+                return
+            prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
+            new_ip = await prov.add_extra_ip(server.provider_server_id)
+            extra = dict(server.extra_data or {})
+            ips = list(extra.get("extra_ips") or [])
+            ips.append(new_ip)
+            extra["extra_ips"] = ips
+            server.extra_data = extra
+            await session.flush()
+            try:
+                await prov.restart_server(server.provider_server_id)
+            except Exception:
+                pass
+            await _notify_admin_action(
+                cb.bot, target,
+                f"کاربر گرامی، یک آیپی اضافه توسط مدیریت به سرویس {server.name} اختصاص یافت.\n"
+                f"آیپی جدید: <code>{new_ip}</code>",
+            )
+            await cb.message.answer(f"✅ آیپی اضافه: <code>{new_ip}</code>", parse_mode="HTML")
+            await _render_admin_server(cb.message, session, server)
+
+        elif action == "delete":
+            ok = await svc.perform_action(server, "delete")
+            if ok:
+                await _notify_admin_action(cb.bot, target,
+                                           f"کاربر گرامی، سرویس {label} توسط مدیریت حذف شد")
+                await cb.message.edit_text(
+                    "سرور حذف شد.",
+                    reply_markup=back_to_admin_kb(f"admin:user_servers:{server.user_id}"),
+                )
+            else:
+                await cb.message.answer("حذف ناموفق بود.")
+        else:
+            await cb.message.answer("عملیات ناشناخته.")
+    except Exception as e:
+        await cb.message.answer(
+            f'‏<tg-emoji emoji-id="4956612582816351459">❌</tg-emoji> خطا: {e}',
+            parse_mode="HTML",
+        )
+
+
+@router.callback_query(F.data.startswith("admin:usrv_usage:"))
+async def cb_admin_usrv_usage(cb: CallbackQuery, session: AsyncSession):
+    from bot.providers.virtualizor import VirtualizorProvider
+
+    server = await session.get(Server, int(cb.data.split(":")[2]))
+    if not server:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    await cb.answer("⏳ در حال خواندن مصرف...")
+
+    used = float(server.traffic_used_gb or 0)
+    account = await session.get(ProviderAccount, server.provider_account_id) if server.provider_account_id else None
+    if account and server.provider_server_id:
+        try:
+            prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
+            used = await prov.get_traffic(server.provider_server_id)
+            server.traffic_used_gb = used
+            await session.flush()
+        except Exception:
+            pass
+
+    limit = float(server.traffic_limit_gb or 0)
+    pct = max(0.0, min((used / limit * 100) if limit > 0 else 0, 100.0))
+    filled = int(round(pct / 10))
+    bar = "█" * filled + "░" * (10 - filled)
+
+    def _g(v: float) -> str:
+        return f"{v:g}" if v < 1000 else f"{v:,.0f}"
+
+    try:
+        await cb.message.edit_text(
+            f"<b>آمار مصرف — {server.name}</b>\n\n"
+            f"‏ترافیک {bar} {_g(used)} / {_g(limit)} GB ({pct:.0f}%)",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="بروزرسانی", callback_data=f"admin:usrv_usage:{server.id}")],
+                [InlineKeyboardButton(text="بازگشت", callback_data=f"admin:usrv:{server.id}")],
+            ]),
+        )
+    except Exception:
+        pass  # message not modified
+
+
+@router.callback_query(F.data.startswith("admin:usrv_rebuild:"))
+async def cb_admin_usrv_rebuild(cb: CallbackQuery, session: AsyncSession):
+    import asyncio as _ai
+    from bot.providers.virtualizor import VirtualizorProvider
+
+    server = await session.get(Server, int(cb.data.split(":")[2]))
+    if not server:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    account = await session.get(ProviderAccount, server.provider_account_id) if server.provider_account_id else None
+    if not account:
+        await cb.answer("اطلاعات پروایدر یافت نشد.", show_alert=True)
+        return
+    await cb.answer()
+    try:
+        prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
+        os_list = await _ai.wait_for(prov.list_os_templates(), timeout=12)
+    except Exception as e:
+        await cb.message.answer(f"خطا در دریافت لیست OS: {e}")
+        return
+    builder = InlineKeyboardBuilder()
+    for os_item in os_list[:20]:
+        builder.button(text=os_item["name"], callback_data=f"admin:usrv_rbdo:{server.id}:{os_item['id']}")
+    builder.button(text="انصراف", callback_data=f"admin:usrv:{server.id}")
+    builder.adjust(2)
+    await cb.message.edit_text(
+        f"<b>ریبیلد — {server.name}</b>\n\nسیستم‌عامل جدید را انتخاب کنید:\n"
+        "<i>تمام اطلاعات دیسک پاک می‌شود!</i>",
+        parse_mode="HTML",
+        reply_markup=builder.as_markup(),
+    )
+
+
+@router.callback_query(F.data.startswith("admin:usrv_rbdo:"))
+async def cb_admin_usrv_rebuild_do(cb: CallbackQuery, session: AsyncSession):
+    import secrets as _sec
+    import string as _str
+    from bot.services.server import ServerService
+
+    parts = cb.data.split(":")
+    server_id, os_id = int(parts[2]), parts[3]
+    server = await session.get(Server, server_id)
+    if not server:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    target = await session.get(User, server.user_id)
+
+    await cb.answer("⏳ در حال ریبیلد...")
+    _alpha = _str.ascii_letters + _str.digits + "!@#$%^&*"
+    new_pass = "".join(_sec.choice(_alpha) for _ in range(16))
+    try:
+        ok = await ServerService(session).perform_action(server, "rebuild", os_id=os_id, new_password=new_pass)
+        if ok:
+            extra = dict(server.extra_data or {})
+            extra["root_password"] = new_pass
+            server.extra_data = extra
+            await session.flush()
+            await _notify_admin_action(
+                cb.bot, target,
+                f"کاربر گرامی، سرویس {_srv_label(server)} توسط مدیریت ریبیلد شد.\n"
+                f"رمز root جدید: <code>{new_pass}</code>",
+            )
+            await cb.message.edit_text(
+                f"✅ ریبیلد شروع شد.\nرمز جدید: <code>{new_pass}</code>",
+                parse_mode="HTML",
+                reply_markup=back_to_admin_kb(f"admin:usrv:{server_id}"),
+            )
+        else:
+            await cb.message.answer("ریبیلد ناموفق بود.")
+    except Exception as e:
+        await cb.message.answer(
+            f'‏<tg-emoji emoji-id="4956612582816351459">❌</tg-emoji> خطا: {e}',
+            parse_mode="HTML",
+        )
 
 
 # ── User-specific discount code ───────────────────────────────────────────────

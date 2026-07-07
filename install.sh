@@ -71,6 +71,21 @@ if [[ "$MODE" == "update" ]]; then
     # Schema is managed by the bot itself (Base.metadata.create_all on startup)
     # — new tables are created automatically; no alembic step needed.
 
+    # Self-heal: make sure the DB password in .env matches the actual postgres
+    # user (a mismatch here caused login failures on fresh installs before).
+    DB_PASS_ENV=$(grep -oP 'postgresql\+asyncpg://[^:/]+:\K[^@]+' "$ENV_FILE" 2>/dev/null || true)
+    if [[ -n "$DB_PASS_ENV" ]]; then
+        if ! PGPASSWORD="$DB_PASS_ENV" psql -h localhost -p 5432 -U "$DB_USER" -d "$DB_NAME" -c "SELECT 1;" >/dev/null 2>&1; then
+            warn "DB password in .env doesn't match — re-syncing postgres user..."
+            if sudo -u postgres psql -c "ALTER USER $DB_USER WITH PASSWORD '$DB_PASS_ENV';" >/dev/null 2>&1; then
+                success "DB password re-synced from .env."
+            else
+                warn "Could not re-sync DB password. Fix manually:"
+                warn "  sudo -u postgres psql -c \"ALTER USER $DB_USER WITH PASSWORD '<pass-from-.env>';\""
+            fi
+        fi
+    fi
+
     # Restart services
     info "Restarting services..."
     RESTART_TIME=$(date "+%Y-%m-%d %H:%M:%S")
@@ -155,12 +170,35 @@ info "Setting up PostgreSQL..."
 systemctl start postgresql  || warn "PostgreSQL start failed."
 systemctl enable postgresql || warn "PostgreSQL enable failed."
 
+# Wait until postgres actually accepts connections (fresh installs are slow)
+PG_READY=0
+for i in $(seq 1 20); do
+    if sudo -u postgres psql -c "SELECT 1;" >/dev/null 2>&1; then
+        PG_READY=1; break
+    fi
+    sleep 2
+done
+[[ "$PG_READY" == "1" ]] || die "PostgreSQL did not become ready. Check: systemctl status postgresql"
+
 DB_PASS="$(openssl rand -hex 16)"
 cd /tmp
-sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';" 2>/dev/null || \
-    sudo -u postgres psql -c "ALTER USER $DB_USER WITH PASSWORD '$DB_PASS';" 2>/dev/null || true
+# Create user if missing, otherwise reset its password — never silently skip
+if sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER';" | grep -q 1; then
+    sudo -u postgres psql -c "ALTER USER $DB_USER WITH PASSWORD '$DB_PASS';" \
+        || die "Failed to set password for existing DB user '$DB_USER'."
+else
+    sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';" \
+        || die "Failed to create DB user '$DB_USER'."
+fi
 sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;" 2>/dev/null || true
-success "Database '$DB_NAME' is ready."
+sudo -u postgres psql -c "ALTER DATABASE $DB_NAME OWNER TO $DB_USER;" 2>/dev/null || true
+
+# Verify the exact credentials that will be written to .env actually work
+if PGPASSWORD="$DB_PASS" psql -h localhost -p 5432 -U "$DB_USER" -d "$DB_NAME" -c "SELECT 1;" >/dev/null 2>&1; then
+    success "Database '$DB_NAME' is ready (connection verified)."
+else
+    die "DB credential verification FAILED — the bot would not be able to connect. Check pg_hba.conf (md5/scram auth for localhost)."
+fi
 
 # ── Redis ─────────────────────────────────────────────────────
 info "Setting up Redis..."

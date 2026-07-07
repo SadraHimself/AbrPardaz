@@ -675,7 +675,8 @@ async def cb_admin_tx_item(cb: CallbackQuery, session: AsyncSession):
 
 # ── Admin server management (full control over a user's VM) ──────────────────
 
-_BOT_FOOTER = '‏<tg-emoji emoji-id="5983580310292402968">🤖</tg-emoji> @abrmakerbot'
+# فوتر امضای ربات — LRM اول خط باعث می‌شود از سمت چپ شروع شود (اموجی، بعد @id)
+_BOT_FOOTER = '‎<tg-emoji emoji-id="5258093637450866522">🤖</tg-emoji> @abrmakerbot'
 
 
 async def _notify_admin_action(bot, target: User | None, text: str) -> None:

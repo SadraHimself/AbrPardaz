@@ -11,6 +11,8 @@ from bot.config import settings
 from bot.database.models import BotSettings, PaymentOrder, User
 from bot.services.zarinpal import ZarinpalClient, ZarinpalError
 
+from bot.utils.loading import ERR
+
 router = Router(name="zarinpal_payment")
 logger = logging.getLogger(__name__)
 
@@ -84,7 +86,7 @@ async def cb_zp_amount(cb: CallbackQuery, user: User, session: AsyncSession):
         )
     except ZarinpalError as exc:
         await cb.message.edit_text(
-            f"❌ خطا در ساخت پرداخت:\n<code>{exc}</code>",
+            f"{ERR} خطا در ساخت پرداخت:\n<code>{exc}</code>",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_BACK]]),
         )

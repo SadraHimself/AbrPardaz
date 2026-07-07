@@ -263,6 +263,13 @@ async def cb_server_action(cb: CallbackQuery, user: User, session: AsyncSession)
                 await session.flush()
             elif action == "change_ip":
                 msg = f"✅ IP جدید: <code>{server.ip_address}</code>"
+            elif action == "delete":
+                msg = (
+                    f'‏<tg-emoji emoji-id="5258503720928288433">🔔</tg-emoji> '
+                    f"سرویس {server.name} با هاست‌نیم <code>{server.hostname or server.name}</code> "
+                    "با موفقیت حذف شد\n\n"
+                    '‎<tg-emoji emoji-id="5258093637450866522">🤖</tg-emoji> @abrmakerbot'
+                )
             else:
                 msg = f"✅ {label} با موفقیت انجام شد."
             await cb.message.answer(msg, parse_mode="HTML")

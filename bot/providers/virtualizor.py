@@ -1,9 +1,12 @@
 """Virtualizor KVM API client."""
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 import aiohttp
+
+logger = logging.getLogger(__name__)
 
 from .base import BaseProvider, CreateServerParams, PlanInfo, ServerInfo
 
@@ -695,10 +698,30 @@ class VirtualizorProvider(BaseProvider):
         if not ip_values:
             raise RuntimeError("هیچ آی‌پی آزادی در pool مجاز این پلن یافت نشد")
 
+        async def _assigned() -> set:
+            """IPهای فعلاً اختصاص‌یافته به این VPS (خوانده‌شده از پنل)."""
+            d = await self._request("managevps", {}, query={"vpsid": server_id})
+            raw = d.get("ips") or {}
+            ent = list(raw.values()) if isinstance(raw, dict) else (raw or [])
+            return {e.get("ip") for e in ent
+                    if isinstance(e, dict) and e.get("ip")
+                    and str(e.get("vpsid", "0")) == str(server_id)}
+
+        async def _revert() -> None:
+            revert: dict = {"editvps": 1, "num_ips": max(len(current_ips), 1)}
+            for i, ip in enumerate(current_ips):
+                revert[f"ips[{i}]"] = ip
+            try:
+                await self._request("managevps", revert, query={"vpsid": server_id})
+            except Exception as exc:
+                logger.warning("add_extra_ip: revert failed for vps %s: %s", server_id, exc)
+
         new_ip = _random.choice(ip_values)
+        before = set(current_ips)
+        logger.info("add_extra_ip vps=%s: before=%s candidate=%s", server_id, before, new_ip)
+
+        # ── تلاش ۱: لیست صریح IPها + num_ips ──────────────────────────────────
         all_ips = current_ips + [new_ip]
-        # num_ips (سقف تعداد IPv4 این VPS) باید همراه لیست بالا برود؛ وگرنه ویرچولایزور
-        # با سقف قبلی (مثلاً 1) فقط یک IP نگه می‌دارد و عملاً IP را «تعویض» می‌کند.
         payload: dict = {"editvps": 1, "num_ips": len(all_ips)}
         for i, ip in enumerate(all_ips):
             payload[f"ips[{i}]"] = ip
@@ -708,32 +731,35 @@ class VirtualizorProvider(BaseProvider):
         if not ok:
             raise RuntimeError(f"Virtualizor add-IP failed — response keys: {list(resp.keys())}")
 
-        # تأیید نتیجه: اگر IP قبلی حفظ نشده باشد یعنی افزودن واقعی انجام نشده
-        try:
-            check = await self._request("managevps", {}, query={"vpsid": server_id})
-            check_raw = check.get("ips") or {}
-            check_entries = list(check_raw.values()) if isinstance(check_raw, dict) else (check_raw or [])
-            assigned = {e.get("ip") for e in check_entries
-                        if isinstance(e, dict) and str(e.get("vpsid", "0")) == str(server_id)}
-            missing = [ip for ip in current_ips if ip not in assigned]
-            if missing:
-                # بازگرداندن حالت قبلی (فقط IPهای قبلی) و اعلام خطا
-                revert: dict = {"editvps": 1, "num_ips": len(current_ips)}
-                for i, ip in enumerate(current_ips):
-                    revert[f"ips[{i}]"] = ip
-                try:
-                    await self._request("managevps", revert, query={"vpsid": server_id})
-                except Exception:
-                    pass
-                raise RuntimeError(
-                    "پنل به‌جای افزودن، IP را جایگزین کرد (سقف IP پلن اجازه افزودن نمی‌دهد)"
-                )
-        except RuntimeError:
-            raise
-        except Exception:
-            pass  # خطای بررسی — نتیجه اصلی done بوده، ادامه می‌دهیم
+        # تأیید سخت‌گیرانه: هم IPهای قبلی و هم IP جدید باید اختصاص‌یافته باشند.
+        # (خطای خواندن = شکست؛ دیگر بی‌صدا رد نمی‌شویم)
+        assigned = await _assigned()
+        logger.info("add_extra_ip vps=%s: after attempt#1 assigned=%s", server_id, assigned)
+        if before.issubset(assigned) and new_ip in assigned:
+            return new_ip
 
-        return new_ip
+        # ── تلاش ۲: فقط num_ips (بدون لیست) — پنل خودش یک IP آزاد اضافه می‌کند ──
+        logger.warning("add_extra_ip vps=%s: attempt#1 swapped/failed — trying num_ips-only", server_id)
+        await _revert()
+        resp2 = await self._request(
+            "managevps", {"editvps": 1, "num_ips": len(current_ips) + 1},
+            query={"vpsid": server_id},
+        )
+        done2 = resp2.get("done")
+        ok2 = bool(done2) if not isinstance(done2, dict) else bool(done2.get("done"))
+        if ok2:
+            assigned2 = await _assigned()
+            logger.info("add_extra_ip vps=%s: after attempt#2 assigned=%s", server_id, assigned2)
+            added = assigned2 - before
+            if before.issubset(assigned2) and added:
+                return sorted(added)[0]
+
+        # هر دو تلاش ناموفق — برگشت کامل به حالت اولیه و خطای شفاف
+        await _revert()
+        raise RuntimeError(
+            "پنل به‌جای افزودن، IP را جایگزین می‌کند — افزودن IP دوم برای این VPS انجام نشد "
+            "(لاگ کامل در journalctl ثبت شد)"
+        )
 
     async def add_traffic(self, server_id: str, gb: int) -> bool:
         # vpsid in URL query; editvps=1 submit trigger + bandwidth in POST body

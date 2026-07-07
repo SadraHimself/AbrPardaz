@@ -84,7 +84,9 @@ class PlanFSM(StatesGroup):
     add_price_hourly = State()
     add_price_monthly = State()
     add_location = State()
+    add_emoji = State()             # اموجی پریمیوم محصول (مثل گروه — قابل رد کردن)
     edit_value = State()
+    edit_emoji = State()            # ویرایش اموجی محصول
     edit_price_currency = State()   # انتخاب واحد ارز هنگام ویرایش قیمت
     edit_plan_id = State()          # ورود Plan ID جدید → fetch از ویرچولایزور
     edit_plan_id_confirm = State()  # تأیید مشخصات پلن خوانده‌شده
@@ -951,10 +953,19 @@ async def plan_add_name(message: Message, state: FSMContext):
 
 
 @router.message(PlanFSM.add_display_name)
-async def plan_add_display_name(message: Message, state: FSMContext, session: AsyncSession):
+async def plan_add_display_name(message: Message, state: FSMContext):
     await state.update_data(display_name=message.text.strip())
-    await state.set_state(PlanFSM.add_provider)
+    await state.set_state(PlanFSM.add_emoji)
+    await message.answer(
+        "هش اموجی مخصوص محصول را وارد کنید:\n"
+        "<i>مثال: 5258503720928288433</i>\n\n"
+        "این اموجی کنار دکمه محصول در فلوی خرید نمایش داده می‌شود.",
+        parse_mode="HTML", reply_markup=skip_or_cancel_kb(),
+    )
 
+
+async def _plan_ask_provider(msg, state: FSMContext, session: AsyncSession):
+    await state.set_state(PlanFSM.add_provider)
     result = await session.execute(
         select(ProviderAccount).where(
             ProviderAccount.provider_type == ProviderType.VIRTUALIZOR,
@@ -963,10 +974,27 @@ async def plan_add_display_name(message: Message, state: FSMContext, session: As
     )
     providers = list(result.scalars().all())
     if not providers:
-        await message.answer("ابتدا یک سرور ویرچولایزور اضافه کنید.", reply_markup=back_to_admin_kb("admin:providers"))
+        await msg.answer("ابتدا یک سرور ویرچولایزور اضافه کنید.", reply_markup=back_to_admin_kb("admin:providers"))
         await state.clear()
         return
-    await message.answer("مرحله ۴ — سرور ویرچولایزور:", reply_markup=providers_select_kb(providers))
+    await msg.answer("مرحله ۴ — سرور ویرچولایزور:", reply_markup=providers_select_kb(providers))
+
+
+@router.message(PlanFSM.add_emoji)
+async def plan_add_emoji(message: Message, state: FSMContext, session: AsyncSession):
+    raw = (message.text or "").strip()
+    if not raw.isdigit():
+        await message.answer("هش اموجی باید فقط عدد باشد. دوباره وارد کنید یا «رد کردن» را بزنید:")
+        return
+    await state.update_data(plan_emoji=raw)
+    await _plan_ask_provider(message, state, session)
+
+
+@router.callback_query(PlanFSM.add_emoji, F.data == "admin:skip")
+async def plan_add_emoji_skip(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
+    await cb.answer()
+    await state.update_data(plan_emoji=None)
+    await _plan_ask_provider(cb.message, state, session)
 
 
 @router.callback_query(PlanFSM.add_provider, F.data.startswith("admin:plan_prov:"))
@@ -1232,7 +1260,10 @@ async def _save_new_plan(msg, state: FSMContext, session: AsyncSession, location
         price_monthly=data.get("price_monthly"),
         location=location,
         is_active=True,
-        extra_data={"currency": data.get("plan_currency", "irt")},
+        extra_data={
+            "currency": data.get("plan_currency", "irt"),
+            **({"emoji_id": data["plan_emoji"]} if data.get("plan_emoji") else {}),
+        },
     )
     session.add(plan)
     await session.flush()
@@ -1271,6 +1302,20 @@ async def cb_plan_edit_start(cb: CallbackQuery, state: FSMContext, session: Asyn
             parse_mode="HTML",
             reply_markup=group_pick_kb(groups, f"admin:plan_setgrp:{plan_id}",
                                        allow_new=False, cancel_cb=f"admin:plan:{plan_id}"),
+        )
+        await cb.answer()
+        return
+
+    # اموجی محصول: مثل گروه — هش جدید یا «رد کردن» برای حذف
+    if field == "emoji":
+        await state.update_data(edit_plan_id=plan_id)
+        await state.set_state(PlanFSM.edit_emoji)
+        await cb.message.edit_text(
+            "<b>ویرایش اموجی محصول</b>\n\n"
+            "هش اموجی جدید را وارد کنید:\n"
+            "<i>مثال: 5258503720928288433</i>\n\n"
+            "برای حذف اموجی، «رد کردن» را بزنید.",
+            parse_mode="HTML", reply_markup=skip_or_cancel_kb(),
         )
         await cb.answer()
         return
@@ -1315,6 +1360,41 @@ async def cb_plan_edit_start(cb: CallbackQuery, state: FSMContext, session: Asyn
         parse_mode="HTML", reply_markup=cancel_admin_kb(),
     )
     await cb.answer()
+
+
+@router.message(PlanFSM.edit_emoji)
+async def plan_edit_emoji(message: Message, state: FSMContext, session: AsyncSession):
+    raw = (message.text or "").strip()
+    if not raw.isdigit():
+        await message.answer("هش اموجی باید فقط عدد باشد. دوباره وارد کنید یا «رد کردن» را بزنید:")
+        return
+    data = await state.get_data()
+    await state.clear()
+    plan = await session.get(ServerPlan, data["edit_plan_id"])
+    if not plan:
+        await message.answer("محصول یافت نشد.")
+        return
+    extra = dict(plan.extra_data or {})
+    extra["emoji_id"] = raw
+    plan.extra_data = extra
+    await session.flush()
+    await message.answer("اموجی محصول ذخیره شد.",
+                         reply_markup=plan_detail_kb(plan.id, plan.is_active))
+
+
+@router.callback_query(PlanFSM.edit_emoji, F.data == "admin:skip")
+async def plan_edit_emoji_remove(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    await state.clear()
+    await cb.answer("اموجی حذف شد.")
+    plan = await session.get(ServerPlan, data["edit_plan_id"])
+    if not plan:
+        return
+    extra = dict(plan.extra_data or {})
+    extra.pop("emoji_id", None)
+    plan.extra_data = extra
+    await session.flush()
+    await _render_plan_detail(cb, session, plan.id)
 
 
 @router.callback_query(PlanFSM.edit_price_currency, F.data.startswith("admin:plancur:"))

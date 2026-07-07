@@ -12,6 +12,7 @@ from bot.keyboards.main import back_kb
 from bot.services.shahkar import (
     ShahkarService, normalize_card, normalize_ir_mobile, valid_birth_date, valid_national_code,
 )
+from bot.utils.loading import ERR, WARN
 
 router = Router(name="auth")
 
@@ -63,7 +64,7 @@ async def verify_full_name(message: Message, state: FSMContext):
     full = (message.text or "").strip()
     parts = full.split()
     if len(parts) < 2 or len(full) > 100:
-        await message.answer("❌ لطفاً نام و نام خانوادگی را کامل وارد کنید.")
+        await message.answer(f"{ERR} لطفاً نام و نام خانوادگی را کامل وارد کنید.", parse_mode="HTML")
         return
     await state.update_data(first_name=parts[0], last_name=" ".join(parts[1:]))
     await state.set_state(VerifyStates.national_code)
@@ -78,7 +79,7 @@ async def verify_full_name(message: Message, state: FSMContext):
 async def verify_national_code(message: Message, state: FSMContext):
     code = (message.text or "").strip().translate(_DIGIT_TRANS)
     if not valid_national_code(code):
-        await message.answer("❌ کد ملی معتبر نیست. یک کد ملی صحیح ۱۰ رقمی وارد کنید:")
+        await message.answer(f"{ERR} کد ملی معتبر نیست. یک کد ملی صحیح ۱۰ رقمی وارد کنید:", parse_mode="HTML")
         return
     await state.update_data(national_code=code)
     await state.set_state(VerifyStates.birth_date)
@@ -93,7 +94,7 @@ async def verify_national_code(message: Message, state: FSMContext):
 async def verify_birth_date(message: Message, state: FSMContext):
     bd = (message.text or "").strip().translate(_DIGIT_TRANS).replace("-", "/").replace(".", "/")
     if not valid_birth_date(bd):
-        await message.answer("❌ تاریخ تولد معتبر نیست. به‌صورت شمسی وارد کنید — مثال: 1377/07/19")
+        await message.answer(f"{ERR} تاریخ تولد معتبر نیست. به‌صورت شمسی وارد کنید — مثال: 1377/07/19", parse_mode="HTML")
         return
     await state.update_data(birth_date=bd)
     await state.set_state(VerifyStates.card_number)
@@ -110,7 +111,7 @@ async def verify_birth_date(message: Message, state: FSMContext):
 async def verify_card_number(message: Message, state: FSMContext):
     card = normalize_card((message.text or "").strip().translate(_DIGIT_TRANS))
     if not card:
-        await message.answer("❌ شماره کارت معتبر نیست. یک شماره کارت ۱۶ رقمی صحیح وارد کنید:")
+        await message.answer(f"{ERR} شماره کارت معتبر نیست. یک شماره کارت ۱۶ رقمی صحیح وارد کنید:", parse_mode="HTML")
         return
     await state.update_data(card_number=card)
     await state.set_state(VerifyStates.phone)
@@ -128,7 +129,7 @@ async def verify_phone(message: Message, user: User, state: FSMContext, session:
     raw = (message.text or "").strip().translate(_DIGIT_TRANS)
     phone = normalize_ir_mobile(raw)
     if not phone:
-        await message.answer("❌ شماره معتبر نیست. لطفاً یک شماره موبایل ایرانی معتبر وارد کنید.")
+        await message.answer(f"{ERR} شماره معتبر نیست. لطفاً یک شماره موبایل ایرانی معتبر وارد کنید.", parse_mode="HTML")
         return
 
     data = await state.get_data()
@@ -149,26 +150,30 @@ async def verify_phone(message: Message, user: User, state: FSMContext, session:
     except RuntimeError as e:
         if "not configured" in str(e):
             await wait.edit_text(
-                "⚠️ سرویس احراز هویت هنوز پیکربندی نشده است. با پشتیبانی تماس بگیرید."
+                f"{WARN} سرویس احراز هویت هنوز پیکربندی نشده است. با پشتیبانی تماس بگیرید.",
+                parse_mode="HTML",
             )
             return
         shahkar_ok = card_ok = False
     except Exception:
         await wait.edit_text(
-            "⚠️ خطا در ارتباط با سامانه احراز هویت. لطفاً کمی بعد دوباره تلاش کنید."
+            f"{WARN} خطا در ارتباط با سامانه احراز هویت. لطفاً کمی بعد دوباره تلاش کنید.",
+            parse_mode="HTML",
         )
         return
 
     if not shahkar_ok:
         await wait.edit_text(
-            "❌ شماره موبایل با کد ملی مطابقت ندارد.\n"
-            "مطمئن شوید شماره به نام همین کد ملی ثبت شده باشد و دوباره اقدام کنید."
+            f"{ERR} شماره موبایل با کد ملی مطابقت ندارد.\n"
+            "مطمئن شوید شماره به نام همین کد ملی ثبت شده باشد و دوباره اقدام کنید.",
+            parse_mode="HTML",
         )
         return
     if not card_ok:
         await wait.edit_text(
-            "❌ شماره کارت با کد ملی/تاریخ تولد مطابقت ندارد.\n"
-            "کارت بانکی باید به نام خودتان باشد. دوباره از «احراز هویت» اقدام کنید."
+            f"{ERR} شماره کارت با کد ملی/تاریخ تولد مطابقت ندارد.\n"
+            "کارت بانکی باید به نام خودتان باشد. دوباره از «احراز هویت» اقدام کنید.",
+            parse_mode="HTML",
         )
         return
 

@@ -7,7 +7,7 @@ import os
 import subprocess
 import zipfile
 from datetime import datetime
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from bot.tasks.celery_app import app
 
@@ -24,7 +24,7 @@ def _pg_dump(database_url: str) -> bytes:
     host = parsed.hostname or "localhost"
     port = str(parsed.port or 5432)
     user = parsed.username or "postgres"
-    password = parsed.password or ""
+    password = unquote(parsed.password) if parsed.password else ""
     dbname = parsed.path.lstrip("/")
 
     env = os.environ.copy()
@@ -104,7 +104,7 @@ def run_database_backup():
                     f"🖥 سرورهای فعال: {server_count}\n"
                     f"💳 تراکنش‌ها: {tx_count}\n"
                     f"📦 حجم فشرده: {size_kb} KB\n\n"
-                    f"<i>restore: psql $DATABASE_URL &lt; backup.sql</i>"
+                    f"<i>بازیابی: همین فایل ZIP را در چت خصوصی برای ربات بفرستید</i>"
                 ),
                 parse_mode="HTML",
                 message_thread_id=topic_id,

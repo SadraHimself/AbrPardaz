@@ -17,7 +17,7 @@ from bot.config import settings
 from bot.database.models import (
     DiscountCode, ProductGroup, ProviderAccount, ProviderType,
     Server, ServerPlan, ServerStatus, SubProduct, SubProductType,
-    Transaction, TransactionType, User,
+    Transaction, TransactionType, User, plan_sort_key,
 )
 from bot.keyboards.admin import (
     admin_menu_kb, back_to_admin_kb, billing_type_admin_kb,
@@ -30,7 +30,9 @@ from bot.keyboards.admin import (
 )
 from bot.providers import get_provider
 from bot.providers.virtualizor import VirtualizorProvider
-from bot.utils.loading import answer_loading, edit_loading
+import html as _html
+
+from bot.utils.loading import ERR, answer_loading, edit_loading
 from bot.services.billing import BillingService
 from bot.services.currency import CURRENCY_LABELS, fmt_price, obj_currency
 
@@ -395,9 +397,9 @@ async def cb_prov_test(cb: CallbackQuery, session: AsyncSession):
             parse_mode="HTML",
         )
     except asyncio.TimeoutError:
-        await test_msg.edit_text(f"❌ <b>تایم‌اوت</b>\n{account.api_endpoint}", parse_mode="HTML")
+        await test_msg.edit_text(f"{ERR} <b>تایم‌اوت</b>\n{account.api_endpoint}", parse_mode="HTML")
     except Exception as e:
-        await test_msg.edit_text(f"❌ <b>خطا:</b> {e}", parse_mode="HTML")
+        await test_msg.edit_text(f"{ERR} <b>خطا:</b> {_html.escape(str(e))}", parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("admin:prov_monitor:"))
@@ -571,13 +573,82 @@ async def cb_admin_plans_grp(cb: CallbackQuery, session: AsyncSession):
             return
         cond, title = ServerPlan.category == group.name, group.name
     await cb.answer()
-    result = await session.execute(select(ServerPlan).where(cond).order_by(ServerPlan.name))
-    plans = list(result.scalars().all())
+    result = await session.execute(select(ServerPlan).where(cond))
+    plans = sorted(result.scalars().all(), key=plan_sort_key)
     await cb.message.edit_text(
         f"<b>{title}</b>\n\n{len(plans)} محصول:",
         parse_mode="HTML",
-        reply_markup=plans_in_group_kb(plans),
+        reply_markup=plans_in_group_kb(plans, key),
     )
+
+
+# ─── Manual product ordering (ترتیب نمایش) ────────────────────────────────────
+
+async def _sorted_group_plans(session: AsyncSession, key: str):
+    """محصولات یک گروه به ترتیب نمایش. None یعنی گروه نامعتبر."""
+    if key == "none":
+        cond = ServerPlan.category.is_(None)
+    else:
+        group = await session.get(ProductGroup, int(key))
+        if not group:
+            return None
+        cond = ServerPlan.category == group.name
+    result = await session.execute(select(ServerPlan).where(cond))
+    return sorted(result.scalars().all(), key=plan_sort_key)
+
+
+async def _render_sort_view(msg, session: AsyncSession, key: str):
+    from aiogram.types import InlineKeyboardButton as _Btn, InlineKeyboardMarkup as _Mk
+    plans = await _sorted_group_plans(session, key)
+    if plans is None:
+        await msg.edit_text("گروه یافت نشد.")
+        return
+    rows = []
+    for p in plans:
+        rows.append([
+            _Btn(text="🔼", callback_data=f"admin:psort:{key}:{p.id}:up"),
+            _Btn(text="🔽", callback_data=f"admin:psort:{key}:{p.id}:down"),
+            _Btn(text=p.display_name or p.name, callback_data=f"admin:plan:{p.id}"),
+        ])
+    rows.append([_Btn(text="بازگشت", callback_data=f"admin:plans_grp:{key}")])
+    await msg.edit_text(
+        "<b>ترتیب نمایش محصولات</b>\n\n"
+        "با 🔼 و 🔽 جای هر محصول را عوض کنید — همین ترتیب در فلوی خرید هم اعمال می‌شود.",
+        parse_mode="HTML",
+        reply_markup=_Mk(inline_keyboard=rows),
+    )
+
+
+@router.callback_query(F.data.startswith("admin:plans_sort:"))
+async def cb_plans_sort(cb: CallbackQuery, session: AsyncSession):
+    await cb.answer()
+    await _render_sort_view(cb.message, session, cb.data.split(":")[2])
+
+
+@router.callback_query(F.data.startswith("admin:psort:"))
+async def cb_plan_sort_move(cb: CallbackQuery, session: AsyncSession):
+    _, _, key, pid, direction = cb.data.split(":")
+    plans = await _sorted_group_plans(session, key)
+    if not plans:
+        await cb.answer("گروه یافت نشد.", show_alert=True)
+        return
+    idx = next((i for i, p in enumerate(plans) if p.id == int(pid)), None)
+    if idx is None:
+        await cb.answer("محصول یافت نشد.", show_alert=True)
+        return
+    j = idx - 1 if direction == "up" else idx + 1
+    if j < 0 or j >= len(plans):
+        await cb.answer("ابتدای/انتهای لیست است.")
+        return
+    plans[idx], plans[j] = plans[j], plans[idx]
+    # نرمال‌سازی: ترتیب فعلیِ لیست عیناً ذخیره می‌شود
+    for i, p in enumerate(plans):
+        extra = dict(p.extra_data or {})
+        extra["sort"] = i
+        p.extra_data = extra
+    await session.flush()
+    await cb.answer()
+    await _render_sort_view(cb.message, session, key)
 
 
 # ─── Product groups (گروه محصولات) ────────────────────────────────────────────
@@ -1436,14 +1507,14 @@ async def plan_edit_plan_id_input(message: Message, state: FSMContext, session: 
         virt_plans = await asyncio.wait_for(prov.list_plans(), timeout=15)
         matched = next((p for p in virt_plans if str(p.provider_plan_id) == new_id), None)
     except Exception as e:
-        await wait.edit_text(f"❌ خطا در اتصال به Virtualizor: {e}\n\nدوباره Plan ID را وارد کنید:",
-                             reply_markup=cancel_admin_kb())
+        await wait.edit_text(f"{ERR} خطا در اتصال به Virtualizor: {_html.escape(str(e))}\n\nدوباره Plan ID را وارد کنید:",
+                             parse_mode="HTML", reply_markup=cancel_admin_kb())
         return
 
     if not matched:
         available = ", ".join(str(p.provider_plan_id) for p in virt_plans[:15])
         await wait.edit_text(
-            f"❌ Plan ID <code>{new_id}</code> یافت نشد.\n"
+            f"{ERR} Plan ID <code>{new_id}</code> یافت نشد.\n"
             f"IDهای موجود: <code>{available or 'هیچ'}</code>\n\nدوباره وارد کنید:",
             parse_mode="HTML", reply_markup=cancel_admin_kb(),
         )

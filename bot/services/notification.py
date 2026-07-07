@@ -4,6 +4,7 @@ from __future__ import annotations
 from aiogram import Bot
 
 from bot.database.models import Server, SuspendReason
+from bot.utils.loading import WARN
 
 
 class NotificationService:
@@ -13,7 +14,7 @@ class NotificationService:
 
     async def _send(self, telegram_id: int, text: str) -> None:
         try:
-            await self.bot.send_message(telegram_id, text)
+            await self.bot.send_message(telegram_id, text, parse_mode="HTML")
         except Exception:
             pass  # User may have blocked the bot
 
@@ -36,7 +37,7 @@ class NotificationService:
         reason_text = reasons.get(server.suspend_reason, "نامشخص")
         await self._send(
             telegram_id,
-            f"⚠️ سرور شما ساسپند شد!\n\n"
+            f"{WARN} سرور شما ساسپند شد!\n\n"
             f"🖥 نام: {server.name}\n"
             f"📋 دلیل: {reason_text}\n\n"
             f"برای رفع ساسپند، کیف پول را شارژ کنید یا با پشتیبانی تماس بگیرید.",
@@ -51,7 +52,7 @@ class NotificationService:
     async def traffic_warning(self, telegram_id: int, server: Server, percent: int) -> None:
         await self._send(
             telegram_id,
-            f"⚠️ هشدار ترافیک!\n\n"
+            f"{WARN} هشدار ترافیک!\n\n"
             f"🖥 سرور: {server.name}\n"
             f"📊 {percent}٪ از ترافیک ماهیانه شما مصرف شده.\n"
             f"برای خرید ترافیک اضافه وارد ربات شوید.",
@@ -68,7 +69,7 @@ class NotificationService:
     async def low_balance_warning(self, telegram_id: int, balance: float) -> None:
         await self._send(
             telegram_id,
-            f"⚠️ موجودی کم!\n\n"
+            f"{WARN} موجودی کم!\n\n"
             f"💰 موجودی فعلی: {balance:,.0f} تومان\n"
             f"در صورت عدم شارژ، سرور‌های شما ساسپند می‌شوند.",
         )

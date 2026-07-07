@@ -663,14 +663,38 @@ class VirtualizorProvider(BaseProvider):
             raise RuntimeError(f"Virtualizor IP change failed — response keys: {list(resp.keys())}")
         return new_ip
 
-    async def add_extra_ip(self, server_id: str) -> str:
-        """Attach ONE additional free IP to the VPS (keeps all current IPs).
+    async def _vps_ipv4s(self, server_id: str) -> list[str]:
+        """IPv4های فعلیِ یک VPS از act=vs (منبع معتبر طبق مستندات: فیلد ips = ipid→ip).
 
-        Same pool-scoped sourcing as change_ip — candidates come from the VPS's
-        own Manage page `ips` list; the difference is that the ips[] array we
-        submit contains the existing IPs PLUS the new one instead of replacing."""
+        خواندن IPهای فعلی از پاسخ managevps برای همه‌ی نصب‌ها ساختار یکسان ندارد
+        (باگ before=set() از همین بود که current تشخیص داده نمی‌شد)."""
+        data = await self._request("vs", query={"vpsid": server_id})
+        vs_list = data.get("vs", {}) or {}
+        vs = vs_list.get(str(server_id)) or (next(iter(vs_list.values())) if vs_list else {})
+        ips_field = vs.get("ips")
+        result: list[str] = []
+        if isinstance(ips_field, dict):
+            result = [str(v) for v in ips_field.values() if v]
+        elif isinstance(ips_field, list):
+            result = [str(v) for v in ips_field if v]
+        return [ip for ip in result if ip.count(".") == 3]  # فقط IPv4
+
+    async def add_extra_ip(self, server_id: str) -> str:
+        """Attach ONE additional free IP to the VPS, keeping all current IPs.
+
+        Reads current IPs from act=vs (authoritative), picks a free IP (vpsid==0)
+        from the VPS's allowed pool, then submits managevps with the FULL explicit
+        ips[] list (current + new). No num_ips — that flag REPLACES the list with
+        auto-assigned IPs instead of extending it (root cause of the swap bug)."""
         import random as _random
 
+        # IPهای فعلی از منبع معتبر
+        current_ips = await self._vps_ipv4s(server_id)
+        before = set(current_ips)
+        cur_ip = current_ips[0] if current_ips else None
+        cur_subnet = cur_ip.rsplit(".", 1)[0] if cur_ip else None
+
+        # کاندیدهای آزاد از pool مجاز همین VPS (managevps → ips با vpsid==0)
         data = await self._request("managevps", {}, query={"vpsid": server_id})
         ips_raw = data.get("ips") or {}
         entries = list(ips_raw.values()) if isinstance(ips_raw, dict) else (ips_raw or [])
@@ -679,13 +703,8 @@ class VirtualizorProvider(BaseProvider):
         def _pool(e: dict) -> str:
             return str(e.get("ippid") or e.get("ippoolid") or e.get("ipp_id") or "")
 
-        current_entries = [e for e in entries if str(e.get("vpsid", "0")) == str(server_id)]
-        current_ips = [e["ip"] for e in current_entries]
-        cur_pool = _pool(current_entries[0]) if current_entries else ""
-        cur_ip = current_ips[0] if current_ips else None
-        cur_subnet = (
-            cur_ip.rsplit(".", 1)[0] if cur_ip and str(cur_ip).count(".") == 3 else None
-        )
+        cur_entry = next((e for e in entries if e.get("ip") == cur_ip), None)
+        cur_pool = _pool(cur_entry) if cur_entry else ""
 
         free = [e for e in entries if str(e.get("vpsid", "0")) in ("0", "")]
         candidates = [e for e in free if cur_pool and _pool(e) == cur_pool]
@@ -693,36 +712,28 @@ class VirtualizorProvider(BaseProvider):
             candidates = [e for e in free if str(e.get("ip", "")).rsplit(".", 1)[0] == cur_subnet]
         if not candidates:
             candidates = free
-
-        ip_values = [e.get("ip") for e in candidates if e.get("ip")]
+        ip_values = [e.get("ip") for e in candidates
+                     if e.get("ip") and e.get("ip") not in before]
         if not ip_values:
-            raise RuntimeError("هیچ آی‌پی آزادی در pool مجاز این پلن یافت نشد")
+            raise RuntimeError("هیچ آی‌پی آزادی در pool مجاز این سرور یافت نشد")
 
-        async def _assigned() -> set:
-            """IPهای فعلاً اختصاص‌یافته به این VPS (خوانده‌شده از پنل)."""
-            d = await self._request("managevps", {}, query={"vpsid": server_id})
-            raw = d.get("ips") or {}
-            ent = list(raw.values()) if isinstance(raw, dict) else (raw or [])
-            return {e.get("ip") for e in ent
-                    if isinstance(e, dict) and e.get("ip")
-                    and str(e.get("vpsid", "0")) == str(server_id)}
+        new_ip = _random.choice(ip_values)
+        logger.info("add_extra_ip vps=%s: current=%s candidate=%s", server_id, current_ips, new_ip)
 
         async def _revert() -> None:
-            revert: dict = {"editvps": 1, "num_ips": max(len(current_ips), 1)}
+            if not current_ips:
+                return
+            revert: dict = {"editvps": 1}
             for i, ip in enumerate(current_ips):
                 revert[f"ips[{i}]"] = ip
             try:
                 await self._request("managevps", revert, query={"vpsid": server_id})
             except Exception as exc:
-                logger.warning("add_extra_ip: revert failed for vps %s: %s", server_id, exc)
+                logger.warning("add_extra_ip: revert failed vps=%s: %s", server_id, exc)
 
-        new_ip = _random.choice(ip_values)
-        before = set(current_ips)
-        logger.info("add_extra_ip vps=%s: before=%s candidate=%s", server_id, before, new_ip)
-
-        # ── تلاش ۱: لیست صریح IPها + num_ips ──────────────────────────────────
+        # لیست صریحِ کامل (فعلی‌ها + جدید) — بدون num_ips
         all_ips = current_ips + [new_ip]
-        payload: dict = {"editvps": 1, "num_ips": len(all_ips)}
+        payload: dict = {"editvps": 1}
         for i, ip in enumerate(all_ips):
             payload[f"ips[{i}]"] = ip
         resp = await self._request("managevps", payload, query={"vpsid": server_id})
@@ -731,35 +742,15 @@ class VirtualizorProvider(BaseProvider):
         if not ok:
             raise RuntimeError(f"Virtualizor add-IP failed — response keys: {list(resp.keys())}")
 
-        # تأیید سخت‌گیرانه: هم IPهای قبلی و هم IP جدید باید اختصاص‌یافته باشند.
-        # (خطای خواندن = شکست؛ دیگر بی‌صدا رد نمی‌شویم)
-        assigned = await _assigned()
-        logger.info("add_extra_ip vps=%s: after attempt#1 assigned=%s", server_id, assigned)
+        # تأیید از منبع معتبر: باید همه‌ی IPهای فعلی + جدید حاضر باشند
+        assigned = set(await self._vps_ipv4s(server_id))
+        logger.info("add_extra_ip vps=%s: after assigned=%s", server_id, assigned)
         if before.issubset(assigned) and new_ip in assigned:
             return new_ip
 
-        # ── تلاش ۲: فقط num_ips (بدون لیست) — پنل خودش یک IP آزاد اضافه می‌کند ──
-        logger.warning("add_extra_ip vps=%s: attempt#1 swapped/failed — trying num_ips-only", server_id)
+        # اگر افزوده نشد → برگشت و خطای شفاف
         await _revert()
-        resp2 = await self._request(
-            "managevps", {"editvps": 1, "num_ips": len(current_ips) + 1},
-            query={"vpsid": server_id},
-        )
-        done2 = resp2.get("done")
-        ok2 = bool(done2) if not isinstance(done2, dict) else bool(done2.get("done"))
-        if ok2:
-            assigned2 = await _assigned()
-            logger.info("add_extra_ip vps=%s: after attempt#2 assigned=%s", server_id, assigned2)
-            added = assigned2 - before
-            if before.issubset(assigned2) and added:
-                return sorted(added)[0]
-
-        # هر دو تلاش ناموفق — برگشت کامل به حالت اولیه و خطای شفاف
-        await _revert()
-        raise RuntimeError(
-            "پنل به‌جای افزودن، IP را جایگزین می‌کند — افزودن IP دوم برای این VPS انجام نشد "
-            "(لاگ کامل در journalctl ثبت شد)"
-        )
+        raise RuntimeError("افزودن آی‌پی دوم برای این سرور توسط پنل انجام نشد")
 
     async def add_traffic(self, server_id: str, gb: int) -> bool:
         # vpsid in URL query; editvps=1 submit trigger + bandwidth in POST body

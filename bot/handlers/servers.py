@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from aiogram import F, Router
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -14,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.database.models import (
     BillingType, DiscountCode, ProductGroup, ProviderAccount, ProviderType,
     Server, ServerPlan, ServerStatus, SubProduct, SubProductType, SuspendReason, User,
+    plan_sort_key,
 )
 from bot.keyboards.main import back_kb, cancel_kb
 from bot.keyboards.server import (
@@ -26,7 +28,14 @@ from bot.services.currency import obj_currency, to_toman
 from bot.services.log_service import LogService
 from bot.services.notification import NotificationService
 from bot.services.server import ServerService
-from bot.utils.loading import answer_loading, edit_loading
+from bot.utils.loading import ERR, WARN, answer_loading, edit_loading
+
+import html as _html
+
+
+def _esc(v) -> str:
+    """HTML-escape متن exception قبل از قرارگیری در پیام parse_mode=HTML."""
+    return _html.escape(str(v))
 
 router = Router(name="servers")
 
@@ -204,7 +213,7 @@ async def cb_server_action(cb: CallbackQuery, user: User, session: AsyncSession)
     if action == "rebuild_menu":
         account = await session.get(ProviderAccount, server.provider_account_id) if server.provider_account_id else None
         if not account:
-            await cb.message.answer("❌ اطلاعات پروایدر یافت نشد.")
+            await cb.message.answer(f"{ERR} اطلاعات پروایدر یافت نشد.", parse_mode="HTML")
             await cb.answer()
             return
         try:
@@ -212,7 +221,7 @@ async def cb_server_action(cb: CallbackQuery, user: User, session: AsyncSession)
             prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
             os_list = await _ai.wait_for(prov.list_os_templates(), timeout=12)
         except Exception as e:
-            await cb.message.answer(f"❌ خطا در دریافت لیست OS: {e}")
+            await cb.message.answer(f"{ERR} خطا در دریافت لیست OS: {_esc(e)}", parse_mode="HTML")
             await cb.answer()
             return
         builder = InlineKeyboardBuilder()
@@ -275,11 +284,11 @@ async def cb_server_action(cb: CallbackQuery, user: User, session: AsyncSession)
             await cb.message.answer(msg, parse_mode="HTML")
             await LogService(cb.bot, session).log_server_action(user, server, action)
         else:
-            await cb.message.answer("❌ عملیات ناموفق بود.")
+            await cb.message.answer(f"{ERR} عملیات ناموفق بود.", parse_mode="HTML")
     except NotImplementedError as e:
-        await cb.message.answer(f"⚠️ {e}")
+        await cb.message.answer(f"{WARN} {_esc(e)}", parse_mode="HTML")
     except Exception as e:
-        await cb.message.answer(f"❌ خطا: {e}")
+        await cb.message.answer(f"{ERR} خطا: {_esc(e)}", parse_mode="HTML")
 
 
 # ── Rebuild OS ───────────────────────────────────────────────────────────────
@@ -295,7 +304,7 @@ async def cb_server_rebuild_confirm(cb: CallbackQuery, user: User, session: Asyn
     await cb.message.edit_text(
         f"🔁 <b>تأیید ریبیلد</b>\n\n"
         f"سرور: <b>{server.name}</b>\n\n"
-        "⚠️ <b>ریبیلد تمام اطلاعات دیسک را پاک می‌کند!</b>\n"
+        f"{WARN} <b>ریبیلد تمام اطلاعات دیسک را پاک می‌کند!</b>\n"
         "این عمل قابل بازگشت نیست. آیا مطمئن هستید؟",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
@@ -337,7 +346,7 @@ async def cb_server_rebuild_do(cb: CallbackQuery, user: User, session: AsyncSess
             await cb.message.answer(
                 f"✅ <b>ریبیلد شروع شد.</b>\n\n"
                 f"🔑 رمز root جدید: <code>{new_root_pass}</code>\n\n"
-                "⚠️ این رمز را در جای امنی ذخیره کنید.\n"
+                f"{WARN} این رمز را در جای امنی ذخیره کنید.\n"
                 "🔔 چند دقیقه منتظر نصب OS بمانید.",
                 parse_mode="HTML",
                 reply_markup=back_kb(f"server:{server_id}"),
@@ -345,13 +354,14 @@ async def cb_server_rebuild_do(cb: CallbackQuery, user: User, session: AsyncSess
             await LogService(cb.bot, session).log_server_action(user, server, "rebuild")
         else:
             await cb.message.answer(
-                "❌ ریبیلد ناموفق بود.",
+                f"{ERR} ریبیلد ناموفق بود.",
+                parse_mode="HTML",
                 reply_markup=back_kb(f"server:{server_id}"),
             )
     except NotImplementedError as e:
-        await cb.message.answer(f"⚠️ {e}")
+        await cb.message.answer(f"{WARN} {_esc(e)}", parse_mode="HTML")
     except Exception as e:
-        await cb.message.answer(f"❌ خطا: {e}")
+        await cb.message.answer(f"{ERR} خطا: {_esc(e)}", parse_mode="HTML")
 
 
 # ── Traffic ───────────────────────────────────────────────────────────────────
@@ -463,7 +473,15 @@ async def msg_buy_server(message: Message, user: User, state: FSMContext, sessio
     await _show_buy_categories(loading, user, state, session)
 
 
-@router.callback_query(BuyServerStates.selecting_category, F.data.startswith("buygrp:"))
+# از صفحه‌های بعدی (انتخاب محصول/بیلینگ) هم دکمه «بازگشت» به همین‌جا برمی‌گردد
+_BUY_NAV_STATES = StateFilter(
+    BuyServerStates.selecting_category,
+    BuyServerStates.selecting_plan,
+    BuyServerStates.selecting_billing,
+)
+
+
+@router.callback_query(_BUY_NAV_STATES, F.data.startswith("buygrp:"))
 async def cb_select_group(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
     """ID-based group selection — resolves the group name then shows its plans."""
     group = await session.get(ProductGroup, int(cb.data.split(":")[1]))
@@ -473,7 +491,7 @@ async def cb_select_group(cb: CallbackQuery, user: User, state: FSMContext, sess
     await _select_category(cb, user, state, session, group.name)
 
 
-@router.callback_query(BuyServerStates.selecting_category, F.data.startswith("buycat:"))
+@router.callback_query(_BUY_NAV_STATES, F.data.startswith("buycat:"))
 async def cb_select_category(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
     await _select_category(cb, user, state, session, cb.data[len("buycat:"):])
 
@@ -508,9 +526,10 @@ async def _select_category(cb: CallbackQuery, user: User, state: FSMContext,
         select(ServerPlan).where(
             ServerPlan.category == category,
             ServerPlan.is_active == True,
-        ).order_by(ServerPlan.name)
+        )
     )
-    plans = list(result.scalars().all())
+    # ترتیب دستی ادمین (بخش «ترتیب محصولات»)، بدون آن: به‌ترتیب نام
+    plans = sorted(result.scalars().all(), key=plan_sort_key)
 
     if not plans:
         await cb.answer("در این دسته‌بندی محصولی موجود نیست.", show_alert=True)
@@ -570,6 +589,14 @@ async def cb_select_plan(cb: CallbackQuery, state: FSMContext, session: AsyncSes
             return
 
     if has_hourly and has_monthly:
+        # بازگشت واقعی به لیست محصولاتِ همین گروه (نه شروع از اول)
+        _grp = None
+        if plan.category:
+            _grp = (await session.execute(
+                select(ProductGroup).where(ProductGroup.name == plan.category)
+            )).scalar_one_or_none()
+        back_cb = f"buygrp:{_grp.id}" if _grp else "buy_server"
+
         await state.set_state(BuyServerStates.selecting_billing)
         await cb.message.edit_text(
             f"نوع بیلینگ را انتخاب کنید:\nپلن: {plan.display_name or plan.name}",
@@ -578,7 +605,7 @@ async def cb_select_plan(cb: CallbackQuery, state: FSMContext, session: AsyncSes
                     InlineKeyboardButton(text=f"ساعتی — {hourly_t:,.0f} تومان", callback_data="buybilling:hourly", **{"icon_custom_emoji_id": "5798535677318533269"}),
                     InlineKeyboardButton(text=f"ماهانه — {monthly_t:,.0f} تومان", callback_data="buybilling:monthly", **{"icon_custom_emoji_id": "5778496382117613636"}),
                 ],
-                [InlineKeyboardButton(text="انصراف", callback_data="cancel", **{"icon_custom_emoji_id": "5240241223632954241", "style": "danger"})],
+                [InlineKeyboardButton(text="بازگشت", callback_data=back_cb, **{"icon_custom_emoji_id": "5258236805890710909", "style": "primary"})],
             ]),
         )
     elif has_hourly:
@@ -628,9 +655,10 @@ async def msg_hostname(message: Message, user: User, state: FSMContext, session:
     raw = message.text.strip().lower()
     if not re.match(r'^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?$', raw):
         await message.answer(
-            "❌ اسم سرور نامعتبر است.\n"
+            f"{ERR} اسم سرور نامعتبر است.\n"
             "فقط حروف کوچک (a-z)، اعداد و خط تیره (-) مجاز است.\n"
-            "باید با حرف یا عدد شروع و تموم بشه:"
+            "باید با حرف یا عدد شروع و تموم بشه:",
+            parse_mode="HTML",
         )
         return
     await state.update_data(hostname=raw)
@@ -789,7 +817,7 @@ async def msg_enter_email(message: Message, user: User, state: FSMContext, sessi
     import re
     email = message.text.strip().lower()
     if not re.match(r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$', email):
-        await message.answer("❌ ایمیل نامعتبر است. لطفاً یک ایمیل معتبر وارد کنید:")
+        await message.answer(f"{ERR} ایمیل نامعتبر است. لطفاً یک ایمیل معتبر وارد کنید:", parse_mode="HTML")
         return
     user.email = email
     await session.flush()
@@ -822,13 +850,13 @@ async def msg_discount_code(message: Message, user: User, state: FSMContext, ses
     code = result.scalar_one_or_none()
 
     if not code:
-        await message.answer("❌ کد تخفیف نامعتبر است.")
+        await message.answer(f"{ERR} کد تخفیف نامعتبر است.", parse_mode="HTML")
         return
     if code.expires_at and code.expires_at < now:
-        await message.answer("❌ کد تخفیف منقضی شده.")
+        await message.answer(f"{ERR} کد تخفیف منقضی شده.", parse_mode="HTML")
         return
     if code.max_uses and code.use_count >= code.max_uses:
-        await message.answer("❌ ظرفیت این کد تخفیف پر شده.")
+        await message.answer(f"{ERR} ظرفیت این کد تخفیف پر شده.", parse_mode="HTML")
         return
 
     await state.update_data(discount_id=code.id, discount_percent=code.discount_percent)
@@ -976,7 +1004,7 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
             user, server, plan_name, billing_str, final_price or 0
         )
     except Exception as e:
-        await cb.message.edit_text(f"❌ خطا در ساخت سرور: {e}\nبا پشتیبانی تماس بگیرید.")
+        await cb.message.edit_text(f"{ERR} خطا در ساخت سرور: {_esc(e)}\nبا پشتیبانی تماس بگیرید.", parse_mode="HTML")
 
 
 # ── Change IP ─────────────────────────────────────────────────────────────────
@@ -1077,7 +1105,7 @@ async def cb_change_ip_do(cb: CallbackQuery, user: User, session: AsyncSession):
         if fee > 0:
             await billing.credit(user.id, fee, description=f"برگشت وجه تغییر IP — {server.name}")
         await wait.edit_text(
-            f"❌ <b>تغییر IP ناموفق بود:</b> {e}\n\nوجه برگشت داده شد.",
+            f"{ERR} <b>تغییر IP ناموفق بود:</b> {_esc(e)}\n\nوجه برگشت داده شد.",
             parse_mode="HTML",
             reply_markup=back_kb(f"server:{server_id}"),
         )
@@ -1401,12 +1429,13 @@ async def cb_change_password_do(cb: CallbackQuery, user: User, session: AsyncSes
             await LogService(cb.bot, session).log_server_action(user, server, "change_password")
         else:
             await wait.edit_text(
-                "❌ تغییر رمز ناموفق بود.",
+                f"{ERR} تغییر رمز ناموفق بود.",
+                parse_mode="HTML",
                 reply_markup=back_kb(f"server:{server_id}"),
             )
     except Exception as e:
         await wait.edit_text(
-            f"❌ <b>خطا:</b> {e}",
+            f"{ERR} <b>خطا:</b> {_esc(e)}",
             parse_mode="HTML",
             reply_markup=back_kb(f"server:{server_id}"),
         )
@@ -1466,8 +1495,8 @@ async def edit_disk(message: Message, user: User, state: FSMContext, session: As
     try:
         svc = ServerService(session)
         ok = await svc.perform_action(server, "edit", **kwargs)
-        await message.answer("✅ سخت‌افزار ویرایش شد." if ok else "❌ ویرایش ناموفق بود.")
+        await message.answer("✅ سخت‌افزار ویرایش شد." if ok else f"{ERR} ویرایش ناموفق بود.", parse_mode="HTML")
     except NotImplementedError:
-        await message.answer("⚠️ این پروایدر ویرایش آنلاین را پشتیبانی نمی‌کند.")
+        await message.answer(f"{WARN} این پروایدر ویرایش آنلاین را پشتیبانی نمی‌کند.", parse_mode="HTML")
     except Exception as e:
-        await message.answer(f"❌ خطا: {e}")
+        await message.answer(f"{ERR} خطا: {_esc(e)}", parse_mode="HTML")

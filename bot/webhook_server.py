@@ -207,7 +207,7 @@ async def _handle_zarinpal_callback(request: web.Request) -> web.Response:
                         u.telegram_id,
                         '<tg-emoji emoji-id="4956612582816351459">❌</tg-emoji> '
                         "کاربر گرامی، پرداخت ریالی شما به‌خاطر عدم تطابق کارت بانکی با صاحب کد ملی رد شد.\n\n"
-                        '<tg-emoji emoji-id="5983580310292402968">🤖</tg-emoji> @abrmakerbot',
+                        '‎<tg-emoji emoji-id="5258093637450866522">🤖</tg-emoji> @abrmakerbot',
                         parse_mode="HTML",
                     )
                 except Exception:

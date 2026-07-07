@@ -14,6 +14,8 @@ from bot.config import settings
 from bot.database.models import BotSettings, CryptoPayment, User
 from bot.services.nowpayments import NOWPaymentsClient, NOWPaymentsError
 
+from bot.utils.loading import ERR
+
 router = Router(name="crypto_payment")
 logger = logging.getLogger(__name__)
 
@@ -241,7 +243,7 @@ async def cb_np_currency(cb: CallbackQuery, user: User, session: AsyncSession):
         )
     except NOWPaymentsError as exc:
         await cb.message.edit_text(
-            f"❌ خطا در ساخت درخواست پرداخت:\n<code>{exc}</code>",
+            f"{ERR} خطا در ساخت درخواست پرداخت:\n<code>{exc}</code>",
             parse_mode="HTML",
             reply_markup=_BACK_KB,
         )

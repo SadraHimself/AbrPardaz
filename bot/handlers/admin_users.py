@@ -728,7 +728,14 @@ async def _render_admin_server(msg, session: AsyncSession, server: Server):
         traffic_text = f"\n• ترافیک: {server.traffic_used_gb:.1f}/{server.traffic_limit_gb:.0f} GB ({pct}%)"
 
     billing_label = "ساعتی" if server.billing_type == BillingType.HOURLY else "ماهیانه"
-    price = server.price_hourly if server.billing_type == BillingType.HOURLY else server.price_monthly
+    price = (server.price_hourly if server.billing_type == BillingType.HOURLY else server.price_monthly) or 0
+    # قیمت ارزی → معادل ریالی با نرخ روز (مثل نمای کاربر)
+    from bot.services.currency import obj_currency, to_toman
+    _cur = obj_currency(server)
+    if _cur != "irt" and price:
+        _toman = await to_toman(session, price, _cur)
+        if _toman > 0:
+            price = _toman
     extra_ips = extra_data.get("extra_ips") or []
     extra_ip_line = "".join(f"آیپی اضافه: <code>{ip}</code>\n" for ip in extra_ips)
 
@@ -762,7 +769,7 @@ async def _render_admin_server(msg, session: AsyncSession, server: Server):
         f"وضعیت: {status_label}\n\n"
         f"• رم: {server.ram} MB | پردازنده: {server.cpu} | دیسک: {server.disk} GB"
         f"{traffic_text}\n"
-        f"• {billing_label} — {(price or 0):,.0f}\n"
+        f"• {billing_label} — {price:,.0f} تومان\n"
         f"• ساخته شده: {server.created_at.strftime('%Y/%m/%d')}",
         parse_mode="HTML",
         reply_markup=kb,

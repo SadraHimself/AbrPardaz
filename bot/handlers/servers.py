@@ -132,8 +132,15 @@ async def _render_server_detail(cb: CallbackQuery, user: User, session: AsyncSes
         traffic_text = f"\n• ترافیک: {server.traffic_used_gb:.1f}/{server.traffic_limit_gb:.0f} GB ({pct}%)"
 
     billing_label = "ساعتی" if server.billing_type == BillingType.HOURLY else "ماهیانه"
-    price = server.price_hourly if server.billing_type == BillingType.HOURLY else server.price_monthly
+    price = (server.price_hourly if server.billing_type == BillingType.HOURLY else server.price_monthly) or 0
     price_unit = "تومان/ساعت" if server.billing_type == BillingType.HOURLY else "تومان/ماه"
+    # سرور با قیمت ارزی (یورو/دلار): معادل ریالی با نرخ روز نمایش داده می‌شود
+    # (نرخ هر ۸ ساعت آپدیت می‌شود → این عدد هم خودکار همراهش عوض می‌شود)
+    _cur = obj_currency(server)
+    if _cur != "irt" and price:
+        _toman = await to_toman(session, price, _cur)
+        if _toman > 0:
+            price = _toman
 
     _extra_ips = (server.extra_data or {}).get("extra_ips") or []
     extra_ip_line = "".join(f"آیپی اضافه: <code>{ip}</code>\n" for ip in _extra_ips)

@@ -78,9 +78,39 @@ def _join_channels_kb(channels: list[str]) -> InlineKeyboardMarkup:
     buttons = []
     for ch in channels:
         display = ch.lstrip("@") if ch.startswith("@") else ch
-        buttons.append([InlineKeyboardButton(text=f"📢 عضویت در {display}", url=f"https://t.me/{ch.lstrip('@')}")])
-    buttons.append([InlineKeyboardButton(text="✅ بررسی عضویت", callback_data="check_join")])
+        buttons.append([InlineKeyboardButton(
+            text=f"عضویت در {display}",
+            url=f"https://t.me/{ch.lstrip('@')}",
+            **{"icon_custom_emoji_id": "5458904472598095631"},
+        )])
+    buttons.append([InlineKeyboardButton(
+        text="بررسی عضویت", callback_data="check_join",
+        **{"icon_custom_emoji_id": "5206607081334906820"},
+    )])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def _join_prompt_text(count: int) -> str:
+    where = "کانال زیر" if count == 1 else "کانال‌های زیر"
+    return (
+        '‏<tg-emoji emoji-id="5258476306152038031">📢</tg-emoji> <b>عضویت اجباری</b>\n\n'
+        f"برای استفاده از ربات، ابتدا در {where} عضو شوید:"
+    )
+
+
+async def send_entry_gate(bot, chat_id: int, session: AsyncSession, user: User) -> None:
+    """گیت ورود برای کاربری که هنوز قوانین را نپذیرفته:
+    اول عضویت اجباری، بعد بلافاصله قوانین. (از middleware هم استفاده می‌شود)"""
+    channels = await _get_force_channels(session)
+    not_joined = await _check_membership(bot, user.telegram_id, channels) if channels else []
+    if not_joined:
+        await bot.send_message(
+            chat_id, _join_prompt_text(len(not_joined)),
+            parse_mode="HTML", reply_markup=_join_channels_kb(not_joined),
+        )
+        return
+    terms_text = await _get_terms_text(session)
+    await bot.send_message(chat_id, terms_text, parse_mode="HTML", reply_markup=_terms_kb())
 
 
 # ── Terms helpers ─────────────────────────────────────────────────────────────
@@ -133,24 +163,22 @@ async def cmd_start(message: Message, user: User, session: AsyncSession,
         await message.answer(maint_text)
         return
 
-    # 2. Force-join channels (if any configured)
+    # 2+3. گیت ورود: عضویت اجباری → بلافاصله قوانین (تا پذیرش، منو باز نمی‌شود)
+    if not user.terms_accepted_at:
+        await send_entry_gate(message.bot, message.chat.id, session, user)
+        return
+
+    # کاربر پذیرفته ولی شاید بعداً کانال را ترک کرده — چک عضویت سرِ هر /start
     channels = await _get_force_channels(session)
     if channels:
         not_joined = await _check_membership(message.bot, message.from_user.id, channels)
         if not_joined:
             await message.answer(
-                "📢 <b>عضویت اجباری</b>\n\n"
-                "برای استفاده از ربات، ابتدا در کانال‌های زیر عضو شوید:",
+                _join_prompt_text(len(not_joined)),
                 parse_mode="HTML",
                 reply_markup=_join_channels_kb(not_joined),
             )
             return
-
-    # 3. Terms acceptance
-    if not user.terms_accepted_at:
-        terms_text = await _get_terms_text(session)
-        await message.answer(terms_text, parse_mode="HTML", reply_markup=_terms_kb())
-        return
 
     await _send_welcome(message, user, session)
 

@@ -601,10 +601,8 @@ async def cb_select_plan(cb: CallbackQuery, state: FSMContext, session: AsyncSes
         await cb.message.edit_text(
             f"نوع بیلینگ را انتخاب کنید:\nپلن: {plan.display_name or plan.name}",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [
-                    InlineKeyboardButton(text=f"ساعتی — {hourly_t:,.0f} تومان", callback_data="buybilling:hourly", **{"icon_custom_emoji_id": "5798535677318533269"}),
-                    InlineKeyboardButton(text=f"ماهانه — {monthly_t:,.0f} تومان", callback_data="buybilling:monthly", **{"icon_custom_emoji_id": "5778496382117613636"}),
-                ],
+                [InlineKeyboardButton(text=f"ساعتی — {hourly_t:,.0f} تومان", callback_data="buybilling:hourly", **{"icon_custom_emoji_id": "5798535677318533269"})],
+                [InlineKeyboardButton(text=f"ماهانه — {monthly_t:,.0f} تومان", callback_data="buybilling:monthly", **{"icon_custom_emoji_id": "5778496382117613636"})],
                 [InlineKeyboardButton(text="بازگشت", callback_data=back_cb, **{"icon_custom_emoji_id": "5258236805890710909", "style": "primary"})],
             ]),
         )

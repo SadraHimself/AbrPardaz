@@ -99,4 +99,28 @@ class AuthMiddleware(BaseMiddleware):
             data["user"] = user
             data["is_new_user"] = is_new
 
+            # ── گیت ورود: تا وقتی قوانین پذیرفته نشده، فقط فلوی ورود مجاز است ──
+            # (بدون این، کاربر جدید می‌توانست با تایپ «تهیه سرور» گیت را دور بزند)
+            if not user.terms_accepted_at and not is_admin:
+                allowed = False
+                if isinstance(event, Update):
+                    if event.callback_query:
+                        cbd = event.callback_query.data or ""
+                        allowed = cbd in ("check_join", "accept_terms", "decline_terms")
+                    elif event.message:
+                        allowed = (event.message.text or "").startswith("/start")
+                if not allowed:
+                    from bot.handlers.start import send_entry_gate
+                    bot = data.get("bot")
+                    try:
+                        if isinstance(event, Update) and event.callback_query:
+                            await event.callback_query.answer(
+                                "ابتدا مراحل ورود را کامل کنید.", show_alert=True,
+                            )
+                        if bot:
+                            await send_entry_gate(bot, user.telegram_id, session, user)
+                    except Exception:
+                        pass
+                    return  # هندلر اصلی اجرا نمی‌شود
+
         return await handler(event, data)

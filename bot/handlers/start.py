@@ -113,7 +113,6 @@ async def _get_terms_text(session: AsyncSession) -> str:
 def _terms_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="قبول می‌کنم", callback_data="accept_terms", **{"icon_custom_emoji_id": "5206607081334906820"})],
-        [InlineKeyboardButton(text="رد کردن", callback_data="decline_terms", **{"icon_custom_emoji_id": "5240241223632954241"})],
     ])
 
 

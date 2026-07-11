@@ -52,6 +52,24 @@ async def to_toman(session: AsyncSession, amount: float, currency: str) -> float
     return float(amount) * rate
 
 
+async def server_live_price(session: AsyncSession, server, hourly: bool) -> tuple[float, str]:
+    """قیمت لحظه‌ایِ یک سرور: اول از پلنِ متصل (extra_data.plan_id) خوانده می‌شود
+    تا تغییر قیمت پلن فوراً روی سرورهای موجود مشتری‌ها هم اعمال شود؛
+    اگر پلن حذف شده یا لینک نداشت، کپیِ ذخیره‌شده روی خود سرور مبناست.
+
+    خروجی: (مقدار به ارز پلن، ارز)"""
+    plan_id = (getattr(server, "extra_data", None) or {}).get("plan_id")
+    if plan_id:
+        from bot.database.models import ServerPlan
+        plan = await session.get(ServerPlan, plan_id)
+        if plan:
+            amount = plan.price_hourly if hourly else plan.price_monthly
+            if amount:
+                return float(amount), obj_currency(plan)
+    amount = server.price_hourly if hourly else server.price_monthly
+    return float(amount or 0), obj_currency(server)
+
+
 def fmt_price(amount: float, currency: str) -> str:
     """Human price string in the plan's own currency (0.01 یورو / 1,500 تومان)."""
     cur = (currency or "irt").lower()

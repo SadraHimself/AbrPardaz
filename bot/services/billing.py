@@ -76,17 +76,29 @@ class BillingService:
 
     # ── Hourly billing ────────────────────────────────────────────────────────
 
+    def _sync_price_copy(self, server: Server, amount: float, currency: str, hourly: bool) -> None:
+        """کپی قیمت/ارز روی رکورد سرور را با قیمت روز پلن همگام نگه می‌دارد
+        (برای نمایش‌ها و fallback وقتی پلن حذف شود)."""
+        field = "price_hourly" if hourly else "price_monthly"
+        if getattr(server, field) != amount:
+            setattr(server, field, amount)
+        if obj_currency(server) != currency:
+            extra = dict(server.extra_data or {})
+            extra["currency"] = currency
+            server.extra_data = extra
+
     async def charge_hourly(self, server: Server) -> bool:
         """
         Charge one hour of usage (always debited in Toman; currency-priced
         servers are converted with the live rate). Returns False if balance
         insufficient (caller should suspend the server).
         """
-        amount = server.price_hourly or 0.0
+        # قیمت لحظه‌ای از خودِ پلن — تغییر قیمت پلن فوراً روی سرورهای موجود اعمال می‌شود
+        from bot.services.currency import server_live_price
+        amount, currency = await server_live_price(self.session, server, hourly=True)
         if amount <= 0:
             return True
-
-        currency = obj_currency(server)
+        self._sync_price_copy(server, amount, currency, hourly=True)
         if currency == "irt":
             amount_toman = amount
         else:
@@ -117,11 +129,12 @@ class BillingService:
     # ── Monthly billing ───────────────────────────────────────────────────────
 
     async def charge_monthly(self, server: Server) -> bool:
-        amount = server.price_monthly or 0.0
+        # قیمت لحظه‌ای از خودِ پلن (مثل ساعتی) — تمدید همیشه با قیمت روز
+        from bot.services.currency import server_live_price
+        amount, currency = await server_live_price(self.session, server, hourly=False)
         if amount <= 0:
             return True
-
-        currency = obj_currency(server)
+        self._sync_price_copy(server, amount, currency, hourly=False)
         if currency == "irt":
             amount_toman = amount
         else:

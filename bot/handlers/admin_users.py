@@ -728,10 +728,10 @@ async def _render_admin_server(msg, session: AsyncSession, server: Server):
         traffic_text = f"\n• ترافیک: {server.traffic_used_gb:.1f}/{server.traffic_limit_gb:.0f} GB ({pct}%)"
 
     billing_label = "ساعتی" if server.billing_type == BillingType.HOURLY else "ماهیانه"
-    price = (server.price_hourly if server.billing_type == BillingType.HOURLY else server.price_monthly) or 0
-    # قیمت ارزی → معادل ریالی با نرخ روز (مثل نمای کاربر)
-    from bot.services.currency import obj_currency, to_toman
-    _cur = obj_currency(server)
+    # قیمت لحظه‌ای از خودِ پلن + تبدیل ارزی با نرخ روز (مثل نمای کاربر)
+    from bot.services.currency import server_live_price, to_toman
+    price, _cur = await server_live_price(session, server,
+                                          hourly=server.billing_type == BillingType.HOURLY)
     if _cur != "irt" and price:
         _toman = await to_toman(session, price, _cur)
         if _toman > 0:

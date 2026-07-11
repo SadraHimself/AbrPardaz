@@ -1572,6 +1572,38 @@ async def cb_plan_setgrp(cb: CallbackQuery, session: AsyncSession):
     await _render_plan_detail(cb, session, plan_id)
 
 
+async def _propagate_plan_price(session: AsyncSession, plan: ServerPlan) -> int:
+    """قیمت/ارز جدید پلن روی سرورهای موجودِ مشتری‌ها هم اعمال می‌شود.
+
+    سرورهای جدید plan_id دارند؛ سرورهای قدیمیِ بدون لینک، با تطبیق
+    پروایدر + مشخصات (رم/سی‌پی‌یو/دیسک) یک‌بار adopt می‌شوند و از آن به بعد
+    بیلینگ همیشه قیمت روز پلن را می‌خواند."""
+    result = await session.execute(
+        select(Server).where(Server.status != ServerStatus.DELETED)
+    )
+    cur = (plan.extra_data or {}).get("currency", "irt")
+    count = 0
+    for s in result.scalars().all():
+        extra = dict(s.extra_data or {})
+        linked = extra.get("plan_id") == plan.id
+        if not linked and extra.get("plan_id") is None:
+            linked = (
+                s.provider_account_id == plan.provider_account_id
+                and s.ram == plan.ram and s.cpu == plan.cpu and s.disk == plan.disk
+            )
+            if linked:
+                extra["plan_id"] = plan.id
+        if not linked:
+            continue
+        s.price_hourly = plan.price_hourly
+        s.price_monthly = plan.price_monthly
+        extra["currency"] = cur
+        s.extra_data = extra
+        count += 1
+    await session.flush()
+    return count
+
+
 @router.message(PlanFSM.edit_value)
 async def plan_edit_value(message: Message, state: FSMContext, session: AsyncSession):
     data = await state.get_data()
@@ -1601,6 +1633,10 @@ async def plan_edit_value(message: Message, state: FSMContext, session: AsyncSes
                         f"\n\n⚠️ واحد قیمت در سطح محصول است — قیمت {other_label} هم از این پس "
                         f"به {CURRENCY_LABELS[new_cur]} تفسیر می‌شود؛ در صورت نیاز آن را هم ویرایش کنید."
                     )
+            # اعمال قیمت جدید روی سرورهای فعالِ همین پلن (مشتری‌های قبلی)
+            synced = await _propagate_plan_price(session, plan)
+            if synced:
+                warn += f"\n\nقیمت جدید روی {synced} سرور فعال مشتری‌ها هم اعمال شد."
         elif field in ("ram", "cpu", "disk", "bandwidth"):
             setattr(plan, field, int(raw))
         else:

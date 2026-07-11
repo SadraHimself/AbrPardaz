@@ -24,7 +24,7 @@ from bot.keyboards.server import (
 )
 from bot.providers.virtualizor import VirtualizorProvider
 from bot.services.billing import BillingService
-from bot.services.currency import obj_currency, to_toman
+from bot.services.currency import obj_currency, server_live_price, to_toman
 from bot.services.log_service import LogService
 from bot.services.notification import NotificationService
 from bot.services.server import ServerService
@@ -132,11 +132,11 @@ async def _render_server_detail(cb: CallbackQuery, user: User, session: AsyncSes
         traffic_text = f"\n• ترافیک: {server.traffic_used_gb:.1f}/{server.traffic_limit_gb:.0f} GB ({pct}%)"
 
     billing_label = "ساعتی" if server.billing_type == BillingType.HOURLY else "ماهیانه"
-    price = (server.price_hourly if server.billing_type == BillingType.HOURLY else server.price_monthly) or 0
     price_unit = "تومان/ساعت" if server.billing_type == BillingType.HOURLY else "تومان/ماه"
-    # سرور با قیمت ارزی (یورو/دلار): معادل ریالی با نرخ روز نمایش داده می‌شود
-    # (نرخ هر ۸ ساعت آپدیت می‌شود → این عدد هم خودکار همراهش عوض می‌شود)
-    _cur = obj_currency(server)
+    # قیمت لحظه‌ای از خودِ پلن (تغییر قیمت پلن فوراً همین‌جا دیده می‌شود)؛
+    # قیمت ارزی با نرخ روز (آپدیت هر ۸ ساعت) به ریال تبدیل می‌شود
+    price, _cur = await server_live_price(session, server,
+                                          hourly=server.billing_type == BillingType.HOURLY)
     if _cur != "irt" and price:
         _toman = await to_toman(session, price, _cur)
         if _toman > 0:

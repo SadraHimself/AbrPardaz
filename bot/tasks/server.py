@@ -244,6 +244,91 @@ def check_providers_health():
     _run(_do())
 
 
+@app.task(name="bot.tasks.server.sync_hetzner_catalog", bind=True, max_retries=1)
+def sync_hetzner_catalog(self):
+    """هر ۳۰ دقیقه موجودی کاتالوگ هتزنر sync می‌شود:
+    - پلن ایمپورت‌شده‌ای که در لوکیشنش ناموجود شود → خودکار غیرفعال + لاگ
+    - اگر دوباره موجود شود → وضعیت قبلی برمی‌گردد + لاگ
+    - قیمت خرید (cost_hourly/cost_monthly) هم با نرخ روز هتزنر آپدیت می‌شود
+    """
+    async def _do():
+        from bot.database.session import AsyncSessionFactory, engine
+        try:
+            await engine.dispose(close=False)
+        except Exception:
+            pass
+        from aiogram import Bot
+        from bot.config import settings
+        from bot.database.models import ProviderAccount, ProviderType, ServerPlan
+        from bot.providers.hetzner import HetznerProvider
+        from bot.services.log_service import LogService
+        from sqlalchemy import select
+
+        async with AsyncSessionFactory() as session:
+            accounts = list((await session.execute(
+                select(ProviderAccount).where(
+                    ProviderAccount.provider_type == ProviderType.HETZNER,
+                    ProviderAccount.is_active == True,
+                )
+            )).scalars().all())
+            if not accounts:
+                return
+
+            bot = Bot(token=settings.BOT_TOKEN)
+            log = LogService(bot, session)
+            try:
+                for account in accounts:
+                    plans = list((await session.execute(
+                        select(ServerPlan).where(
+                            ServerPlan.provider_account_id == account.id
+                        )
+                    )).scalars().all())
+                    if not plans:
+                        continue
+                    prov = HetznerProvider(api_token=account.api_key or "")
+                    for loc in {p.location for p in plans if p.location}:
+                        try:
+                            offered = {o.provider_plan_id: o
+                                       for o in await prov.list_plans(location=loc)}
+                        except Exception:
+                            continue  # خطای گذرا — دور بعدی جبران می‌شود
+                        for plan in [p for p in plans if p.location == loc]:
+                            extra = dict(plan.extra_data or {})
+                            info = offered.get(plan.provider_plan_id)
+                            if info is None:
+                                if not extra.get("unavailable"):
+                                    extra["unavailable"] = True
+                                    extra["was_active"] = plan.is_active
+                                    plan.is_active = False
+                                    plan.extra_data = extra
+                                    await log.log_plan_unavailable(
+                                        plan.display_name or plan.name, loc)
+                                continue
+                            changed = False
+                            if extra.get("cost_hourly") != info.price_hourly:
+                                extra["cost_hourly"] = info.price_hourly
+                                changed = True
+                            if extra.get("cost_monthly") != info.price_monthly:
+                                extra["cost_monthly"] = info.price_monthly
+                                changed = True
+                            if extra.get("unavailable"):
+                                extra.pop("unavailable", None)
+                                plan.is_active = bool(extra.pop("was_active", False))
+                                changed = True
+                                await log.log_plan_available(
+                                    plan.display_name or plan.name, loc)
+                            if changed:
+                                plan.extra_data = extra
+                await session.commit()
+            finally:
+                await bot.session.close()
+
+    try:
+        _run(_do())
+    except Exception as exc:
+        raise self.retry(exc=exc, countdown=120)
+
+
 @app.task(name="bot.tasks.server.notify_traffic_warning")
 def notify_traffic_warning(user_id: int, server_id: int, percent: int):
     async def _do():

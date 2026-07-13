@@ -146,7 +146,8 @@ def group_pick_kb(groups: list, prefix: str, allow_new: bool = True,
     return builder.as_markup()
 
 
-def plan_detail_kb(plan_id: int, is_active: bool) -> InlineKeyboardMarkup:
+def plan_detail_kb(plan_id: int, is_active: bool, provider_type=None) -> InlineKeyboardMarkup:
+    from bot.database.models import ProviderType as _PT
     builder = InlineKeyboardBuilder()
     builder.button(text="قیمت ساعتی", callback_data=f"admin:plan_edit:{plan_id}:price_hourly")
     builder.button(text="قیمت ماهانه", callback_data=f"admin:plan_edit:{plan_id}:price_monthly")
@@ -154,7 +155,9 @@ def plan_detail_kb(plan_id: int, is_active: bool) -> InlineKeyboardMarkup:
     builder.button(text="گروه محصول", callback_data=f"admin:plan_edit:{plan_id}:category")
     builder.button(text="نام نمایشی", callback_data=f"admin:plan_edit:{plan_id}:display_name")
     builder.button(text="اموجی محصول", callback_data=f"admin:plan_edit:{plan_id}:emoji")
-    builder.button(text="Plan ID ویرچو", callback_data=f"admin:plan_edit:{plan_id}:provider_plan_id")
+    # گزینه‌های مخصوص ویرچولایزور فقط برای محصولات ویرچولایزور
+    if provider_type is None or provider_type == _PT.VIRTUALIZOR:
+        builder.button(text="Plan ID ویرچو", callback_data=f"admin:plan_edit:{plan_id}:provider_plan_id")
     toggle_text = "غیرفعال کردن" if is_active else "فعال کردن"
     builder.button(text=toggle_text, callback_data=f"admin:plan_toggle:{plan_id}")
     builder.button(text="حذف", callback_data=f"admin:plan_del:{plan_id}")

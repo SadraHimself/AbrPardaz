@@ -30,6 +30,16 @@ async def on_startup(bot: Bot) -> None:
     # Create DB tables
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    # مقادیر enum جدید — create_all انام موجود را آپدیت نمی‌کند (PG12+ داخل تراکنش OK)
+    from sqlalchemy import text as _sql_text
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(_sql_text(
+                "ALTER TYPE providertype ADD VALUE IF NOT EXISTS 'HETZNER'"
+            ))
+    except Exception as e:
+        logger.warning("enum migration skipped: %s", e)
     logger.info("Database tables ready.")
 
 

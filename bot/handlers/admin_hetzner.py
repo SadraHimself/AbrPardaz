@@ -21,9 +21,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config import settings
 from bot.database.models import (
-    ProviderAccount, ProviderType, Server, ServerPlan, ServerStatus, User,
+    ProductGroup, ProviderAccount, ProviderType, Server, ServerPlan, ServerStatus, User,
 )
-from bot.keyboards.admin import back_to_admin_kb, cancel_admin_kb
+from bot.keyboards.admin import back_to_admin_kb, cancel_admin_kb, group_pick_kb
 from bot.providers.hetzner import API_BASE, HetznerProvider
 
 logger = logging.getLogger(__name__)
@@ -43,6 +43,7 @@ class HetznerFSM(StatesGroup):
     add_name = State()
     add_token = State()
     edit_value = State()
+    edit_limit = State()   # لیمیت تعداد VM اکانت (دستی — API سقف را نمی‌دهد)
 
 
 def _st(ok: bool) -> str:
@@ -164,11 +165,25 @@ async def _render_hz_detail(msg, session: AsyncSession, account: ProviderAccount
     )).scalar() or 0
     token_masked = f"{(account.api_key or '')[:6]}…{(account.api_key or '')[-4:]}"
 
+    # مصرف زنده اکانت از API (کل VMهای اکانت، نه فقط ساخته‌های ربات)
+    vm_limit = int((account.extra_config or {}).get("vm_limit") or 0)
+    try:
+        live_count = await asyncio.wait_for(
+            HetznerProvider(account.api_key or "").count_servers(), timeout=12
+        )
+        cap_line = (f"ظرفیت اکانت: {live_count} / {vm_limit if vm_limit else '—'}"
+                    + ("" if vm_limit else " (لیمیت را ثبت کنید)"))
+    except Exception:
+        cap_line = (f"ظرفیت اکانت: نامشخص / {vm_limit or '—'} "
+                    "(خطا در خواندن از API)")
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="تست اتصال", callback_data=f"admin:hz_test:{account.id}"),
          InlineKeyboardButton(text="ایمپورت محصولات", callback_data=f"admin:hz_import:{account.id}")],
         [InlineKeyboardButton(text="ویرایش نام", callback_data=f"admin:hz_edit:{account.id}:name"),
          InlineKeyboardButton(text="ویرایش توکن", callback_data=f"admin:hz_edit:{account.id}:token")],
+        [InlineKeyboardButton(text=f"لیمیت VM: {vm_limit or 'تعیین نشده'}",
+                              callback_data=f"admin:hz_limit:{account.id}")],
         [InlineKeyboardButton(
             text=("غیرفعال کردن" if account.is_active else "فعال کردن"),
             callback_data=f"admin:hz_toggle:{account.id}")],
@@ -179,8 +194,9 @@ async def _render_hz_detail(msg, session: AsyncSession, account: ProviderAccount
         f"<b>{account.name}</b>\n\n"
         f"Token: <code>{token_masked}</code>\n"
         f"وضعیت: {'✅ فعال' if account.is_active else '❌ غیرفعال'}\n"
+        f"{cap_line}\n"
         f"محصولات ایمپورت‌شده: {plans_count}\n"
-        f"سرورهای فعال مشتری: {servers_count}\n"
+        f"سرورهای فعال مشتری (ربات): {servers_count}\n"
         f"ID: {account.id}",
         parse_mode="HTML",
         reply_markup=kb,
@@ -270,6 +286,39 @@ async def hz_edit_value(message: Message, state: FSMContext, session: AsyncSessi
     await message.answer("ذخیره شد.", reply_markup=back_to_admin_kb(f"admin:hz:{account.id}"))
 
 
+@router.callback_query(F.data.startswith("admin:hz_limit:"))
+async def cb_hz_limit(cb: CallbackQuery, state: FSMContext):
+    acc_id = int(cb.data.split(":")[2])
+    await state.update_data(hz_id=acc_id)
+    await state.set_state(HetznerFSM.edit_limit)
+    await cb.message.edit_text(
+        "<b>لیمیت تعداد VM اکانت</b>\n\n"
+        "هتزنر سقف اکانت را از API نمی‌دهد؛ عددی که در پنل/تیکت تأیید شده را وارد کنید.\n"
+        "با رسیدن مصرف زنده به این عدد، خرید جدید از این اکانت مسدود می‌شود.\n\n"
+        "عدد لیمیت (0 = بدون کنترل):",
+        parse_mode="HTML", reply_markup=cancel_admin_kb(),
+    )
+    await cb.answer()
+
+
+@router.message(HetznerFSM.edit_limit, F.text.regexp(r"^\d+$"))
+async def hz_limit_value(message: Message, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    await state.clear()
+    account = await session.get(ProviderAccount, data.get("hz_id"))
+    if not account:
+        await message.answer("اکانت یافت نشد.")
+        return
+    cfg = dict(account.extra_config or {})
+    cfg["vm_limit"] = int(message.text)
+    account.extra_config = cfg
+    await session.flush()
+    await message.answer(
+        f"لیمیت VM روی {int(message.text) or 'بدون کنترل'} ثبت شد.",
+        reply_markup=back_to_admin_kb(f"admin:hz:{account.id}"),
+    )
+
+
 @router.callback_query(F.data.startswith("admin:hz_toggle:"))
 async def cb_hz_toggle(cb: CallbackQuery, session: AsyncSession):
     account = await _get_hz_account(cb, session, int(cb.data.split(":")[2]))
@@ -329,62 +378,141 @@ async def cb_hz_del(cb: CallbackQuery, session: AsyncSession):
 
 # ── ایمپورت محصولات ──────────────────────────────────────────────────────────
 
+_FAMILY_ORDER = ["cx", "cpx", "cax", "ccx"]
+_FAMILY_LABEL = {
+    "cx": "CX — اشتراکی (Intel/AMD)",
+    "cpx": "CPX — اشتراکی (AMD)",
+    "cax": "CAX — اشتراکی (ARM)",
+    "ccx": "CCX — اختصاصی",
+}
+
+# کش کوتاه‌مدت پلن‌ها تا هر کلیک یک API call نخورد (rate limit هتزنر)
+_plans_cache: dict = {}
+
+
+def _family(ptype: str) -> str:
+    letters = "".join(ch for ch in (ptype or "") if ch.isalpha())
+    return letters.lower() or "other"
+
+
+async def _location_plans(account: ProviderAccount, loc: str):
+    import time
+    key = (account.id, loc)
+    cached = _plans_cache.get(key)
+    now = time.monotonic()
+    if cached and now - cached[0] < 300:
+        return cached[1]
+    prov = HetznerProvider(api_token=account.api_key or "")
+    plans = await asyncio.wait_for(prov.list_plans(location=loc), timeout=30)
+    _plans_cache[key] = (now, plans)
+    return plans
+
+
+async def _imported_map(session: AsyncSession, account: ProviderAccount, loc: str) -> dict:
+    """provider_plan_id → ServerPlan برای پلن‌های ایمپورت‌شده‌ی این اکانت/لوکیشن."""
+    rows = (await session.execute(
+        select(ServerPlan).where(
+            ServerPlan.provider_account_id == account.id,
+            ServerPlan.location == loc,
+        )
+    )).scalars().all()
+    return {p.provider_plan_id: p for p in rows}
+
+
+async def _import_group_name(session: AsyncSession, account: ProviderAccount) -> str:
+    """گروه مقصد ایمپورت — پیش‌فرض گروه «Hetzner» (در صورت نبود، ساخته می‌شود)."""
+    name = (account.extra_config or {}).get("import_group")
+    if name:
+        grp = (await session.execute(
+            select(ProductGroup).where(ProductGroup.name == name)
+        )).scalar_one_or_none()
+        if grp:
+            return name
+    grp = (await session.execute(
+        select(ProductGroup).where(ProductGroup.name == "Hetzner")
+    )).scalar_one_or_none()
+    if not grp:
+        grp = ProductGroup(name="Hetzner", is_hidden=False)
+        session.add(grp)
+        await session.flush()
+    cfg = dict(account.extra_config or {})
+    cfg["import_group"] = grp.name
+    account.extra_config = cfg
+    await session.flush()
+    return grp.name
+
+
+async def _render_import_home(msg, session: AsyncSession, account: ProviderAccount):
+    group_name = await _import_group_name(session, account)
+    prov = HetznerProvider(api_token=account.api_key or "")
+    locs = await asyncio.wait_for(prov.list_locations(), timeout=20)
+    rows = [[InlineKeyboardButton(text=f"گروه مقصد: {group_name}",
+                                  callback_data=f"admin:hzgrp:{account.id}")]]
+    rows += [[InlineKeyboardButton(
+        text=f"{l['city']} ({l['name']}) — {l['country']}",
+        callback_data=f"admin:hzloc:{account.id}:{l['name']}",
+    )] for l in locs]
+    rows.append([InlineKeyboardButton(text="بازگشت", callback_data=f"admin:hz:{account.id}")])
+    await msg.edit_text(
+        "<b>ایمپورت محصولات هتزنر</b>\n\n"
+        f"محصولات ایمپورت‌شده به گروه «{group_name}» می‌روند.\n"
+        "لوکیشن را انتخاب کنید:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
 @router.callback_query(F.data.startswith("admin:hz_import:"))
 async def cb_hz_import(cb: CallbackQuery, session: AsyncSession):
     account = await _get_hz_account(cb, session, int(cb.data.split(":")[2]))
     if not account:
         return
     await cb.answer("در حال دریافت لوکیشن‌ها...")
-    prov = HetznerProvider(api_token=account.api_key or "")
     try:
-        locs = await asyncio.wait_for(prov.list_locations(), timeout=20)
+        await _render_import_home(cb.message, session, account)
     except Exception as e:
         await cb.message.answer(
-            f'‏<tg-emoji emoji-id="4956612582816351459">❌</tg-emoji> '
+            f'\u200F<tg-emoji emoji-id="4956612582816351459">❌</tg-emoji> '
             f"خطا در دریافت لوکیشن‌ها: <code>{str(e)[:200]}</code>",
             parse_mode="HTML",
         )
+
+
+@router.callback_query(F.data.startswith("admin:hzgrpset:"))
+async def cb_hz_group_set(cb: CallbackQuery, session: AsyncSession):
+    parts = cb.data.split(":")
+    account = await _get_hz_account(cb, session, int(parts[2]))
+    if not account:
         return
-    rows = [[InlineKeyboardButton(
-        text=f"{l['city']} ({l['name']}) — {l['country']}",
-        callback_data=f"admin:hzloc:{account.id}:{l['name']}",
-    )] for l in locs]
-    rows.append([InlineKeyboardButton(text="بازگشت", callback_data=f"admin:hz:{account.id}")])
-    await cb.message.edit_text(
-        "<b>ایمپورت محصولات هتزنر</b>\n\nلوکیشن را انتخاب کنید:",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
-    )
+    group = await session.get(ProductGroup, int(parts[3]))
+    if not group:
+        await cb.answer("گروه یافت نشد.", show_alert=True)
+        return
+    cfg = dict(account.extra_config or {})
+    cfg["import_group"] = group.name
+    account.extra_config = cfg
+    await session.flush()
+    await cb.answer(f"گروه مقصد: {group.name}")
+    await _render_import_home(cb.message, session, account)
 
 
-async def _render_hz_plans(msg, session: AsyncSession, account: ProviderAccount, loc: str):
-    prov = HetznerProvider(api_token=account.api_key or "")
-    plans = await asyncio.wait_for(prov.list_plans(location=loc), timeout=30)
-
-    # کدام‌ها قبلاً ایمپورت شده‌اند؟
-    existing = (await session.execute(
-        select(ServerPlan.provider_plan_id).where(
-            ServerPlan.provider_account_id == account.id,
-            ServerPlan.location == loc,
-        )
+@router.callback_query(F.data.startswith("admin:hzgrp:"))
+async def cb_hz_group_pick(cb: CallbackQuery, session: AsyncSession):
+    account = await _get_hz_account(cb, session, int(cb.data.split(":")[2]))
+    if not account:
+        return
+    groups = (await session.execute(
+        select(ProductGroup).order_by(ProductGroup.name)
     )).scalars().all()
-    imported = set(existing)
-
-    rows = []
-    for p in sorted(plans, key=lambda x: (x.price_monthly or 0)):
-        mark = "✅" if p.provider_plan_id in imported else "⬜"
-        rows.append([InlineKeyboardButton(
-            text=(f"{mark} {p.provider_plan_id} · {p.cpu}c/{p.ram // 1024}G/{p.disk}G "
-                  f"· €{p.price_monthly:g}/ماه"),
-            callback_data=f"admin:hzpick:{account.id}:{loc}:{p.provider_plan_id}",
-        )])
-    rows.append([InlineKeyboardButton(text="بازگشت", callback_data=f"admin:hz_import:{account.id}")])
-    await msg.edit_text(
-        f"<b>پلن‌های هتزنر — {loc}</b>\n\n"
-        "قیمت‌ها «قیمت خرید» (EUR با VAT) هستند — با تپ روی هر پلن، به محصولات اضافه می‌شود.\n"
-        "محصول ایمپورت‌شده غیرفعال است تا قیمت فروش را تعیین کنید.",
+    await cb.answer()
+    await cb.message.edit_text(
+        "<b>گروه مقصد ایمپورت</b>\n\n"
+        "محصولات ایمپورت‌شده در این گروه قرار می‌گیرند:\n"
+        "<i>(گروه جدید را از «گروه محصولات» بسازید)</i>",
         parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        reply_markup=group_pick_kb(groups, f"admin:hzgrpset:{account.id}",
+                                   allow_new=False,
+                                   cancel_cb=f"admin:hz_import:{account.id}"),
     )
 
 
@@ -394,15 +522,188 @@ async def cb_hz_location(cb: CallbackQuery, session: AsyncSession):
     account = await _get_hz_account(cb, session, int(parts[2]))
     if not account:
         return
+    loc = parts[3]
     await cb.answer("در حال دریافت پلن‌ها و قیمت‌ها...")
     try:
-        await _render_hz_plans(cb.message, session, account, parts[3])
+        plans = await _location_plans(account, loc)
     except Exception as e:
         await cb.message.answer(
-            f'‏<tg-emoji emoji-id="4956612582816351459">❌</tg-emoji> '
+            f'\u200F<tg-emoji emoji-id="4956612582816351459">❌</tg-emoji> '
             f"خطا در دریافت پلن‌ها: <code>{str(e)[:200]}</code>",
             parse_mode="HTML",
         )
+        return
+    imported = await _imported_map(session, account, loc)
+
+    fams: dict = {}
+    for p in plans:
+        fams.setdefault(_family(p.provider_plan_id), []).append(p)
+    ordered = [f for f in _FAMILY_ORDER if f in fams] + \
+              sorted(f for f in fams if f not in _FAMILY_ORDER)
+
+    rows = []
+    for fam in ordered:
+        total = len(fams[fam])
+        n_imp = sum(1 for p in fams[fam] if p.provider_plan_id in imported)
+        label = _FAMILY_LABEL.get(fam, fam.upper())
+        rows.append([InlineKeyboardButton(
+            text=f"{label} ({n_imp}/{total})",
+            callback_data=f"admin:hzfam:{account.id}:{loc}:{fam}",
+        )])
+    rows.append([InlineKeyboardButton(text="بازگشت", callback_data=f"admin:hz_import:{account.id}")])
+    await cb.message.edit_text(
+        f"<b>پلن‌های هتزنر — {loc}</b>\n\nدسته را انتخاب کنید (ایمپورت‌شده/کل):",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+async def _render_family(msg, session: AsyncSession, account: ProviderAccount,
+                         loc: str, fam: str):
+    plans = [p for p in await _location_plans(account, loc)
+             if _family(p.provider_plan_id) == fam]
+    imported = await _imported_map(session, account, loc)
+    rows = []
+    for p in sorted(plans, key=lambda x: (x.price_monthly or 0)):
+        mark = "✅" if p.provider_plan_id in imported else "⬜"
+        rows.append([
+            InlineKeyboardButton(
+                text=f"{mark} {p.provider_plan_id} · {p.cpu}c/{p.ram // 1024}G/{p.disk}G · €{p.price_monthly:g}/ماه",
+                callback_data=f"admin:hzpick:{account.id}:{loc}:{p.provider_plan_id}",
+            ),
+            InlineKeyboardButton(
+                text="جزئیات",
+                callback_data=f"admin:hzinfo:{account.id}:{loc}:{p.provider_plan_id}",
+            ),
+        ])
+    rows.append([
+        InlineKeyboardButton(text="ایمپورت همه", callback_data=f"admin:hzfamon:{account.id}:{loc}:{fam}"),
+        InlineKeyboardButton(text="حذف همه", callback_data=f"admin:hzfamoff:{account.id}:{loc}:{fam}"),
+    ])
+    rows.append([InlineKeyboardButton(text="بازگشت", callback_data=f"admin:hzloc:{account.id}:{loc}")])
+    await msg.edit_text(
+        f"<b>{_FAMILY_LABEL.get(fam, fam.upper())} — {loc}</b>\n\n"
+        "تپ روی پلن = افزودن/حذف از محصولات · «جزئیات» = قیمت خرید ساعتی و ماهانه\n"
+        "<i>محصول تازه‌ایمپورت‌شده غیرفعال است تا قیمت فروش بگذارید.</i>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+@router.callback_query(F.data.startswith("admin:hzfamon:"))
+async def cb_hz_family_all_on(cb: CallbackQuery, session: AsyncSession):
+    parts = cb.data.split(":")
+    account = await _get_hz_account(cb, session, int(parts[2]))
+    if not account:
+        return
+    loc, fam = parts[3], parts[4]
+    plans = [p for p in await _location_plans(account, loc)
+             if _family(p.provider_plan_id) == fam]
+    imported = await _imported_map(session, account, loc)
+    group_name = await _import_group_name(session, account)
+    added = 0
+    for info in plans:
+        if info.provider_plan_id in imported:
+            continue
+        await _import_one(session, account, loc, info, group_name)
+        added += 1
+    await session.flush()
+    await cb.answer(f"{added} پلن اضافه شد." if added else "همه از قبل ایمپورت شده‌اند.")
+    await _render_family(cb.message, session, account, loc, fam)
+
+
+@router.callback_query(F.data.startswith("admin:hzfamoff:"))
+async def cb_hz_family_all_off(cb: CallbackQuery, session: AsyncSession):
+    parts = cb.data.split(":")
+    account = await _get_hz_account(cb, session, int(parts[2]))
+    if not account:
+        return
+    loc, fam = parts[3], parts[4]
+    imported = await _imported_map(session, account, loc)
+    removed = kept = 0
+    for pid, plan in imported.items():
+        if _family(pid) != fam:
+            continue
+        deleted, _ = await _remove_plan(session, plan)
+        if deleted:
+            removed += 1
+        else:
+            kept += 1
+    await session.flush()
+    note = f"{removed} حذف شد" + (f"، {kept} فقط غیرفعال شد (سرور فعال دارد)" if kept else "")
+    await cb.answer(note if (removed or kept) else "چیزی برای حذف نیست.", show_alert=bool(kept))
+    await _render_family(cb.message, session, account, loc, fam)
+
+
+@router.callback_query(F.data.startswith("admin:hzfam:"))
+async def cb_hz_family(cb: CallbackQuery, session: AsyncSession):
+    parts = cb.data.split(":")
+    account = await _get_hz_account(cb, session, int(parts[2]))
+    if not account:
+        return
+    await cb.answer()
+    await _render_family(cb.message, session, account, parts[3], parts[4])
+
+
+@router.callback_query(F.data.startswith("admin:hzinfo:"))
+async def cb_hz_info(cb: CallbackQuery, session: AsyncSession):
+    parts = cb.data.split(":")
+    account = await _get_hz_account(cb, session, int(parts[2]))
+    if not account:
+        return
+    loc, pid = parts[3], parts[4]
+    plans = await _location_plans(account, loc)
+    info = next((p for p in plans if p.provider_plan_id == pid), None)
+    if not info:
+        await cb.answer("پلن یافت نشد.", show_alert=True)
+        return
+    await cb.answer(
+        f"{pid} — {info.cpu}هسته / {info.ram // 1024}GB رم / {info.disk}GB دیسک\n"
+        f"خرید ساعتی: €{info.price_hourly:g}\n"
+        f"خرید ماهانه: €{info.price_monthly:g}\n"
+        f"ترافیک: {info.bandwidth:,} GB\n"
+        "(EUR شامل VAT)",
+        show_alert=True,
+    )
+
+
+async def _import_one(session: AsyncSession, account: ProviderAccount,
+                      loc: str, info, group_name: str) -> ServerPlan:
+    plan = ServerPlan(
+        provider_type=ProviderType.HETZNER,
+        provider_account_id=account.id,
+        name=f"{info.provider_plan_id}-{loc}",
+        display_name=f"{info.provider_plan_id.upper()} — {loc}",
+        ram=info.ram, cpu=info.cpu, disk=info.disk, bandwidth=info.bandwidth,
+        price_hourly=None, price_monthly=None,   # قیمت فروش را ادمین تعیین می‌کند
+        location=loc,
+        is_active=False,                          # تا قیمت‌گذاری، در فروش دیده نمی‌شود
+        category=group_name,
+        provider_plan_id=info.provider_plan_id,
+        extra_data={
+            "currency": "eur",
+            "cost_hourly": info.price_hourly,     # قیمت خرید (EUR gross)
+            "cost_monthly": info.price_monthly,
+        },
+    )
+    session.add(plan)
+    return plan
+
+
+async def _remove_plan(session: AsyncSession, plan: ServerPlan) -> tuple[bool, str]:
+    """حذف پلن ایمپورت‌شده؛ اگر سرور فعال مشتری دارد فقط غیرفعال می‌شود."""
+    servers = (await session.execute(
+        select(Server).where(
+            Server.provider_account_id == plan.provider_account_id,
+            Server.status != ServerStatus.DELETED,
+        )
+    )).scalars().all()
+    in_use = any((s.extra_data or {}).get("plan_id") == plan.id for s in servers)
+    if in_use:
+        plan.is_active = False
+        return False, "غیرفعال شد (سرور فعال دارد)"
+    await session.delete(plan)
+    return True, "حذف شد"
 
 
 @router.callback_query(F.data.startswith("admin:hzpick:"))
@@ -411,48 +712,28 @@ async def cb_hz_pick(cb: CallbackQuery, session: AsyncSession):
     account = await _get_hz_account(cb, session, int(parts[2]))
     if not account:
         return
-    loc, ptype = parts[3], parts[4]
+    loc, pid = parts[3], parts[4]
 
-    dup = (await session.execute(
+    existing = (await session.execute(
         select(ServerPlan).where(
             ServerPlan.provider_account_id == account.id,
-            ServerPlan.provider_plan_id == ptype,
+            ServerPlan.provider_plan_id == pid,
             ServerPlan.location == loc,
         )
     )).scalar_one_or_none()
-    if dup:
-        await cb.answer("این پلن قبلاً ایمپورت شده.", show_alert=True)
-        return
 
-    prov = HetznerProvider(api_token=account.api_key or "")
-    try:
-        plans = await asyncio.wait_for(prov.list_plans(location=loc), timeout=30)
-    except Exception as e:
-        await cb.answer(f"خطا: {str(e)[:150]}", show_alert=True)
-        return
-    info = next((p for p in plans if p.provider_plan_id == ptype), None)
-    if not info:
-        await cb.answer("پلن در این لوکیشن موجود نیست.", show_alert=True)
-        return
-
-    plan = ServerPlan(
-        provider_type=ProviderType.HETZNER,
-        provider_account_id=account.id,
-        name=f"{ptype}-{loc}",
-        display_name=f"{ptype.upper()} — {loc}",
-        ram=info.ram, cpu=info.cpu, disk=info.disk, bandwidth=info.bandwidth,
-        price_hourly=None, price_monthly=None,   # قیمت فروش را ادمین تعیین می‌کند
-        location=loc,
-        is_active=False,                          # تا قیمت‌گذاری، در فروش دیده نمی‌شود
-        category=None,
-        provider_plan_id=ptype,
-        extra_data={
-            "currency": "eur",
-            "cost_hourly": info.price_hourly,     # قیمت خرید (EUR gross)
-            "cost_monthly": info.price_monthly,
-        },
-    )
-    session.add(plan)
-    await session.flush()
-    await cb.answer(f"✅ {ptype} اضافه شد — قیمت فروش را در «محصولات» تعیین کنید.", show_alert=True)
-    await _render_hz_plans(cb.message, session, account, loc)
+    if existing:
+        deleted, note = await _remove_plan(session, existing)
+        await session.flush()
+        await cb.answer(f"{pid}: {note}", show_alert=not deleted)
+    else:
+        plans = await _location_plans(account, loc)
+        info = next((p for p in plans if p.provider_plan_id == pid), None)
+        if not info:
+            await cb.answer("پلن در این لوکیشن موجود نیست.", show_alert=True)
+            return
+        group_name = await _import_group_name(session, account)
+        await _import_one(session, account, loc, info, group_name)
+        await session.flush()
+        await cb.answer(f"✅ {pid} به گروه «{group_name}» اضافه شد — قیمت فروش را تعیین کنید.")
+    await _render_family(cb.message, session, account, loc, _family(pid))

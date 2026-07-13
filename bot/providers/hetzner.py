@@ -150,6 +150,32 @@ class HetznerProvider(BaseProvider):
 
     # ── BaseProvider implementation ───────────────────────────────────────────
 
+    @staticmethod
+    def _type_offered_at(t: dict, location: str) -> bool:
+        """آیا این server_type در این لوکیشن قابل سفارش است؟
+
+        منبع: فیلد locations[] خودِ پلن — هر entry ممکن است deprecation داشته باشد
+        (یعنی در آن لوکیشن از رده خارج شده حتی اگر هنوز قیمت برگردد).
+        اگر ساختار locations در دسترس نبود، محافظه‌کارانه True (مبنای قیمت)."""
+        entries = t.get("locations") or []
+        if not entries:
+            return True
+        for tl in entries:
+            if isinstance(tl, str):
+                if tl == location:
+                    return True
+                continue
+            if not isinstance(tl, dict):
+                continue
+            loc_obj = tl.get("location")
+            name = (loc_obj.get("name") if isinstance(loc_obj, dict)
+                    else loc_obj if isinstance(loc_obj, str)
+                    else tl.get("name"))
+            if name != location:
+                continue
+            return not tl.get("deprecation")
+        return False
+
     async def _available_type_ids_at(self, location: str) -> set:
         """IDهای server_type که واقعاً در این لوکیشن «موجود»اند (نه فقط قیمت‌دار).
 
@@ -164,21 +190,18 @@ class HetznerProvider(BaseProvider):
         return ids
 
     async def create_server(self, params: CreateServerParams) -> ServerInfo:
-        # پیش‌چک موجودی پلن در لوکیشن — جلوی خطای گنگ API را می‌گیرد
+        # پیش‌چک عرضه‌ی پلن در لوکیشن — جلوی خطای گنگ API را می‌گیرد
         if params.location:
             try:
                 t = await self._request("GET", "/server_types",
                                         params={"name": params.plan_id})
                 tlist = t.get("server_types") or []
-                tid = tlist[0].get("id") if tlist else None
             except Exception:
-                tid = None
-            if tid:
-                avail = await self._available_type_ids_at(params.location)
-                if avail and tid not in avail:
-                    raise RuntimeError(
-                        f"پلن {params.plan_id} فعلاً در لوکیشن {params.location} موجود نیست"
-                    )
+                tlist = []
+            if tlist and not self._type_offered_at(tlist[0], params.location):
+                raise RuntimeError(
+                    f"پلن {params.plan_id} فعلاً در لوکیشن {params.location} موجود نیست"
+                )
 
         body: dict = {
             "name": params.name,
@@ -264,30 +287,14 @@ class HetznerProvider(BaseProvider):
         price_hourly/price_monthly در PlanInfo = «قیمت خرید» به یورو (gross).
         """
         types = await self._paginate("/server_types", "server_types")
-        # فقط پلن‌هایی که واقعاً در آن لوکیشن موجودند (جلوگیری از ایمپورت/فروش ناموجود).
-        # دیگر بی‌صدا رد نمی‌شویم — اگر موجودی خواندنی نبود، خطا بالا می‌رود.
-        available_ids: set = set()
-        if location:
-            available_ids = await self._available_type_ids_at(location)
         plans: list[PlanInfo] = []
         for t in types:
             if t.get("deprecated"):
                 continue
-            if location and t.get("id") not in available_ids:
+            # عرضه‌ی per-location از فیلد locations خودِ پلن (منبع معتبر):
+            # cpx11@fsn1 قیمت دارد ولی deprecation دارد → «unsupported location»
+            if location and not self._type_offered_at(t, location):
                 continue
-            # سیگنال دوم: خودِ server_type هم لیست لوکیشن‌های عرضه دارد
-            if location:
-                t_locs = set()
-                for tl in (t.get("locations") or []):
-                    if isinstance(tl, dict):
-                        n = ((tl.get("location") or {}).get("name")
-                             if isinstance(tl.get("location"), dict) else tl.get("name"))
-                        if n:
-                            t_locs.add(n)
-                    elif isinstance(tl, str):
-                        t_locs.add(tl)
-                if t_locs and location not in t_locs:
-                    continue
             for price in t.get("prices") or []:
                 loc = price.get("location")
                 if location and loc != location:

@@ -168,6 +168,22 @@ class LogService:
             f"⚡ عملیات: {labels.get(action, action)}",
         )
 
+    async def log_plan_unavailable(self, plan_name: str, location: str) -> None:
+        await self._send(
+            "server",
+            f"⛔ <b>پلن در سرویس‌دهنده ناموجود شد</b>\n\n"
+            f"پلن: <b>{plan_name}</b> — {location}\n"
+            "محصول به‌صورت خودکار از فروش خارج شد (غیرفعال).",
+        )
+
+    async def log_plan_available(self, plan_name: str, location: str) -> None:
+        await self._send(
+            "server",
+            f"✅ <b>پلن دوباره موجود شد</b>\n\n"
+            f"پلن: <b>{plan_name}</b> — {location}\n"
+            "وضعیت قبلی محصول برگردانده شد.",
+        )
+
     async def log_provider_down(self, name: str, reason: str = "") -> None:
         await self._send(
             "server",

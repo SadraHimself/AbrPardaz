@@ -63,6 +63,12 @@ app.conf.update(
             "task": "bot.tasks.backup.run_database_backup",
             "schedule": crontab(minute=0, hour="*/4"),
         },
+        # هر ۳۰ دقیقه موجودی/قیمت خرید کاتالوگ هتزنر sync می‌شود
+        # (پلن ناموجود → خودکار غیرفعال + لاگ؛ دوباره موجود → برگشت وضعیت)
+        "hetzner-catalog-sync": {
+            "task": "bot.tasks.server.sync_hetzner_catalog",
+            "schedule": crontab(minute="10,40"),
+        },
         # هر ساعت تراکنش‌های قدیمی‌تر از ۷۲ ساعت پاک می‌شوند
         # (قبلاً فقط ۳ روزِ هفته اجرا می‌شد و commit هم نداشت → هیچ‌وقت پاک نمی‌شد)
         "cleanup-transactions": {

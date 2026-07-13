@@ -24,7 +24,7 @@ from bot.keyboards.admin import (
     cancel_admin_kb, confirm_kb, discount_detail_kb,
     discounts_list_kb, group_detail_kb, group_pick_kb, groups_list_kb,
     plan_detail_kb, plans_groups_kb, plans_in_group_kb, plans_menu_kb,
-    provider_detail_kb, providers_list_kb,
+    provider_detail_kb, provider_types_kb, providers_list_kb,
     providers_select_kb, skip_or_cancel_kb,
     subprod_detail_kb, subprod_type_kb, subproducts_kb,
 )
@@ -543,6 +543,16 @@ async def cb_admin_plans(cb: CallbackQuery, session: AsyncSession):
     )
 
 
+@router.callback_query(F.data == "admin:provtypes")
+async def cb_admin_provtypes(cb: CallbackQuery):
+    await cb.answer()
+    await cb.message.edit_text(
+        "<b>سرویس‌دهنده‌ها</b>\n\nسرویس‌دهنده مورد نظر را انتخاب کنید:",
+        parse_mode="HTML",
+        reply_markup=provider_types_kb(),
+    )
+
+
 @router.callback_query(F.data == "admin:plans_list")
 async def cb_admin_plans_list(cb: CallbackQuery, session: AsyncSession):
     await cb.answer()
@@ -891,6 +901,12 @@ async def _render_plan_detail(cb: CallbackQuery, session: AsyncSession, plan_id:
         billing_lines.append(f"{fmt_price(plan.price_monthly, _cur)}/ماه")
     if _cur != "irt":
         billing_lines.append(f"واحد قیمت: {CURRENCY_LABELS[_cur]} (تبدیل با نرخ روز)")
+    # قیمت خرید (برای محصولات ایمپورت‌شده از API مثل هتزنر) — راهنمای مارجین‌گذاری
+    _px = plan.extra_data or {}
+    if _px.get("cost_hourly") or _px.get("cost_monthly"):
+        billing_lines.append(
+            f"قیمت خرید: €{_px.get('cost_hourly', 0):g}/ساعت · €{_px.get('cost_monthly', 0):g}/ماه"
+        )
 
     prov_name = "—"
     if plan.provider_account_id:

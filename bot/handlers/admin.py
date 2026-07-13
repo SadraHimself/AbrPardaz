@@ -923,7 +923,7 @@ async def _render_plan_detail(cb: CallbackQuery, session: AsyncSession, plan_id:
         + "\n".join(billing_lines) + "\n\n"
         + ("✅ فعال" if plan.is_active else "❌ غیرفعال"),
         parse_mode="HTML",
-        reply_markup=plan_detail_kb(plan_id, plan.is_active),
+        reply_markup=plan_detail_kb(plan_id, plan.is_active, plan.provider_type),
     )
     try:
         await cb.answer()
@@ -1409,6 +1409,10 @@ async def cb_plan_edit_start(cb: CallbackQuery, state: FSMContext, session: Asyn
 
     # تغییر Plan ID: مشخصات از ویرچولایزور خوانده و بعد از تأیید اعمال می‌شود
     if field == "provider_plan_id":
+        _plan_chk = await session.get(ServerPlan, plan_id)
+        if _plan_chk and _plan_chk.provider_type != ProviderType.VIRTUALIZOR:
+            await cb.answer("این گزینه فقط برای محصولات ویرچولایزور است.", show_alert=True)
+            return
         await state.update_data(edit_plan_id=plan_id)
         await state.set_state(PlanFSM.edit_plan_id)
         await cb.message.edit_text(
@@ -1466,7 +1470,7 @@ async def plan_edit_emoji(message: Message, state: FSMContext, session: AsyncSes
     plan.extra_data = extra
     await session.flush()
     await message.answer("اموجی محصول ذخیره شد.",
-                         reply_markup=plan_detail_kb(plan.id, plan.is_active))
+                         reply_markup=plan_detail_kb(plan.id, plan.is_active, plan.provider_type))
 
 
 @router.callback_query(PlanFSM.edit_emoji, F.data == "admin:skip")
@@ -1659,7 +1663,7 @@ async def plan_edit_value(message: Message, state: FSMContext, session: AsyncSes
             setattr(plan, field, raw if raw not in ("-", "—", "none", "0") else None)
         await session.flush()
         await message.answer(f"ذخیره شد.{warn}",
-                             reply_markup=plan_detail_kb(data["edit_plan_id"], plan.is_active))
+                             reply_markup=plan_detail_kb(data["edit_plan_id"], plan.is_active, plan.provider_type))
     except ValueError:
         await message.answer("مقدار نامعتبر.")
 

@@ -572,11 +572,11 @@ async def _render_family(msg, session: AsyncSession, account: ProviderAccount,
         mark = "✅" if p.provider_plan_id in imported else "⬜"
         rows.append([
             InlineKeyboardButton(
-                text=f"{mark} {p.provider_plan_id} · {p.cpu}c/{p.ram // 1024}G/{p.disk}G · €{p.price_monthly:g}/ماه",
+                text=f"{mark} {p.provider_plan_id} · {p.cpu}c/{p.ram // 1024}G · €{p.price_monthly:g}",
                 callback_data=f"admin:hzpick:{account.id}:{loc}:{p.provider_plan_id}",
             ),
             InlineKeyboardButton(
-                text="جزئیات",
+                text="ℹ️",
                 callback_data=f"admin:hzinfo:{account.id}:{loc}:{p.provider_plan_id}",
             ),
         ])
@@ -586,7 +586,7 @@ async def _render_family(msg, session: AsyncSession, account: ProviderAccount,
         if _family(pid) != fam or pid in shown:
             continue
         rows.append([InlineKeyboardButton(
-            text=f"⛔ {pid} · ناموجود شده — برای حذف تپ کنید",
+            text=f"⛔ {pid} · ناموجود — حذف",
             callback_data=f"admin:hzpick:{account.id}:{loc}:{pid}",
         )])
     rows.append([
@@ -596,7 +596,7 @@ async def _render_family(msg, session: AsyncSession, account: ProviderAccount,
     rows.append([InlineKeyboardButton(text="بازگشت", callback_data=f"admin:hzloc:{account.id}:{loc}")])
     await msg.edit_text(
         f"<b>{_FAMILY_LABEL.get(fam, fam.upper())} — {loc}</b>\n\n"
-        "تپ روی پلن = افزودن/حذف از محصولات · «جزئیات» = قیمت خرید ساعتی و ماهانه\n"
+        "عدد یورو = قیمت خرید ماهانه · تپ روی پلن = افزودن/حذف · ℹ️ = جزئیات کامل\n"
         "<i>محصول تازه‌ایمپورت‌شده غیرفعال است تا قیمت فروش بگذارید.</i>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),

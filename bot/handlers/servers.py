@@ -681,6 +681,11 @@ async def _ask_os(cb: CallbackQuery, state: FSMContext, session: AsyncSession, u
             import asyncio
             prov = get_provider(account)
             os_list = await asyncio.wait_for(prov.list_os_templates(), timeout=15)
+            # فیلتر معماری (هتزنر): پلن cax = ARM و بقیه x86 — ایمیج ناهم‌معماری خطای ساخت می‌دهد
+            if os_list and account.provider_type == ProviderType.HETZNER:
+                _plan_arch = await session.get(ServerPlan, data.get("plan_id"))
+                _is_arm = bool(_plan_arch and (_plan_arch.provider_plan_id or "").lower().startswith("cax"))
+                os_list = [o for o in os_list if (o.get("architecture") == "arm") == _is_arm]
         except Exception:
             pass
 
@@ -728,6 +733,11 @@ async def _ask_os_message(message: Message, state: FSMContext, session: AsyncSes
             import asyncio
             prov = get_provider(account)
             os_list = await asyncio.wait_for(prov.list_os_templates(), timeout=15)
+            # فیلتر معماری (هتزنر): پلن cax = ARM و بقیه x86 — ایمیج ناهم‌معماری خطای ساخت می‌دهد
+            if os_list and account.provider_type == ProviderType.HETZNER:
+                _plan_arch = await session.get(ServerPlan, data.get("plan_id"))
+                _is_arm = bool(_plan_arch and (_plan_arch.provider_plan_id or "").lower().startswith("cax"))
+                os_list = [o for o in os_list if (o.get("architecture") == "arm") == _is_arm]
         except Exception:
             pass
 

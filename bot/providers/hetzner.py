@@ -264,19 +264,30 @@ class HetznerProvider(BaseProvider):
         price_hourly/price_monthly در PlanInfo = «قیمت خرید» به یورو (gross).
         """
         types = await self._paginate("/server_types", "server_types")
-        # فقط پلن‌هایی که واقعاً در آن لوکیشن موجودند (جلوگیری از ایمپورت/فروش ناموجود)
+        # فقط پلن‌هایی که واقعاً در آن لوکیشن موجودند (جلوگیری از ایمپورت/فروش ناموجود).
+        # دیگر بی‌صدا رد نمی‌شویم — اگر موجودی خواندنی نبود، خطا بالا می‌رود.
         available_ids: set = set()
         if location:
-            try:
-                available_ids = await self._available_type_ids_at(location)
-            except Exception:
-                available_ids = set()
+            available_ids = await self._available_type_ids_at(location)
         plans: list[PlanInfo] = []
         for t in types:
             if t.get("deprecated"):
                 continue
-            if location and available_ids and t.get("id") not in available_ids:
+            if location and t.get("id") not in available_ids:
                 continue
+            # سیگنال دوم: خودِ server_type هم لیست لوکیشن‌های عرضه دارد
+            if location:
+                t_locs = set()
+                for tl in (t.get("locations") or []):
+                    if isinstance(tl, dict):
+                        n = ((tl.get("location") or {}).get("name")
+                             if isinstance(tl.get("location"), dict) else tl.get("name"))
+                        if n:
+                            t_locs.add(n)
+                    elif isinstance(tl, str):
+                        t_locs.add(tl)
+                if t_locs and location not in t_locs:
+                    continue
             for price in t.get("prices") or []:
                 loc = price.get("location")
                 if location and loc != location:

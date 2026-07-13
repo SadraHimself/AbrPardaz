@@ -12,9 +12,7 @@ def _st(is_active: bool) -> str:
 
 def admin_menu_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="سرورهای ویرچولایزور", callback_data="admin:providers")
     builder.button(text="محصولات", callback_data="admin:plans")
-    builder.button(text="کدهای تخفیف", callback_data="admin:discounts")
     builder.button(text="کاربران", callback_data="admin:users")
     builder.button(text="آمار", callback_data="admin:stats")
     builder.button(text="پیام همگانی", callback_data="admin:broadcast")
@@ -26,6 +24,16 @@ def admin_menu_kb() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def provider_types_kb() -> InlineKeyboardMarkup:
+    """سرویس‌دهنده‌ها — هر سرویس‌دهنده جدید فقط یک دکمه اینجا اضافه می‌کند."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="سرورهای ویرچولایزور", callback_data="admin:providers")
+    builder.button(text="هتزنر (Hetzner)", callback_data="admin:hetzner")
+    builder.button(text="بازگشت", callback_data="admin:plans")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
 # ── Provider keyboards ────────────────────────────────────────────────────────
 
 def providers_list_kb(providers: list) -> InlineKeyboardMarkup:
@@ -34,7 +42,7 @@ def providers_list_kb(providers: list) -> InlineKeyboardMarkup:
         kyc = " (KYC)" if p.strict_kyc else ""
         builder.button(text=f"{_st(p.is_active)}{p.name}{kyc}", callback_data=f"admin:prov:{p.id}")
     builder.button(text="اضافه کردن سرور", callback_data="admin:prov_add")
-    builder.button(text="بازگشت", callback_data="admin_panel")
+    builder.button(text="بازگشت", callback_data="admin:provtypes")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -69,8 +77,10 @@ def plans_menu_kb() -> InlineKeyboardMarkup:
     builder.button(text="گروه محصولات", callback_data="admin:groups")
     builder.button(text="محصولات", callback_data="admin:plans_list")
     builder.button(text="افزودن محصول", callback_data="admin:plan_add")
+    builder.button(text="کدهای تخفیف", callback_data="admin:discounts")
+    builder.button(text="سرویس‌دهنده‌ها", callback_data="admin:provtypes")
     builder.button(text="بازگشت", callback_data="admin_panel")
-    builder.adjust(2, 1, 1)
+    builder.adjust(2, 2, 1, 1)
     return builder.as_markup()
 
 
@@ -164,7 +174,7 @@ def discounts_list_kb(codes: list) -> InlineKeyboardMarkup:
             callback_data=f"admin:disc:{c.id}",
         )
     builder.button(text="کد جدید", callback_data="admin:disc_add")
-    builder.button(text="بازگشت", callback_data="admin_panel")
+    builder.button(text="بازگشت", callback_data="admin:plans")
     builder.adjust(1)
     return builder.as_markup()
 

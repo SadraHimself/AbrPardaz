@@ -576,6 +576,15 @@ async def _render_family(msg, session: AsyncSession, account: ProviderAccount,
                 callback_data=f"admin:hzinfo:{account.id}:{loc}:{p.provider_plan_id}",
             ),
         ])
+    # ایمپورت‌شده‌هایی که دیگر در این لوکیشن موجود نیستند — قابل حذف بمانند
+    shown = {p.provider_plan_id for p in plans}
+    for pid in sorted(imported):
+        if _family(pid) != fam or pid in shown:
+            continue
+        rows.append([InlineKeyboardButton(
+            text=f"⛔ {pid} · ناموجود شده — برای حذف تپ کنید",
+            callback_data=f"admin:hzpick:{account.id}:{loc}:{pid}",
+        )])
     rows.append([
         InlineKeyboardButton(text="ایمپورت همه", callback_data=f"admin:hzfamon:{account.id}:{loc}:{fam}"),
         InlineKeyboardButton(text="حذف همه", callback_data=f"admin:hzfamoff:{account.id}:{loc}:{fam}"),

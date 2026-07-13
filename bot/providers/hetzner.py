@@ -303,3 +303,13 @@ class HetznerProvider(BaseProvider):
         """تست اتصال/توکن — برای health check و افزودن اکانت."""
         await self._request("GET", "/locations", params={"per_page": 1})
         return True
+
+    async def count_servers(self) -> int:
+        """تعداد کل سرورهای موجود روی اکانت (برای نمایش/کنترل لیمیت VM).
+
+        هتزنر سقف لیمیت اکانت را از API نمی‌دهد (فقط خطای resource_limit_exceeded
+        موقع عبور) — پس لیمیت را ادمین دستی ثبت می‌کند و این متد مصرفِ فعلی را
+        زنده می‌شمارد."""
+        data = await self._request("GET", "/servers", params={"per_page": 1})
+        pagination = (data.get("meta") or {}).get("pagination") or {}
+        return int(pagination.get("total_entries") or 0)

@@ -378,13 +378,14 @@ async def cb_hz_del(cb: CallbackQuery, session: AsyncSession):
 
 # ── ایمپورت محصولات ──────────────────────────────────────────────────────────
 
-_FAMILY_ORDER = ["cx", "cpx", "cax", "ccx"]
+_FAMILY_ORDER = ["cx", "cpx", "cax"]
 _FAMILY_LABEL = {
     "cx": "CX — اشتراکی (Intel/AMD)",
     "cpx": "CPX — اشتراکی (AMD)",
     "cax": "CAX — اشتراکی (ARM)",
-    "ccx": "CCX — اختصاصی",
 }
+# دسته‌هایی که اصلاً ارائه نمی‌شوند (تصمیم ادمین — نیازی به کانفیگ اختصاصی نیست)
+_EXCLUDED_FAMILIES = {"ccx"}
 
 # کش کوتاه‌مدت پلن‌ها تا هر کلیک یک API call نخورد (rate limit هتزنر)
 _plans_cache: dict = {}
@@ -537,7 +538,10 @@ async def cb_hz_location(cb: CallbackQuery, session: AsyncSession):
 
     fams: dict = {}
     for p in plans:
-        fams.setdefault(_family(p.provider_plan_id), []).append(p)
+        fam = _family(p.provider_plan_id)
+        if fam in _EXCLUDED_FAMILIES:
+            continue
+        fams.setdefault(fam, []).append(p)
     ordered = [f for f in _FAMILY_ORDER if f in fams] + \
               sorted(f for f in fams if f not in _FAMILY_ORDER)
 
@@ -606,6 +610,9 @@ async def cb_hz_family_all_on(cb: CallbackQuery, session: AsyncSession):
     if not account:
         return
     loc, fam = parts[3], parts[4]
+    if fam in _EXCLUDED_FAMILIES:
+        await cb.answer("این دسته ارائه نمی‌شود.", show_alert=True)
+        return
     plans = [p for p in await _location_plans(account, loc)
              if _family(p.provider_plan_id) == fam]
     imported = await _imported_map(session, account, loc)
@@ -649,6 +656,9 @@ async def cb_hz_family(cb: CallbackQuery, session: AsyncSession):
     parts = cb.data.split(":")
     account = await _get_hz_account(cb, session, int(parts[2]))
     if not account:
+        return
+    if parts[4] in _EXCLUDED_FAMILIES:
+        await cb.answer("این دسته ارائه نمی‌شود.", show_alert=True)
         return
     await cb.answer()
     await _render_family(cb.message, session, account, parts[3], parts[4])
@@ -740,6 +750,9 @@ async def cb_hz_pick(cb: CallbackQuery, session: AsyncSession):
         info = next((p for p in plans if p.provider_plan_id == pid), None)
         if not info:
             await cb.answer("پلن در این لوکیشن موجود نیست.", show_alert=True)
+            return
+        if _family(pid) in _EXCLUDED_FAMILIES:
+            await cb.answer("این دسته ارائه نمی‌شود.", show_alert=True)
             return
         group_name = await _import_group_name(session, account)
         await _import_one(session, account, loc, info, group_name)

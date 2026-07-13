@@ -55,6 +55,8 @@ class ServerService:
             "disk": plan.disk,
             "cpu": plan.cpu,
             "bandwidth": plan.bandwidth,
+            # لیبل ردیابی برای سرویس‌دهنده‌های label-دار (هتزنر) — ویرچولایزور نادیده می‌گیرد
+            "labels": {"tg_user_id": str(user.telegram_id)},
             **provider_extra,
             **plan_extra,
             **(extra or {}),

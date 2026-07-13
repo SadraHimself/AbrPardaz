@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.database.models import (
-    BillingType, ProviderAccount, Server, ServerPlan, ServerStatus,
+    BillingType, ProviderAccount, ProviderType, Server, ServerPlan, ServerStatus,
     SuspendReason, User,
 )
 from bot.providers import CreateServerParams, get_provider
@@ -45,6 +45,19 @@ class ServerService:
     ) -> Server:
         account = await self._get_account(plan.provider_account_id)
         provider = get_provider(account)
+
+        # لیمیت VM اکانت (هتزنر): اگر ادمین لیمیت ثبت کرده، مصرف زنده چک می‌شود
+        if account.provider_type == ProviderType.HETZNER:
+            vm_limit = int((account.extra_config or {}).get("vm_limit") or 0)
+            if vm_limit:
+                try:
+                    current = await provider.count_servers()
+                except Exception:
+                    current = None
+                if current is not None and current >= vm_limit:
+                    raise RuntimeError(
+                        "ظرفیت ساخت سرور در این اکانت تکمیل است — لطفاً بعداً تلاش کنید"
+                    )
 
         custom_name = hostname or f"tc-{user.telegram_id}-{int(datetime.now().timestamp())}"
         provider_extra = account.extra_config or {}

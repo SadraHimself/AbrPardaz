@@ -287,13 +287,29 @@ class HetznerProvider(BaseProvider):
         price_hourly/price_monthly در PlanInfo = «قیمت خرید» به یورو (gross).
         """
         types = await self._paginate("/server_types", "server_types")
+
+        # سیگنال ۲: موجودی لحظه‌ای (ظرفیت) از datacenters.available —
+        # پلنِ «عرضه‌شده» ممکن است ته کشیده باشد (کنسول: Not available…)
+        stock_ids: set = set()
+        if location:
+            try:
+                stock_ids = await self._available_type_ids_at(location)
+            except Exception as e:
+                logger.warning("hetzner: stock fetch failed for %s: %s", location, e)
+            if not stock_ids:
+                # خالی = تقریباً همیشه یعنی ساختار/خطا؛ fail-open تا لیست کور نشود
+                logger.warning("hetzner: empty stock set for %s — stock filter skipped", location)
+
         plans: list[PlanInfo] = []
         for t in types:
             if t.get("deprecated"):
                 continue
-            # عرضه‌ی per-location از فیلد locations خودِ پلن (منبع معتبر):
-            # cpx11@fsn1 قیمت دارد ولی deprecation دارد → «unsupported location»
+            # سیگنال ۱: عرضه‌ی per-location از فیلد locations خودِ پلن
+            # (cpx11@fsn1 قیمت دارد ولی deprecation دارد → «unsupported location»)
             if location and not self._type_offered_at(t, location):
+                continue
+            # سیگنال ۲: باید در ظرفیتِ لحظه‌ای دیتاسنترهای لوکیشن هم باشد
+            if location and stock_ids and t.get("id") not in stock_ids:
                 continue
             for price in t.get("prices") or []:
                 loc = price.get("location")

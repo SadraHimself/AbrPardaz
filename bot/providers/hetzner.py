@@ -150,7 +150,36 @@ class HetznerProvider(BaseProvider):
 
     # ── BaseProvider implementation ───────────────────────────────────────────
 
+    async def _available_type_ids_at(self, location: str) -> set:
+        """IDهای server_type که واقعاً در این لوکیشن «موجود»اند (نه فقط قیمت‌دار).
+
+        هتزنر برای برخی پلن‌ها قیمتِ لوکیشن را می‌دهد ولی ظرفیت ندارد/نسل قدیمی است
+        → خطای unsupported location for server type موقع ساخت. منبع درست:
+        GET /datacenters → server_types.available"""
+        dcs = await self._paginate("/datacenters", "datacenters")
+        ids: set = set()
+        for dc in dcs:
+            if ((dc.get("location") or {}).get("name")) == location:
+                ids |= set((dc.get("server_types") or {}).get("available") or [])
+        return ids
+
     async def create_server(self, params: CreateServerParams) -> ServerInfo:
+        # پیش‌چک موجودی پلن در لوکیشن — جلوی خطای گنگ API را می‌گیرد
+        if params.location:
+            try:
+                t = await self._request("GET", "/server_types",
+                                        params={"name": params.plan_id})
+                tlist = t.get("server_types") or []
+                tid = tlist[0].get("id") if tlist else None
+            except Exception:
+                tid = None
+            if tid:
+                avail = await self._available_type_ids_at(params.location)
+                if avail and tid not in avail:
+                    raise RuntimeError(
+                        f"پلن {params.plan_id} فعلاً در لوکیشن {params.location} موجود نیست"
+                    )
+
         body: dict = {
             "name": params.name,
             "server_type": params.plan_id,
@@ -235,9 +264,18 @@ class HetznerProvider(BaseProvider):
         price_hourly/price_monthly در PlanInfo = «قیمت خرید» به یورو (gross).
         """
         types = await self._paginate("/server_types", "server_types")
+        # فقط پلن‌هایی که واقعاً در آن لوکیشن موجودند (جلوگیری از ایمپورت/فروش ناموجود)
+        available_ids: set = set()
+        if location:
+            try:
+                available_ids = await self._available_type_ids_at(location)
+            except Exception:
+                available_ids = set()
         plans: list[PlanInfo] = []
         for t in types:
             if t.get("deprecated"):
+                continue
+            if location and available_ids and t.get("id") not in available_ids:
                 continue
             for price in t.get("prices") or []:
                 loc = price.get("location")
@@ -263,7 +301,10 @@ class HetznerProvider(BaseProvider):
         return plans
 
     async def list_os_templates(self) -> list[dict]:
-        """ایمیج‌های رسمی (system) — id = name چون POST /servers نام را قبول می‌کند."""
+        """ایمیج‌های رسمی (system) — id = name چون POST /servers نام را قبول می‌کند.
+
+        مرتب‌سازی بلوکی: توزیع‌های هم‌خانواده کنار هم (Ubuntu ها با هم، Debian ها
+        با هم، ...) و داخل هر خانواده نسخه‌ی جدیدتر اول."""
         images = await self._paginate(
             "/images", "images", params={"type": "system", "status": "available"}
         )
@@ -271,12 +312,19 @@ class HetznerProvider(BaseProvider):
         for img in images:
             if img.get("deprecated"):
                 continue
+            try:
+                ver = float(str(img.get("os_version") or "0").split("-")[0])
+            except ValueError:
+                ver = 0.0
             result.append({
                 "id": img.get("name") or str(img.get("id")),
                 "name": f"{img.get('description') or img.get('name')}"
                         + (" (ARM)" if img.get("architecture") == "arm" else ""),
                 "architecture": img.get("architecture", "x86"),
+                "_flavor": (img.get("os_flavor") or "").lower(),
+                "_ver": ver,
             })
+        result.sort(key=lambda o: (o["_flavor"], -o["_ver"], o["architecture"]))
         return result
 
     # ── Extras (خارج از BaseProvider) ────────────────────────────────────────

@@ -22,6 +22,7 @@ from bot.keyboards.server import (
     add_traffic_kb, server_actions_kb, server_delete_confirm_kb,
     server_list_kb, subproducts_buy_kb,
 )
+from bot.providers import get_provider
 from bot.providers.virtualizor import VirtualizorProvider
 from bot.services.billing import BillingService
 from bot.services.currency import obj_currency, server_live_price, to_toman
@@ -225,8 +226,8 @@ async def cb_server_action(cb: CallbackQuery, user: User, session: AsyncSession)
             return
         try:
             import asyncio as _ai
-            prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
-            os_list = await _ai.wait_for(prov.list_os_templates(), timeout=12)
+            prov = get_provider(account)
+            os_list = await _ai.wait_for(prov.list_os_templates(), timeout=15)
         except Exception as e:
             await cb.message.answer(f"{ERR} خطا در دریافت لیست OS: {_esc(e)}", parse_mode="HTML")
             await cb.answer()
@@ -678,8 +679,8 @@ async def _ask_os(cb: CallbackQuery, state: FSMContext, session: AsyncSession, u
     if account:
         try:
             import asyncio
-            prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
-            os_list = await asyncio.wait_for(prov.list_os_templates(), timeout=10)
+            prov = get_provider(account)
+            os_list = await asyncio.wait_for(prov.list_os_templates(), timeout=15)
         except Exception:
             pass
 
@@ -725,8 +726,8 @@ async def _ask_os_message(message: Message, state: FSMContext, session: AsyncSes
     if account:
         try:
             import asyncio
-            prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
-            os_list = await asyncio.wait_for(prov.list_os_templates(), timeout=10)
+            prov = get_provider(account)
+            os_list = await asyncio.wait_for(prov.list_os_templates(), timeout=15)
         except Exception:
             pass
 
@@ -989,9 +990,11 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
         billing = BillingService(session)
         await billing.debit(user.id, final_price or 0, server_id=server.id,
                             description=f"خرید سرور {server.name}")
-        # Persist root password so it can be displayed again from panel
+        # رمز واقعی: بعضی سرویس‌دهنده‌ها (هتزنر) رمز خودشان را تولید می‌کنند و
+        # در extra_data برمی‌گردانند؛ وگرنه همان رمز تولیدیِ ربات (ویرچولایزور)
+        real_password = (server.extra_data or {}).get("root_password") or root_password
         _extra = dict(server.extra_data or {})
-        _extra["root_password"] = root_password
+        _extra["root_password"] = real_password
         server.extra_data = _extra
         await session.flush()
 
@@ -1000,7 +1003,7 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
             f'<tg-emoji emoji-id="5397916757333654639">➕</tg-emoji> <b>سرور {server.name} آماده است!</b>\n\n'
             f"• پلن: {plan_name}\n"
             f"• آیپی: <code>{server.ip_address or 'در حال تخصیص...'}</code>\n"
-            f"• پسورد: <code>{root_password}</code>\n"
+            f"• پسورد: <code>{real_password}</code>\n"
             f"\n• این اطلاعات را در جای امنی ذخیره کنید.\n"
             "• سیستم‌عامل در حال نصب است — چند دقیقه منتظر بمانید."
         )
@@ -1026,6 +1029,9 @@ async def cb_change_ip_confirm(cb: CallbackQuery, user: User, session: AsyncSess
         return
     if server.billing_type != BillingType.MONTHLY:
         await cb.answer("تغییر IP فقط برای سرورهای ماهانه فعال است.", show_alert=True)
+        return
+    if server.provider_type != ProviderType.VIRTUALIZOR:
+        await cb.answer("تغییر IP برای این سرویس‌دهنده در دسترس نیست.", show_alert=True)
         return
 
     account = await session.get(ProviderAccount, server.provider_account_id) if server.provider_account_id else None
@@ -1130,6 +1136,9 @@ async def cb_add_ip_confirm(cb: CallbackQuery, user: User, session: AsyncSession
         return
     if server.billing_type != BillingType.MONTHLY:
         await cb.answer("IP اضافه فقط برای سرورهای ماهانه فعال است.", show_alert=True)
+        return
+    if server.provider_type != ProviderType.VIRTUALIZOR:
+        await cb.answer("IP اضافه برای این سرویس‌دهنده در دسترس نیست.", show_alert=True)
         return
 
     account = await session.get(ProviderAccount, server.provider_account_id) if server.provider_account_id else None
@@ -1242,7 +1251,7 @@ async def cb_server_usage(cb: CallbackQuery, user: User, session: AsyncSession):
     account = await session.get(ProviderAccount, server.provider_account_id) if server.provider_account_id else None
     if account and server.provider_server_id:
         try:
-            prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
+            prov = get_provider(account)
             used = await prov.get_traffic(server.provider_server_id)
             server.traffic_used_gb = used
             await session.flush()
@@ -1418,7 +1427,7 @@ async def cb_change_password_do(cb: CallbackQuery, user: User, session: AsyncSes
             account = await session.get(ProviderAccount, server.provider_account_id) if server.provider_account_id else None
             if account:
                 try:
-                    prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
+                    prov = get_provider(account)
                     await prov.restart_server(server.provider_server_id)
                 except Exception:
                     pass

@@ -658,11 +658,11 @@ async def cb_hz_info(cb: CallbackQuery, session: AsyncSession):
         await cb.answer("پلن یافت نشد.", show_alert=True)
         return
     await cb.answer(
-        f"{pid} — {info.cpu}هسته / {info.ram // 1024}GB رم / {info.disk}GB دیسک\n"
-        f"خرید ساعتی: €{info.price_hourly:g}\n"
-        f"خرید ماهانه: €{info.price_monthly:g}\n"
-        f"ترافیک: {info.bandwidth:,} GB\n"
-        "(EUR شامل VAT)",
+        f"{pid.upper()} — {info.cpu} vCPU / {info.ram // 1024} GB RAM / {info.disk} GB Disk\n"
+        f"Hourly cost: €{info.price_hourly:g}\n"
+        f"Monthly cost: €{info.price_monthly:g}\n"
+        f"Traffic: {info.bandwidth:,} GB\n"
+        "(EUR incl. VAT)",
         show_alert=True,
     )
 

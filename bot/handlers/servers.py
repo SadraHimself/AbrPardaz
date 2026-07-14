@@ -1,7 +1,7 @@
 """Server management handlers — Virtualizor only, category-based buying with discount codes."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from aiogram import F, Router
 from aiogram.filters import StateFilter
@@ -245,6 +245,40 @@ async def cb_server_action(cb: CallbackQuery, user: User, session: AsyncSession)
         await cb.answer()
         return
 
+    # ── گارد فعال‌سازی (unsuspend) بر اساس دلیل تعلیق — ضد دور زدن ──
+    if action == "unsuspend":
+        reason = server.suspend_reason
+        if reason == SuspendReason.TRAFFIC_EXCEEDED:
+            await cb.answer(
+                "ترافیک این سرویس تمام شده است — پس از خرید ترافیک، سرویس فعال می‌شود.",
+                show_alert=True,
+            )
+            return
+        if reason == SuspendReason.ADMIN:
+            await cb.answer(
+                "این سرویس توسط مدیریت تعلیق شده — با پشتیبانی در تماس باشید.",
+                show_alert=True,
+            )
+            return
+        if reason == SuspendReason.EXPIRED:
+            # فعال‌سازی = تمدید ماهانه با قیمت روز؛ بدون پرداخت خبری از روشن‌شدن نیست
+            billing = BillingService(session)
+            if not await billing.charge_monthly(server):
+                await cb.answer("موجودی برای تمدید ماهانه کافی نیست. کیف پول را شارژ کنید.", show_alert=True)
+                return
+            server.expires_at = datetime.now(timezone.utc) + timedelta(days=30)
+            await session.flush()
+        if reason == SuspendReason.LOW_BALANCE and server.billing_type == BillingType.HOURLY:
+            # حداقل اعتبارِ یک ساعت لازم است تا بلافاصله دوباره ساسپند نشود
+            _amt, _cur = await server_live_price(session, server, hourly=True)
+            _need = _amt if _cur == "irt" else await to_toman(session, _amt, _cur)
+            if _need and user.balance < _need:
+                await cb.answer(
+                    f"برای فعال‌سازی حداقل اعتبار یک ساعت ({_need:,.0f} تومان) لازم است.",
+                    show_alert=True,
+                )
+                return
+
     labels = {"start": "روشن", "stop": "خاموش", "restart": "ریبوت",
               "delete": "حذف", "change_ip": "تغییر IP",
               "suspend": "ساسپند", "unsuspend": "رفع ساسپند"}
@@ -346,14 +380,16 @@ async def cb_server_rebuild_do(cb: CallbackQuery, user: User, session: AsyncSess
         svc = ServerService(session)
         ok = await svc.perform_action(server, "rebuild", os_id=os_id, new_password=new_root_pass)
         if ok:
+            # هتزنر رمز دلخواه نمی‌پذیرد — رمز واقعی از سرویس (رمز تولیدی سرویس‌دهنده)
+            real_pass = svc.last_root_password or new_root_pass
             server.status = ServerStatus.REBUILDING
             _extra = dict(server.extra_data or {})
-            _extra["root_password"] = new_root_pass
+            _extra["root_password"] = real_pass
             server.extra_data = _extra
             await session.flush()
             await cb.message.answer(
                 f"✅ <b>ریبیلد شروع شد.</b>\n\n"
-                f"🔑 رمز root جدید: <code>{new_root_pass}</code>\n\n"
+                f"🔑 رمز root جدید: <code>{real_pass}</code>\n\n"
                 f"{WARN} این رمز را در جای امنی ذخیره کنید.\n"
                 "🔔 چند دقیقه منتظر نصب OS بمانید.",
                 parse_mode="HTML",
@@ -1434,6 +1470,7 @@ async def cb_change_password_do(cb: CallbackQuery, user: User, session: AsyncSes
         svc = ServerService(session)
         ok = await svc.perform_action(server, "change_password", password=new_password)
         if ok:
+            new_password = svc.last_root_password or new_password
             account = await session.get(ProviderAccount, server.provider_account_id) if server.provider_account_id else None
             if account:
                 try:

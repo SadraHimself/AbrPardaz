@@ -40,6 +40,8 @@ _GB = 1024 ** 3
 class HetznerProvider(BaseProvider):
     def __init__(self, api_token: str):
         self.token = (api_token or "").strip()
+        # رمز تولیدیِ هتزنر در آخرین rebuild/reset — چون رمز دلخواه نمی‌پذیرد
+        self.last_root_password: str | None = None
 
     # ── HTTP core ─────────────────────────────────────────────────────────────
 
@@ -215,7 +217,16 @@ class HetznerProvider(BaseProvider):
         }
         if params.location:
             body["location"] = params.location
-        data = await self._request("POST", "/servers", json=body, timeout=60)
+        try:
+            data = await self._request("POST", "/servers", json=body, timeout=60)
+        except RuntimeError as e:
+            # نام سرور در پروژه باید یکتا باشد — کاربر دیگری قبلاً همین hostname را داده
+            if "uniqueness" in str(e).lower():
+                import secrets as _sec
+                body["name"] = f"{params.name}-{_sec.token_hex(2)}"
+                data = await self._request("POST", "/servers", json=body, timeout=60)
+            else:
+                raise
         srv = data.get("server") or {}
         root_password = data.get("root_password")
         try:
@@ -370,7 +381,14 @@ class HetznerProvider(BaseProvider):
         await self._wait_action(data.get("action"), timeout_s=120)
         if not new_pass:
             raise RuntimeError("هتزنر رمز جدید برنگرداند")
+        self.last_root_password = new_pass
         return new_pass
+
+    async def change_root_password(self, server_id: str, new_password: str) -> bool:
+        """هتزنر رمز دلخواه نمی‌پذیرد — reset می‌کنیم و رمز تولیدی هتزنر در
+        last_root_password قرار می‌گیرد تا لایه‌ی سرویس همان را به کاربر بدهد."""
+        await self.reset_password(server_id)
+        return True
 
     async def list_locations(self) -> list[dict]:
         locs = await self._paginate("/locations", "locations")

@@ -21,6 +21,9 @@ class ServerService:
 
     def __init__(self, session: AsyncSession):
         self.session = session
+        # رمز واقعیِ آخرین rebuild/change_password — برخی سرویس‌دهنده‌ها (هتزنر)
+        # رمز دلخواه نمی‌پذیرند و رمز تولیدی خودشان را برمی‌گردانند
+        self.last_root_password: str | None = None
 
     async def _get_account(self, account_id: int) -> ProviderAccount:
         result = await self.session.execute(
@@ -240,7 +243,16 @@ class ServerService:
         if action == "rebuild":
             server.status = ServerStatus.REBUILDING
             await self.session.flush()
-            return await provider.rebuild_server(sid, kwargs["os_id"], rootpass=kwargs.get("new_password", ""))
+            ok = await provider.rebuild_server(sid, kwargs["os_id"], rootpass=kwargs.get("new_password", ""))
+            if ok:
+                real = getattr(provider, "last_root_password", None) or kwargs.get("new_password", "")
+                self.last_root_password = real or None
+                if real:
+                    _extra = dict(server.extra_data or {})
+                    _extra["root_password"] = real
+                    server.extra_data = _extra
+                    await self.session.flush()
+            return ok
         if action == "suspend":
             ok = await provider.suspend_server(sid)
             if ok:
@@ -285,8 +297,10 @@ class ServerService:
             new_pass = kwargs["password"]
             ok = await provider.change_root_password(sid, new_pass)
             if ok:
+                real = getattr(provider, "last_root_password", None) or new_pass
+                self.last_root_password = real
                 _extra = dict(server.extra_data or {})
-                _extra["root_password"] = new_pass
+                _extra["root_password"] = real
                 server.extra_data = _extra
                 await self.session.flush()
             return ok

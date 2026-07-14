@@ -1028,8 +1028,10 @@ async def cb_admin_usrv_rebuild_do(cb: CallbackQuery, session: AsyncSession):
     _alpha = _str.ascii_letters + _str.digits + "!@#$%^&*"
     new_pass = "".join(_sec.choice(_alpha) for _ in range(16))
     try:
-        ok = await ServerService(session).perform_action(server, "rebuild", os_id=os_id, new_password=new_pass)
+        _svc = ServerService(session)
+        ok = await _svc.perform_action(server, "rebuild", os_id=os_id, new_password=new_pass)
         if ok:
+            new_pass = _svc.last_root_password or new_pass
             extra = dict(server.extra_data or {})
             extra["root_password"] = new_pass
             server.extra_data = extra

@@ -225,7 +225,11 @@ def check_providers_health():
                     prev_ok = (account.extra_config or {}).get("health_ok", True)
                     ok, reason = True, ""
                     try:
-                        await get_provider(account).list_plans()
+                        prov = get_provider(account)
+                        if hasattr(prov, "ping"):
+                            await prov.ping()   # سبک (هتزنر) — کل کاتالوگ لازم نیست
+                        else:
+                            await prov.list_plans()
                     except Exception as e:
                         ok, reason = False, str(e)[:200]
 

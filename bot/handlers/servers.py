@@ -45,12 +45,12 @@ _FA_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
 
 # لوکیشن‌های هتزنر: (اموجی پریمیوم پرچم، لیبل فارسی) — چیدمان اختصاصی خودمان
 _HZ_LOC_META = {
-    "fsn1": ("5409360418520967565", "آلمان — فالکن‌اشتاین"),
-    "nbg1": ("5409360418520967565", "آلمان — نورنبرگ"),
-    "hel1": ("5382151560182642075", "فنلاند — هلسینکی"),
-    "ash":  ("5927292517610426176", "آمریکا — اشبرن (شرق)"),
-    "hil":  ("5927292517610426176", "آمریکا — هیلزبرو (غرب)"),
-    "sin":  ("5292144120993686909", "سنگاپور"),
+    "fsn1": ("5409360418520967565", "Falkenstein"),
+    "nbg1": ("5409360418520967565", "Nuremberg"),
+    "hel1": ("5382151560182642075", "Helsinki"),
+    "ash":  ("5927292517610426176", "Ashburn"),
+    "hil":  ("5927292517610426176", "Hillsboro"),
+    "sin":  ("5292144120993686909", "Singapore"),
 }
 
 
@@ -641,8 +641,9 @@ async def _render_plan_list(cb: CallbackQuery, state: FSMContext, session: Async
             traffic = f"{plan.bandwidth}گیگ"
         specs = f"{plan.cpu}هسته | {ram_gb}رم | {traffic}".translate(_FA_DIGITS)
         label = f"{specs} | {plan.display_name or plan.name}"
-        # اموجی پریمیوم اختصاصی هر محصول (اختیاری — موقع ساخت/ویرایش تعیین می‌شود)
-        _pe = (plan.extra_data or {}).get("emoji_id")
+        # اموجی پریمیوم اختصاصی محصول؛ وگرنه پرچمِ لوکیشن (هتزنر)
+        _pe = (plan.extra_data or {}).get("emoji_id") \
+            or _HZ_LOC_META.get(plan.location or "", (None,))[0]
         _kw = {"icon_custom_emoji_id": _pe} if _pe else {}
         builder.button(text=label, callback_data=f"buyplan:{plan.id}", **_kw)
     builder.button(text="بازگشت", callback_data=back_cb, **{"icon_custom_emoji_id": "5258236805890710909"})
@@ -1207,7 +1208,7 @@ async def cb_change_ip_do(cb: CallbackQuery, user: User, session: AsyncSession):
         await cb.message.delete()
     except Exception:
         pass
-    wait = await cb.message.answer("⏳ در حال تغییر IP...")
+    wait = await cb.message.answer('\u200F<tg-emoji emoji-id="5386367538735104399">⌛️</tg-emoji> در حال تغییر IP...', parse_mode="HTML")
     try:
         old_ip = server.ip_address
         svc = ServerService(session)

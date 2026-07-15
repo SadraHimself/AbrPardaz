@@ -57,14 +57,13 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
             _btn("ریبوت", f"srv_action:{sid}:restart_confirm", "primary", "5346320297299560938"),
             _btn("ریبیلد", f"srv_action:{sid}:rebuild_menu", "primary", "5346269127059196142"),
         ])
-        # تغییر/افزودن IP فقط برای سیکل ماهانه و فقط سرویس‌دهنده ویرچولایزور
+        # سیاست IP: ویرچولایزور فقط ماهانه؛ هتزنر (IP رایگان) ساعتی و ماهانه
         is_virt = server.provider_type == ProviderType.VIRTUALIZOR
-        if is_hourly:
+        if is_hourly and is_virt:
             rows.append([
                 _btn("تغییر رمز", f"srv_chpass:{sid}", icon="4904500559203009298"),
                 _btn("آمار مصرف", f"srv_usage:{sid}", icon="5936143551854285132"),
             ])
-            rows.append([_btn("حذف سرور", f"srv_action:{sid}:delete_confirm", "danger", "5258130763148172425")])
         elif is_virt:
             rows.append([
                 _btn("تغییر IP", f"srv_changeip:{sid}", icon="6030867032637967807"),
@@ -75,14 +74,17 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
                 _btn("آمار مصرف", f"srv_usage:{sid}", icon="5936143551854285132"),
             ])
         else:
-            # ماهانه‌ی غیرویرچولایزور (هتزنر): تغییر IP دارد، آیپی اضافه هنوز نه
+            # هتزنر (ساعتی و ماهانه): تغییر IP + اسنپ‌شات؛ آیپی اضافه هنوز نه
             rows.append([
                 _btn("تغییر IP", f"srv_changeip:{sid}", icon="6030867032637967807"),
                 _btn("تغییر رمز", f"srv_chpass:{sid}", icon="4904500559203009298"),
             ])
             rows.append([
+                _btn("اسنپ شات", f"srv_snap:{sid}", icon="5346269127059196142"),
                 _btn("آمار مصرف", f"srv_usage:{sid}", icon="5936143551854285132"),
             ])
+        if is_hourly:
+            rows.append([_btn("حذف سرور", f"srv_action:{sid}:delete_confirm", "danger", "5258130763148172425")])
 
     elif server.status == ServerStatus.SUSPENDED:
         rows.append([

@@ -323,6 +323,16 @@ def sync_hetzner_catalog(self):
                                     plan.display_name or plan.name, loc)
                             if changed:
                                 plan.extra_data = extra
+                                # قیمت فروش دنبال قیمت خرید (سود درصدی اکانت)
+                                cfg = account.extra_config or {}
+                                mh = cfg.get("margin_hourly")
+                                mm = cfg.get("margin_monthly")
+                                if mh is not None and info.price_hourly:
+                                    plan.price_hourly = round(
+                                        float(info.price_hourly) * (1 + float(mh) / 100), 4)
+                                if mm is not None and info.price_monthly:
+                                    plan.price_monthly = round(
+                                        float(info.price_monthly) * (1 + float(mm) / 100), 2)
                 await session.commit()
             finally:
                 await bot.session.close()

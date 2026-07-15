@@ -187,8 +187,8 @@ async def _resync_servers() -> dict[str, int]:
 
 
 @router.message(F.document)
-async def handle_zip_upload(message: Message, user: User, state: FSMContext):
-    if not _is_admin(user):
+async def handle_zip_upload(message: Message, state: FSMContext, user: User | None = None):
+    if not user or not _is_admin(user):
         return
     # فقط در چت خصوصی — فوروارد بکاپ داخل گروه لاگ نباید prompt ریستور باز کند
     if message.chat.type != "private":

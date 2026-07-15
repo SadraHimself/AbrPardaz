@@ -28,7 +28,11 @@ router = Router(name="admin_users")
 
 
 class AdminFilter(Filter):
-    async def __call__(self, event: Message | CallbackQuery, user: User) -> bool:
+    # user برای آپدیت‌های گروهی (سرویس‌پیام‌ها/تاپیک‌ها) ست نمی‌شود — پیش‌فرض None
+    # تا فیلتر به‌جای TypeError، فقط False برگرداند
+    async def __call__(self, event: Message | CallbackQuery, user: User | None = None) -> bool:
+        if user is None:
+            return False
         return user.is_admin or (user.telegram_id in settings.admin_ids)
 
 

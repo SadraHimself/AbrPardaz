@@ -6,7 +6,7 @@ from typing import Optional
 from aiogram import Bot
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.database.models import BotSettings, Server, User
+from bot.database.models import BotSettings, ProviderAccount, Server, ServerPlan, User
 
 
 _TOPIC_KEYS = {
@@ -42,6 +42,26 @@ class LogService:
             )
         except Exception:
             pass
+
+    async def _origin_line(self, server: Server) -> str:
+        """ارائه‌دهنده + گروه محصولِ سرور — در لاگ‌های خرید/عملیات ذکر می‌شود."""
+        parts = []
+        try:
+            if server.provider_account_id:
+                acc = await self.session.get(ProviderAccount, server.provider_account_id)
+                if acc:
+                    parts.append(f"ارائه‌دهنده: {acc.name}")
+        except Exception:
+            pass
+        try:
+            plan_id = (server.extra_data or {}).get("plan_id")
+            if plan_id:
+                plan = await self.session.get(ServerPlan, plan_id)
+                if plan and plan.category:
+                    parts.append(f"گروه: {plan.category}")
+        except Exception:
+            pass
+        return ("\n🏢 " + " | ".join(parts)) if parts else ""
 
     @staticmethod
     def _user_line(user: User) -> str:
@@ -101,7 +121,8 @@ class LogService:
             f"🖥 سرور: {server.name}\n"
             f"🌐 آیپی: <code>{server.ip_address or '—'}</code>\n"
             f"💳 نوع: {billing_label}\n"
-            f"💵 مبلغ: {amount:,.0f} تومان",
+            f"💵 مبلغ: {amount:,.0f} تومان"
+            f"{await self._origin_line(server)}",
         )
 
     async def log_ip_change(self, user: User, server: Server,
@@ -114,7 +135,8 @@ class LogService:
             f"🖥 سرور: {server.name}\n"
             f"⬅️ IP قدیم: <code>{old_ip or '—'}</code>\n"
             f"➡️ IP جدید: <code>{new_ip}</code>"
-            f"{fee_line}",
+            f"{fee_line}"
+            f"{await self._origin_line(server)}",
         )
 
     async def log_extra_ip(self, user: User, server: Server,
@@ -127,7 +149,8 @@ class LogService:
             f"🖥 سرور: {server.name}\n"
             f"🌐 IP اصلی: <code>{server.ip_address or '—'}</code>\n"
             f"🆕 IP اضافه: <code>{new_ip}</code>"
-            f"{fee_line}",
+            f"{fee_line}"
+            f"{await self._origin_line(server)}",
         )
 
     async def log_ban_user(self, target: User, reason: str, days: int, admin_id: int) -> None:
@@ -165,7 +188,8 @@ class LogService:
             f"🖥 <b>عملیات سرور</b>\n\n"
             f"{self._user_line(user)}\n"
             f"🖥 سرور: {server.name} (<code>{server.ip_address or '—'}</code>)\n"
-            f"⚡ عملیات: {labels.get(action, action)}",
+            f"⚡ عملیات: {labels.get(action, action)}"
+            f"{await self._origin_line(server)}",
         )
 
     async def log_plan_unavailable(self, plan_name: str, location: str) -> None:

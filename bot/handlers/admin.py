@@ -588,7 +588,9 @@ async def cb_admin_plans_grp(cb: CallbackQuery, session: AsyncSession):
         cond, title = ServerPlan.category == group.name, group.name
     await cb.answer()
     result = await session.execute(select(ServerPlan).where(cond))
-    plans = sorted(result.scalars().all(), key=plan_sort_key)
+    # اول گروه‌بندی بر اساس لوکیشن (fsn1ها با هم، بعد بقیه)، داخل هر لوکیشن ترتیب دستی/نام
+    plans = sorted(result.scalars().all(),
+                   key=lambda p: ((p.location or ""),) + plan_sort_key(p))
     await cb.message.edit_text(
         f"<b>{title}</b>\n\n{len(plans)} محصول:",
         parse_mode="HTML",

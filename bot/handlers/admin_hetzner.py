@@ -776,8 +776,8 @@ async def _import_one(session: AsyncSession, account: ProviderAccount,
     plan = ServerPlan(
         provider_type=ProviderType.HETZNER,
         provider_account_id=account.id,
-        name=f"{info.provider_plan_id}-{loc}",
-        display_name=f"{info.provider_plan_id.upper()} — {loc}",
+        name=f"{info.provider_plan_id}-{loc}",   # نام داخلی (ادمین) — یکتا با لوکیشن
+        display_name=info.provider_plan_id.upper(),  # نمایش کلاینت — بدون پسوند لوکیشن
         ram=info.ram, cpu=info.cpu, disk=info.disk, bandwidth=info.bandwidth,
         price_hourly=None, price_monthly=None,   # قیمت فروش را ادمین تعیین می‌کند
         location=loc,

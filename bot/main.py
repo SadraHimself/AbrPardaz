@@ -40,6 +40,27 @@ async def on_startup(bot: Bot) -> None:
             ))
     except Exception as e:
         logger.warning("enum migration skipped: %s", e)
+
+    # پاک‌سازی یک‌بارِ display_name محصولات هتزنرِ قدیمی از پسوند لوکیشن («CPX22 — fsn1» → «CPX22»)
+    try:
+        from bot.database.models import ProviderType, ServerPlan
+        from bot.database.session import AsyncSessionFactory
+        from sqlalchemy import select
+        async with AsyncSessionFactory() as s:
+            rows = (await s.execute(
+                select(ServerPlan).where(ServerPlan.provider_type == ProviderType.HETZNER)
+            )).scalars().all()
+            fixed = 0
+            for p in rows:
+                if p.display_name and "—" in p.display_name:
+                    p.display_name = p.display_name.split("—")[0].strip()
+                    fixed += 1
+            if fixed:
+                await s.commit()
+                logger.info("cleaned %s hetzner display names", fixed)
+    except Exception as e:
+        logger.warning("hetzner display-name cleanup skipped: %s", e)
+
     logger.info("Database tables ready.")
 
 

@@ -636,7 +636,8 @@ async def _render_plan_list(cb: CallbackQuery, state: FSMContext, session: Async
     for plan in plans:
         ram_gb = plan.ram // 1024 if plan.ram >= 1024 else plan.ram
         if plan.bandwidth and plan.bandwidth >= 1000:
-            traffic = f"{plan.bandwidth / 1000:g}ترابایت"
+            # نمای کاربر: رند به نزدیک‌ترین ترابایت (20.48 → 20)؛ مقدار دقیق در پنل ادمین
+            traffic = f"{round(plan.bandwidth / 1000)}ترابایت"
         else:
             traffic = f"{plan.bandwidth}گیگ"
         specs = f"{plan.cpu}هسته | {ram_gb}رم | {traffic}".translate(_FA_DIGITS)

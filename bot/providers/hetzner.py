@@ -390,6 +390,71 @@ class HetznerProvider(BaseProvider):
         await self.reset_password(server_id)
         return True
 
+    async def change_ip(self, server_id: str) -> Optional[str]:
+        """تعویض IPv4 اصلی از مسیر Primary IP:
+        ساخت IP جدید → خاموش (unassign فقط روی سرور خاموش) → جداکردن قدیمی →
+        اتصال جدید → حذف قدیمی (توقف بیل آن) → روشن. در خطا، برگشت به IP قبلی."""
+        import secrets as _sec
+
+        data = await self._request("GET", f"/servers/{server_id}")
+        srv = data.get("server") or {}
+        ipv4 = ((srv.get("public_net") or {}).get("ipv4") or {})
+        old_id, old_ip = ipv4.get("id"), ipv4.get("ip")
+        if not old_id:
+            raise RuntimeError("این سرور IPv4 اصلی ندارد")
+        dc = (srv.get("datacenter") or {}).get("name")
+        was_running = srv.get("status") == "running"
+
+        # ۱) Primary IP جدید (unassigned) در همان دیتاسنتر
+        created = await self._request("POST", "/primary_ips", json={
+            "type": "ipv4",
+            "datacenter": dc,
+            "name": f"ip-{server_id}-{_sec.token_hex(3)}",
+            "auto_delete": True,   # با حذف سرور، این IP هم حذف شود (بیل نماند)
+        })
+        new_pi = created.get("primary_ip") or {}
+        new_id, new_ip = new_pi.get("id"), new_pi.get("ip")
+        if not new_id:
+            raise RuntimeError("ساخت Primary IP جدید ناموفق بود")
+
+        try:
+            if was_running:
+                await self._server_action(server_id, "poweroff")
+            d = await self._request("POST", f"/primary_ips/{old_id}/actions/unassign")
+            await self._wait_action(d.get("action"))
+            d = await self._request(
+                "POST", f"/primary_ips/{new_id}/actions/assign",
+                json={"assignee_id": int(server_id), "assignee_type": "server"},
+            )
+            await self._wait_action(d.get("action"))
+            try:
+                await self._request("DELETE", f"/primary_ips/{old_id}")
+            except Exception as e:
+                logger.warning("change_ip: old primary ip %s not deleted: %s", old_id, e)
+            if was_running:
+                await self._server_action(server_id, "poweron")
+            return new_ip
+        except Exception:
+            # برگشت: IP قدیمی را دوباره وصل و IP جدید را حذف کن
+            try:
+                d = await self._request(
+                    "POST", f"/primary_ips/{old_id}/actions/assign",
+                    json={"assignee_id": int(server_id), "assignee_type": "server"},
+                )
+                await self._wait_action(d.get("action"))
+            except Exception:
+                pass
+            try:
+                await self._request("DELETE", f"/primary_ips/{new_id}")
+            except Exception:
+                pass
+            if was_running:
+                try:
+                    await self._server_action(server_id, "poweron")
+                except Exception:
+                    pass
+            raise
+
     async def list_locations(self) -> list[dict]:
         locs = await self._paginate("/locations", "locations")
         return [{

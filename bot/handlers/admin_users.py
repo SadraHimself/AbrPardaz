@@ -857,6 +857,8 @@ async def cb_admin_usrv_action(cb: CallbackQuery, session: AsyncSession):
             if ok:
                 await _notify_admin_action(cb.bot, target,
                                            f"کاربر گرامی، سرویس {label} توسط مدیریت {verbs[action]}")
+                if target:
+                    await LogService(cb.bot, session).log_server_action(target, server, action)
             await _render_admin_server(cb.message, session, server)
 
         elif action in ("suspend", "unsuspend"):
@@ -865,19 +867,25 @@ async def cb_admin_usrv_action(cb: CallbackQuery, session: AsyncSession):
                 text = ("از حالت تعلیق خارج شد" if action == "unsuspend" else "تعلیق شد")
                 await _notify_admin_action(cb.bot, target,
                                            f"کاربر گرامی، سرویس {label} توسط مدیریت {text}")
+                if target:
+                    await LogService(cb.bot, session).log_server_action(target, server, action)
             await _render_admin_server(cb.message, session, server)
 
         elif action == "change_ip":
             old_ip = server.ip_address
             ok = await svc.perform_action(server, "change_ip")
             if ok:
-                try:
-                    account = await session.get(ProviderAccount, server.provider_account_id)
-                    if account:
-                        prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
-                        await prov.restart_server(server.provider_server_id)
-                except Exception:
-                    pass
+                from bot.database.models import ProviderType as _PT
+                if server.provider_type == _PT.VIRTUALIZOR:
+                    try:
+                        account = await session.get(ProviderAccount, server.provider_account_id)
+                        if account:
+                            from bot.providers import get_provider as _gp
+                            await _gp(account).restart_server(server.provider_server_id)
+                    except Exception:
+                        pass
+                if target:
+                    await LogService(cb.bot, session).log_ip_change(target, server, old_ip, server.ip_address)
                 await _notify_admin_action(
                     cb.bot, target,
                     f"کاربر گرامی، آیپی سرویس {server.name} توسط مدیریت تغییر کرد.\n"
@@ -911,6 +919,8 @@ async def cb_admin_usrv_action(cb: CallbackQuery, session: AsyncSession):
                 f"کاربر گرامی، یک آیپی اضافه توسط مدیریت به سرویس {server.name} اختصاص یافت.\n"
                 f"آیپی جدید: <code>{new_ip}</code>",
             )
+            if target:
+                await LogService(cb.bot, session).log_extra_ip(target, server, new_ip)
             await cb.message.answer(f"✅ آیپی اضافه: <code>{new_ip}</code>", parse_mode="HTML")
             await _render_admin_server(cb.message, session, server)
 
@@ -919,6 +929,8 @@ async def cb_admin_usrv_action(cb: CallbackQuery, session: AsyncSession):
             if ok:
                 await _notify_admin_action(cb.bot, target,
                                            f"کاربر گرامی، سرویس {label} توسط مدیریت حذف شد")
+                if target:
+                    await LogService(cb.bot, session).log_server_action(target, server, "delete")
                 await cb.message.edit_text(
                     "سرور حذف شد.",
                     reply_markup=back_to_admin_kb(f"admin:user_servers:{server.user_id}"),
@@ -1041,6 +1053,8 @@ async def cb_admin_usrv_rebuild_do(cb: CallbackQuery, session: AsyncSession):
                 f"کاربر گرامی، سرویس {_srv_label(server)} توسط مدیریت ریبیلد شد.\n"
                 f"رمز root جدید: <code>{new_pass}</code>",
             )
+            if target:
+                await LogService(cb.bot, session).log_server_action(target, server, "rebuild")
             await cb.message.edit_text(
                 f"✅ ریبیلد شروع شد.\nرمز جدید: <code>{new_pass}</code>",
                 parse_mode="HTML",

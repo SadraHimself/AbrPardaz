@@ -1076,9 +1076,6 @@ async def cb_change_ip_confirm(cb: CallbackQuery, user: User, session: AsyncSess
     if server.billing_type != BillingType.MONTHLY:
         await cb.answer("تغییر IP فقط برای سرورهای ماهانه فعال است.", show_alert=True)
         return
-    if server.provider_type != ProviderType.VIRTUALIZOR:
-        await cb.answer("تغییر IP برای این سرویس‌دهنده در دسترس نیست.", show_alert=True)
-        return
 
     account = await session.get(ProviderAccount, server.provider_account_id) if server.provider_account_id else None
     fee = float((account.extra_config or {}).get("change_ip_fee", 0) or 0) if account else 0
@@ -1135,17 +1132,20 @@ async def cb_change_ip_do(cb: CallbackQuery, user: User, session: AsyncSession):
         pass
     wait = await cb.message.answer("⏳ در حال تغییر IP...")
     try:
-        prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
         old_ip = server.ip_address
-        new_ip = await prov.change_ip(server.provider_server_id)
-        server.ip_address = new_ip
-        await session.flush()
+        svc = ServerService(session)
+        ok = await svc.perform_action(server, "change_ip")
+        if not ok:
+            raise RuntimeError("سرویس‌دهنده تغییر IP را انجام نداد")
+        new_ip = server.ip_address
 
-        # Restart so the new IP takes effect inside the OS
-        try:
-            await prov.restart_server(server.provider_server_id)
-        except Exception:
-            pass
+        # ویرچولایزور: ریبوت تا IP جدید داخل OS اعمال شود
+        # (هتزنر خودش در فرایند تعویض خاموش/روشن می‌کند)
+        if server.provider_type == ProviderType.VIRTUALIZOR:
+            try:
+                await get_provider(account).restart_server(server.provider_server_id)
+            except Exception:
+                pass
 
         fee_text = f"\n💸 هزینه کسر شد: {fee:,.0f} تومان" if fee > 0 else ""
         await wait.edit_text(

@@ -43,6 +43,16 @@ router = Router(name="servers")
 # تبدیل ارقام لاتین به فارسی برای نمایش مشخصات پلن
 _FA_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
 
+# لوکیشن‌های هتزنر: (اموجی پریمیوم پرچم، لیبل فارسی) — چیدمان اختصاصی خودمان
+_HZ_LOC_META = {
+    "fsn1": ("5409360418520967565", "آلمان — فالکن‌اشتاین"),
+    "nbg1": ("5409360418520967565", "آلمان — نورنبرگ"),
+    "hel1": ("5382151560182642075", "فنلاند — هلسینکی"),
+    "ash":  ("5927292517610426176", "آمریکا — اشبرن (شرق)"),
+    "hil":  ("5927292517610426176", "آمریکا — هیلزبرو (غرب)"),
+    "sin":  ("5292144120993686909", "سنگاپور"),
+}
+
 
 class BuyServerStates(StatesGroup):
     selecting_category = State()
@@ -66,6 +76,18 @@ class EditServerStates(StatesGroup):
 async def _show_server_list(target_msg, user: User, session: AsyncSession):
     svc = ServerService(session)
     servers = await svc.get_user_servers(user.id)
+
+    # فیکس حباب وضعیت: لیست هم مثل صفحه‌ی جزئیات، وضعیت زنده را sync می‌کند —
+    # ولی فقط برای سرورهای «گذرا» (تازه‌ساخته/ریبیلد/ریبوت) تا لیست سنگین نشود.
+    import asyncio as _aio
+    _transitional = (ServerStatus.PENDING, ServerStatus.BUILDING,
+                     ServerStatus.REBUILDING, ServerStatus.REBOOTING)
+    for s in servers:
+        if s.status in _transitional and s.provider_server_id:
+            try:
+                await _aio.wait_for(svc.sync_server_status(s), timeout=8)
+            except Exception:
+                pass
     if not servers:
         await target_msg.edit_text(
             "شما هیچ سروری ندارید.\nبرای خرید از منوی زیر استفاده کنید:",
@@ -579,6 +601,37 @@ async def _select_category(cb: CallbackQuery, user: User, state: FSMContext,
         await cb.answer("در این دسته‌بندی محصولی موجود نیست.", show_alert=True)
         return
 
+    # گروه‌های چند-لوکیشنه (هتزنر): اول لوکیشن انتخاب می‌شود، بعد محصولات همان لوکیشن
+    if any(p.provider_type == ProviderType.HETZNER for p in plans):
+        gid = _grp.id if _grp else 0
+        locs = sorted({p.location for p in plans if p.location})
+        rows = []
+        pair = []
+        for loc in locs:
+            emoji_id, label = _HZ_LOC_META.get(loc, (None, loc))
+            kw = {"icon_custom_emoji_id": emoji_id} if emoji_id else {}
+            pair.append(InlineKeyboardButton(text=label, callback_data=f"buyloc:{gid}:{loc}", **kw))
+            if len(pair) == 2:
+                rows.append(pair)
+                pair = []
+        if pair:
+            rows.append(pair)
+        rows.append([InlineKeyboardButton(text="بازگشت", callback_data="buy_server",
+                                          **{"icon_custom_emoji_id": "5258236805890710909"})])
+        await cb.message.edit_text(
+            '<tg-emoji emoji-id="5926980668624998964">🟡</tg-emoji> '
+            "موقعیت جغرافیایی سرور خود را انتخاب کنید:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+        await cb.answer()
+        return
+
+    await _render_plan_list(cb, state, session, category, plans, back_cb="buy_server")
+
+
+async def _render_plan_list(cb: CallbackQuery, state: FSMContext, session: AsyncSession,
+                            category: str, plans: list, back_cb: str):
     builder = InlineKeyboardBuilder()
     for plan in plans:
         ram_gb = plan.ram // 1024 if plan.ram >= 1024 else plan.ram
@@ -592,9 +645,10 @@ async def _select_category(cb: CallbackQuery, user: User, state: FSMContext,
         _pe = (plan.extra_data or {}).get("emoji_id")
         _kw = {"icon_custom_emoji_id": _pe} if _pe else {}
         builder.button(text=label, callback_data=f"buyplan:{plan.id}", **_kw)
-    builder.button(text="بازگشت", callback_data="buy_server", **{"icon_custom_emoji_id": "5258236805890710909"})
+    builder.button(text="بازگشت", callback_data=back_cb, **{"icon_custom_emoji_id": "5258236805890710909"})
     builder.adjust(1)
 
+    await state.update_data(category=category)
     await state.set_state(BuyServerStates.selecting_plan)
     await cb.message.edit_text(
         '<tg-emoji emoji-id="5926980668624998964">🟡</tg-emoji> یک محصول انتخاب کنید:',
@@ -602,6 +656,28 @@ async def _select_category(cb: CallbackQuery, user: User, state: FSMContext,
         reply_markup=builder.as_markup(),
     )
     await cb.answer()
+
+
+@router.callback_query(_BUY_NAV_STATES, F.data.startswith("buyloc:"))
+async def cb_buy_location(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
+    _, gid, loc = cb.data.split(":")
+    group = await session.get(ProductGroup, int(gid))
+    if not group or group.is_hidden:
+        await cb.answer("این گروه در دسترس نیست.", show_alert=True)
+        return
+    result = await session.execute(
+        select(ServerPlan).where(
+            ServerPlan.category == group.name,
+            ServerPlan.is_active == True,
+            ServerPlan.location == loc,
+        )
+    )
+    plans = sorted(result.scalars().all(), key=plan_sort_key)
+    if not plans:
+        await cb.answer("در این لوکیشن محصولی موجود نیست.", show_alert=True)
+        return
+    await _render_plan_list(cb, state, session, group.name, plans,
+                            back_cb=f"buygrp:{group.id}")
 
 
 @router.callback_query(BuyServerStates.selecting_plan, F.data.startswith("buyplan:"))
@@ -1073,7 +1149,8 @@ async def cb_change_ip_confirm(cb: CallbackQuery, user: User, session: AsyncSess
     if server.status != ServerStatus.ACTIVE:
         await cb.answer("سرور باید فعال باشد.", show_alert=True)
         return
-    if server.billing_type != BillingType.MONTHLY:
+    if (server.billing_type != BillingType.MONTHLY
+            and server.provider_type == ProviderType.VIRTUALIZOR):
         await cb.answer("تغییر IP فقط برای سرورهای ماهانه فعال است.", show_alert=True)
         return
 
@@ -1328,6 +1405,42 @@ async def cb_server_usage(cb: CallbackQuery, user: User, session: AsyncSession):
         )
     except Exception:
         pass  # message not modified (مقدار تغییری نکرده)
+
+
+# ── Snapshot (قالب — فعال‌سازی در فاز بعد) ───────────────────────────────────
+
+@router.callback_query(F.data.startswith("srv_snap:"))
+async def cb_server_snapshot_menu(cb: CallbackQuery, user: User, session: AsyncSession):
+    server_id = int(cb.data.split(":")[1])
+    server = await session.get(Server, server_id)
+    if not server or server.user_id != user.id:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    await cb.answer()
+    await cb.message.edit_text(
+        f'\u200F<tg-emoji emoji-id="5346269127059196142">📸</tg-emoji> '
+        f"<b>اسنپ شات — {server.name}</b>\n\n"
+        "یک گزینه را انتخاب کنید:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="ساخت اسنپ شات از این سرویس",
+                                  callback_data=f"srv_snap_new:{server_id}")],
+            [InlineKeyboardButton(text="استفاده از اسنپ شات روی این سرویس",
+                                  callback_data=f"srv_snap_use:{server_id}")],
+            [InlineKeyboardButton(text="بازگشت", callback_data=f"server:{server_id}",
+                                  **{"icon_custom_emoji_id": "5258236805890710909"})],
+        ]),
+    )
+
+
+@router.callback_query(F.data.startswith("srv_snap_new:"))
+async def cb_server_snapshot_new(cb: CallbackQuery):
+    await cb.answer("این قابلیت به‌زودی فعال می‌شود 🚧", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("srv_snap_use:"))
+async def cb_server_snapshot_use(cb: CallbackQuery):
+    await cb.answer("این قابلیت به‌زودی فعال می‌شود 🚧", show_alert=True)
 
 
 # ── Mute hourly billing notification ─────────────────────────────────────────

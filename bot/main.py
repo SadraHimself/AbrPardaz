@@ -56,7 +56,9 @@ async def on_error(event) -> bool:
         upd = event.update
         if upd.callback_query:
             await upd.callback_query.answer("⚠️ خطایی رخ داد. دوباره تلاش کنید.", show_alert=True)
-        elif upd.message:
+        elif upd.message and upd.message.chat.type == "private":
+            # فقط چت خصوصی — خطای پردازش سرویس‌پیام‌های گروه (مثل ساخت تاپیک)
+            # نباید داخل گروه/تاپیک‌ها اسپم شود
             await upd.message.answer(
                 '‏<tg-emoji emoji-id="4956611513369494230">⚠️</tg-emoji> خطایی رخ داد. دوباره تلاش کنید.',
                 parse_mode="HTML",

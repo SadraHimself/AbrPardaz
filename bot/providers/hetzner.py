@@ -402,31 +402,29 @@ class HetznerProvider(BaseProvider):
         old_id, old_ip = ipv4.get("id"), ipv4.get("ip")
         if not old_id:
             raise RuntimeError("این سرور IPv4 اصلی ندارد")
-        dc = (srv.get("datacenter") or {}).get("name")
         was_running = srv.get("status") == "running"
 
-        # ۱) Primary IP جدید (unassigned) در همان دیتاسنتر
-        created = await self._request("POST", "/primary_ips", json={
-            "type": "ipv4",
-            "datacenter": dc,
-            "name": f"ip-{server_id}-{_sec.token_hex(3)}",
-            "auto_delete": True,   # با حذف سرور، این IP هم حذف شود (بیل نماند)
-        })
-        new_pi = created.get("primary_ip") or {}
-        new_id, new_ip = new_pi.get("id"), new_pi.get("ip")
-        if not new_id:
-            raise RuntimeError("ساخت Primary IP جدید ناموفق بود")
+        # سرور فقط یک IPv4 اصلی می‌تواند داشته باشد → اول جدا، بعد ساختِ
+        # مستقیماً-متصل (assignee_id) — ساخت آزاد با datacenter خطای invalid_input می‌داد
+        if was_running:
+            await self._server_action(server_id, "poweroff")
+        d = await self._request("POST", f"/primary_ips/{old_id}/actions/unassign")
+        await self._wait_action(d.get("action"))
 
+        new_id = new_ip = None
         try:
-            if was_running:
-                await self._server_action(server_id, "poweroff")
-            d = await self._request("POST", f"/primary_ips/{old_id}/actions/unassign")
-            await self._wait_action(d.get("action"))
-            d = await self._request(
-                "POST", f"/primary_ips/{new_id}/actions/assign",
-                json={"assignee_id": int(server_id), "assignee_type": "server"},
-            )
-            await self._wait_action(d.get("action"))
+            created = await self._request("POST", "/primary_ips", json={
+                "type": "ipv4",
+                "name": f"ip-{server_id}-{_sec.token_hex(3)}",
+                "assignee_type": "server",
+                "assignee_id": int(server_id),
+                "auto_delete": True,   # با حذف سرور، این IP هم حذف شود (بیل نماند)
+            })
+            new_pi = created.get("primary_ip") or {}
+            new_id, new_ip = new_pi.get("id"), new_pi.get("ip")
+            await self._wait_action(created.get("action"))
+            if not new_ip:
+                raise RuntimeError("ساخت Primary IP جدید ناموفق بود")
             try:
                 await self._request("DELETE", f"/primary_ips/{old_id}")
             except Exception as e:
@@ -435,17 +433,23 @@ class HetznerProvider(BaseProvider):
                 await self._server_action(server_id, "poweron")
             return new_ip
         except Exception:
-            # برگشت: IP قدیمی را دوباره وصل و IP جدید را حذف کن
+            # برگشت: IP جدید (اگر ساخته شد) حذف و IP قدیمی دوباره وصل شود
+            if new_id:
+                try:
+                    d = await self._request("POST", f"/primary_ips/{new_id}/actions/unassign")
+                    await self._wait_action(d.get("action"))
+                except Exception:
+                    pass
+                try:
+                    await self._request("DELETE", f"/primary_ips/{new_id}")
+                except Exception:
+                    pass
             try:
                 d = await self._request(
                     "POST", f"/primary_ips/{old_id}/actions/assign",
                     json={"assignee_id": int(server_id), "assignee_type": "server"},
                 )
                 await self._wait_action(d.get("action"))
-            except Exception:
-                pass
-            try:
-                await self._request("DELETE", f"/primary_ips/{new_id}")
             except Exception:
                 pass
             if was_running:

@@ -75,8 +75,12 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
                 _btn("آمار مصرف", f"srv_usage:{sid}", icon="5936143551854285132"),
             ])
         else:
+            # ماهانه‌ی غیرویرچولایزور (هتزنر): تغییر IP دارد، آیپی اضافه هنوز نه
             rows.append([
+                _btn("تغییر IP", f"srv_changeip:{sid}", icon="6030867032637967807"),
                 _btn("تغییر رمز", f"srv_chpass:{sid}", icon="4904500559203009298"),
+            ])
+            rows.append([
                 _btn("آمار مصرف", f"srv_usage:{sid}", icon="5936143551854285132"),
             ])
 

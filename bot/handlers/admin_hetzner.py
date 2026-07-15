@@ -48,10 +48,43 @@ class HetznerFSM(StatesGroup):
     add_token = State()
     edit_value = State()
     edit_limit = State()   # لیمیت تعداد VM اکانت (دستی — API سقف را نمی‌دهد)
+    edit_margin = State()  # درصد سود ساعتی/ماهانه اکانت
 
 
 def _st(ok: bool) -> str:
     return "✅ " if ok else "❌ "
+
+
+async def _apply_margins(session: AsyncSession, account: ProviderAccount) -> int:
+    """قیمت فروش همه پلن‌های اکانت = قیمت خرید × (۱ + سود٪) — و فعال‌سازی خودکار.
+
+    منطق قیمت‌گذاری هتزنر: به‌جای قیمت دستی تک‌تک پلن‌ها، ادمین درصد سود
+    ساعتی/ماهانه تعیین می‌کند؛ تغییر سود یا تغییر قیمت خرید (سینک ۳۰ دقیقه‌ای)
+    خودکار روی قیمت فروش اعمال می‌شود."""
+    cfg = account.extra_config or {}
+    mh, mm = cfg.get("margin_hourly"), cfg.get("margin_monthly")
+    if mh is None and mm is None:
+        return 0
+    plans = (await session.execute(
+        select(ServerPlan).where(ServerPlan.provider_account_id == account.id)
+    )).scalars().all()
+    count = 0
+    for p in plans:
+        extra = p.extra_data or {}
+        ch, cm = extra.get("cost_hourly"), extra.get("cost_monthly")
+        changed = False
+        if mh is not None and ch:
+            p.price_hourly = round(float(ch) * (1 + float(mh) / 100), 4)
+            changed = True
+        if mm is not None and cm:
+            p.price_monthly = round(float(cm) * (1 + float(mm) / 100), 2)
+            changed = True
+        if changed:
+            if not extra.get("unavailable") and not p.is_active:
+                p.is_active = True
+            count += 1
+    await session.flush()
+    return count
 
 
 # ── لیست اکانت‌ها ─────────────────────────────────────────────────────────────
@@ -170,7 +203,8 @@ async def _render_hz_detail(msg, session: AsyncSession, account: ProviderAccount
     token_masked = f"{(account.api_key or '')[:6]}…{(account.api_key or '')[-4:]}"
 
     # مصرف زنده اکانت از API (کل VMهای اکانت، نه فقط ساخته‌های ربات)
-    vm_limit = int((account.extra_config or {}).get("vm_limit") or 0)
+    cfg_m = account.extra_config or {}
+    vm_limit = int(cfg_m.get("vm_limit") or 0)
     try:
         live_count = await asyncio.wait_for(
             HetznerProvider(account.api_key or "").count_servers(), timeout=12
@@ -188,6 +222,12 @@ async def _render_hz_detail(msg, session: AsyncSession, account: ProviderAccount
          InlineKeyboardButton(text="ویرایش توکن", callback_data=f"admin:hz_edit:{account.id}:token")],
         [InlineKeyboardButton(text=f"لیمیت VM: {vm_limit or 'تعیین نشده'}",
                               callback_data=f"admin:hz_limit:{account.id}")],
+        [InlineKeyboardButton(
+            text=f"سود ساعتی: {cfg_m.get('margin_hourly', '—')}٪",
+            callback_data=f"admin:hz_margin:{account.id}:h"),
+         InlineKeyboardButton(
+            text=f"سود ماهانه: {cfg_m.get('margin_monthly', '—')}٪",
+            callback_data=f"admin:hz_margin:{account.id}:m")],
         [InlineKeyboardButton(
             text=("غیرفعال کردن" if account.is_active else "فعال کردن"),
             callback_data=f"admin:hz_toggle:{account.id}")],
@@ -319,6 +359,44 @@ async def hz_limit_value(message: Message, state: FSMContext, session: AsyncSess
     await session.flush()
     await message.answer(
         f"لیمیت VM روی {int(message.text) or 'بدون کنترل'} ثبت شد.",
+        reply_markup=back_to_admin_kb(f"admin:hz:{account.id}"),
+    )
+
+
+@router.callback_query(F.data.startswith("admin:hz_margin:"))
+async def cb_hz_margin(cb: CallbackQuery, state: FSMContext):
+    parts = cb.data.split(":")
+    acc_id, kind = int(parts[2]), parts[3]
+    await state.update_data(hz_id=acc_id, hz_margin_kind=kind)
+    await state.set_state(HetznerFSM.edit_margin)
+    label = "ساعتی" if kind == "h" else "ماهانه"
+    await cb.message.edit_text(
+        f"<b>درصد سود {label}</b>\n\n"
+        "قیمت فروش = قیمت خرید هتزنر × (۱ + سود٪)\n"
+        "با تغییر این عدد، قیمت همه‌ی پلن‌های این اکانت خودکار به‌روز می‌شود "
+        "(و در سینک ۳۰ دقیقه‌ای هم دنبالِ قیمت هتزنر می‌ماند).\n\n"
+        f"درصد سود {label} را وارد کنید (مثال: 35):",
+        parse_mode="HTML", reply_markup=cancel_admin_kb(),
+    )
+    await cb.answer()
+
+
+@router.message(HetznerFSM.edit_margin, F.text.regexp(r"^\d+(\.\d+)?$"))
+async def hz_margin_value(message: Message, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    await state.clear()
+    account = await session.get(ProviderAccount, data.get("hz_id"))
+    if not account:
+        await message.answer("اکانت یافت نشد.")
+        return
+    key = "margin_hourly" if data.get("hz_margin_kind") == "h" else "margin_monthly"
+    cfg = dict(account.extra_config or {})
+    cfg[key] = float(message.text)
+    account.extra_config = cfg
+    await session.flush()
+    updated = await _apply_margins(session, account)
+    await message.answer(
+        f"سود ثبت شد ({message.text}٪) — قیمت فروش {updated} محصول به‌روز و فعال شد.",
         reply_markup=back_to_admin_kb(f"admin:hz:{account.id}"),
     )
 
@@ -628,6 +706,9 @@ async def cb_hz_family_all_on(cb: CallbackQuery, session: AsyncSession):
         await _import_one(session, account, loc, info, group_name)
         added += 1
     await session.flush()
+    cfgb = account.extra_config or {}
+    if added and (cfgb.get("margin_hourly") is not None or cfgb.get("margin_monthly") is not None):
+        await _apply_margins(session, account)
     await cb.answer(f"{added} پلن اضافه شد." if added else "همه از قبل ایمپورت شده‌اند.")
     await _render_family(cb.message, session, account, loc, fam)
 
@@ -759,7 +840,12 @@ async def cb_hz_pick(cb: CallbackQuery, session: AsyncSession):
             await cb.answer("این دسته ارائه نمی‌شود.", show_alert=True)
             return
         group_name = await _import_group_name(session, account)
-        await _import_one(session, account, loc, info, group_name)
+        plan = await _import_one(session, account, loc, info, group_name)
         await session.flush()
-        await cb.answer(f"✅ {pid} به گروه «{group_name}» اضافه شد — قیمت فروش را تعیین کنید.")
+        cfg = account.extra_config or {}
+        if cfg.get("margin_hourly") is not None or cfg.get("margin_monthly") is not None:
+            await _apply_margins(session, account)
+            await cb.answer(f"✅ {pid} اضافه و با سودِ تنظیم‌شده قیمت‌گذاری/فعال شد.")
+        else:
+            await cb.answer(f"✅ {pid} به گروه «{group_name}» اضافه شد — سود اکانت را تنظیم کنید.")
     await _render_family(cb.message, session, account, loc, _family(pid))

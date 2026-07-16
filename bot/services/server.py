@@ -62,7 +62,9 @@ class ServerService:
                         "ظرفیت ساخت سرور در این اکانت تکمیل است — لطفاً بعداً تلاش کنید"
                     )
 
-        custom_name = hostname or f"tc-{user.telegram_id}-{int(datetime.now().timestamp())}"
+        import secrets as _sec, string as _str
+        _rand = "".join(_sec.choice(_str.ascii_lowercase + _str.digits) for _ in range(6))
+        custom_name = hostname or f"srv-{_rand}"
         provider_extra = account.extra_config or {}
         plan_extra = plan.extra_data or {}
 

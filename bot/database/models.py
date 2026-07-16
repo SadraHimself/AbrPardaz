@@ -207,6 +207,29 @@ class ProductGroup(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class Snapshot(Base):
+    """اسنپ‌شات هتزنر — مستقل از سرور (بعد از حذف سرور هم می‌ماند و روی هر
+    سرویس هتزنر قابل استفاده است). هزینه‌ی ساعتی جدا از کیف پول کسر می‌شود.
+
+    قیمت‌گذاری: cost_monthly_eur = image_size(GB) × price_per_gb_month(gross)
+    قیمت فروش ساعتی هنگام کسر با سود اکانت + نرخ روز محاسبه می‌شود (extra_data.currency=eur)."""
+    __tablename__ = "snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    provider_account_id: Mapped[int] = mapped_column(Integer, ForeignKey("provider_accounts.id"), nullable=False)
+    hetzner_image_id: Mapped[str] = mapped_column(String(50), nullable=False)  # image id سمت هتزنر
+    description: Mapped[Optional[str]] = mapped_column(String(255))
+    source_server_name: Mapped[Optional[str]] = mapped_column(String(255))
+    size_gb: Mapped[float] = mapped_column(Float, default=0.0)       # image_size (مبنای هزینه)
+    disk_size: Mapped[int] = mapped_column(Integer, default=0)       # برای بررسی سازگاری rebuild
+    architecture: Mapped[str] = mapped_column(String(10), default="x86")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)   # False = حذف‌شده/در انتظار حذف
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_billed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    extra_data: Mapped[Optional[dict]] = mapped_column(JSON)
+
+
 class ServerPlan(Base):
     __tablename__ = "server_plans"
 

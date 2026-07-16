@@ -473,6 +473,74 @@ class HetznerProvider(BaseProvider):
         await self._request("GET", "/locations", params={"per_page": 1})
         return True
 
+    # ── Snapshots (Images) ────────────────────────────────────────────────────
+
+    async def create_snapshot(self, server_id: str, description: Optional[str] = None,
+                              labels: Optional[dict] = None) -> dict:
+        """ساخت اسنپ‌شات و صبر تا کامل‌شدن. طبق داکس: image_size تا وقتی
+        status=creating است null می‌ماند → بعد از success دوباره خوانده می‌شود.
+        خروجی: dict شامل id/image_size/disk_size/architecture/os_*."""
+        body: dict = {"type": "snapshot"}
+        if description:
+            body["description"] = description
+        if labels:
+            body["labels"] = labels
+        data = await self._request(
+            "POST", f"/servers/{server_id}/actions/create_image", json=body, timeout=60)
+        image_id = (data.get("image") or {}).get("id")
+        # اسنپ‌شات‌ها ممکن است چند دقیقه طول بکشند
+        await self._wait_action(data.get("action"), timeout_s=900)
+        img = await self.get_image(image_id)
+        return {
+            "id": str(img.get("id") or image_id),
+            "image_size": float(img.get("image_size") or 0),
+            "disk_size": int(img.get("disk_size") or 0),
+            "architecture": img.get("architecture", "x86"),
+            "os_flavor": img.get("os_flavor"),
+            "os_version": img.get("os_version"),
+            "description": img.get("description"),
+            "status": img.get("status"),
+        }
+
+    async def get_image(self, image_id: str) -> dict:
+        data = await self._request("GET", f"/images/{image_id}")
+        return data.get("image") or {}
+
+    async def delete_image(self, image_id: str) -> bool:
+        """DELETE /images/{id} → 204. فقط snapshot/backup قابل حذف‌اند."""
+        await self._request("DELETE", f"/images/{image_id}")
+        return True
+
+    async def rebuild_from_image(self, server_id: str, image_id: str) -> Optional[str]:
+        """ریستور: rebuild سرور با image اسنپ‌شات (دیسک مقصد پاک می‌شود!).
+        رمز فقط وقتی برمی‌گردد که سرور SSH key نداشته باشد؛ وگرنه رمزِ داخل
+        اسنپ‌شات فعال است. رمز برگشتی در last_root_password ذخیره می‌شود.
+
+        ⚠️ فراخوان باید پیش از این، سازگاری معماری و disk_size را چک کند."""
+        data = await self._request(
+            "POST", f"/servers/{server_id}/actions/rebuild",
+            json={"image": image_id}, timeout=60)
+        self.last_root_password = data.get("root_password")
+        await self._wait_action(data.get("action"), timeout_s=600)
+        return data.get("root_password")
+
+    async def server_type_info(self, server_id: str) -> dict:
+        """disk (GB) و architecture سرور مقصد — برای بررسی سازگاری rebuild."""
+        data = await self._request("GET", f"/servers/{server_id}")
+        st = (data.get("server") or {}).get("server_type") or {}
+        return {"disk": int(st.get("disk") or 0),
+                "architecture": st.get("architecture", "x86")}
+
+    async def snapshot_price_per_gb_month(self) -> float:
+        """قیمت هر GB در ماه (gross EUR) — مقادیر string هستند."""
+        data = await self._request("GET", "/pricing")
+        ppg = (((data.get("pricing") or {}).get("image") or {})
+               .get("price_per_gb_month") or {})
+        try:
+            return float(ppg.get("gross") or ppg.get("net") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
     async def count_servers(self) -> int:
         """تعداد کل سرورهای موجود روی اکانت (برای نمایش/کنترل لیمیت VM).
 

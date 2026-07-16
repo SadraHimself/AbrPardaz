@@ -46,21 +46,18 @@ class ServerService:
         hostname: Optional[str] = None,
         extra: Optional[dict] = None,
     ) -> Server:
-        account = await self._get_account(plan.provider_account_id)
+        # هتزنر: کاتالوگ مشترک است — اکانتِ ساخت با «توزیع متوازن» انتخاب می‌شود
+        # (کمترین سرورِ زنده، زیر لیمیت VM). پلن‌ها provider_account_id مرجع دارند.
+        if plan.provider_type == ProviderType.HETZNER:
+            from bot.services.hetzner_settings import pick_account
+            account = await pick_account(self.session)
+            if not account:
+                raise RuntimeError(
+                    "ظرفیت ساخت سرور در حال حاضر تکمیل است — لطفاً بعداً تلاش کنید"
+                )
+        else:
+            account = await self._get_account(plan.provider_account_id)
         provider = get_provider(account)
-
-        # لیمیت VM اکانت (هتزنر): اگر ادمین لیمیت ثبت کرده، مصرف زنده چک می‌شود
-        if account.provider_type == ProviderType.HETZNER:
-            vm_limit = int((account.extra_config or {}).get("vm_limit") or 0)
-            if vm_limit:
-                try:
-                    current = await provider.count_servers()
-                except Exception:
-                    current = None
-                if current is not None and current >= vm_limit:
-                    raise RuntimeError(
-                        "ظرفیت ساخت سرور در این اکانت تکمیل است — لطفاً بعداً تلاش کنید"
-                    )
 
         import secrets as _sec, string as _str
         _rand = "".join(_sec.choice(_str.ascii_lowercase + _str.digits) for _ in range(6))

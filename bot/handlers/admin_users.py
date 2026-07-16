@@ -822,7 +822,7 @@ async def cb_admin_usrv_detail(cb: CallbackQuery, session: AsyncSession):
 @router.callback_query(F.data.startswith("admin:usrva:"))
 async def cb_admin_usrv_action(cb: CallbackQuery, session: AsyncSession):
     from bot.services.server import ServerService
-    from bot.providers.virtualizor import VirtualizorProvider
+    from bot.providers import get_provider
 
     parts = cb.data.split(":")
     server_id, action = int(parts[2]), parts[3]
@@ -902,11 +902,16 @@ async def cb_admin_usrv_action(cb: CallbackQuery, session: AsyncSession):
             await _render_admin_server(cb.message, session, server)
 
         elif action == "add_ip":
+            from bot.database.models import ProviderType as _PT
+            if server.provider_type != _PT.VIRTUALIZOR:
+                await cb.answer("آیپی اضافه فقط برای سرورهای ویرچولایزور است.", show_alert=True)
+                return
             account = await session.get(ProviderAccount, server.provider_account_id) if server.provider_account_id else None
             if not account:
                 await cb.message.answer("اطلاعات پروایدر یافت نشد.")
                 return
-            prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
+            from bot.providers.virtualizor import VirtualizorProvider as _VP
+            prov = _VP(account.api_endpoint, account.api_key, account.api_secret)
             new_ip = await prov.add_extra_ip(server.provider_server_id)
             extra = dict(server.extra_data or {})
             ips = list(extra.get("extra_ips") or [])
@@ -952,7 +957,7 @@ async def cb_admin_usrv_action(cb: CallbackQuery, session: AsyncSession):
 
 @router.callback_query(F.data.startswith("admin:usrv_usage:"))
 async def cb_admin_usrv_usage(cb: CallbackQuery, session: AsyncSession):
-    from bot.providers.virtualizor import VirtualizorProvider
+    from bot.providers import get_provider
 
     server = await session.get(Server, int(cb.data.split(":")[2]))
     if not server:
@@ -964,7 +969,7 @@ async def cb_admin_usrv_usage(cb: CallbackQuery, session: AsyncSession):
     account = await session.get(ProviderAccount, server.provider_account_id) if server.provider_account_id else None
     if account and server.provider_server_id:
         try:
-            prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
+            prov = get_provider(account)
             used = await prov.get_traffic(server.provider_server_id)
             server.traffic_used_gb = used
             await session.flush()
@@ -996,7 +1001,7 @@ async def cb_admin_usrv_usage(cb: CallbackQuery, session: AsyncSession):
 @router.callback_query(F.data.startswith("admin:usrv_rebuild:"))
 async def cb_admin_usrv_rebuild(cb: CallbackQuery, session: AsyncSession):
     import asyncio as _ai
-    from bot.providers.virtualizor import VirtualizorProvider
+    from bot.providers import get_provider
 
     server = await session.get(Server, int(cb.data.split(":")[2]))
     if not server:
@@ -1008,8 +1013,8 @@ async def cb_admin_usrv_rebuild(cb: CallbackQuery, session: AsyncSession):
         return
     await cb.answer()
     try:
-        prov = VirtualizorProvider(account.api_endpoint, account.api_key, account.api_secret)
-        os_list = await _ai.wait_for(prov.list_os_templates(), timeout=12)
+        prov = get_provider(account)
+        os_list = await _ai.wait_for(prov.list_os_templates(), timeout=15)
     except Exception as e:
         await cb.message.answer(f"خطا در دریافت لیست OS: {e}")
         return

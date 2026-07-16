@@ -927,8 +927,15 @@ async def _ask_discount(cb: CallbackQuery, state: FSMContext):
 
 
 async def _ask_email_or_confirm(msg, state: FSMContext, session, user: User, from_message=False):
-    """If user has no email, collect it; otherwise go straight to confirmation."""
-    if user.email:
+    """If user has no email, collect it; otherwise go straight to confirmation.
+
+    ایمیل فقط برای ویرچولایزور لازم است (ساخت کاربر پنل). سرویس‌دهنده‌های دیگر
+    (هتزنر) به ایمیل نیازی ندارند → مستقیم تأیید."""
+    data = await state.get_data()
+    _plan = await session.get(ServerPlan, data["plan_id"]) if data.get("plan_id") else None
+    needs_email = (_plan is None) or (_plan.provider_type == ProviderType.VIRTUALIZOR)
+
+    if user.email or not needs_email:
         await _show_confirm(msg, state, session, from_message=from_message)
     else:
         await state.set_state(BuyServerStates.entering_email)

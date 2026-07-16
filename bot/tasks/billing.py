@@ -66,6 +66,87 @@ def run_hourly_billing(self):
         raise self.retry(exc=exc, countdown=60)
 
 
+@app.task(name="bot.tasks.billing.run_snapshot_billing", bind=True, max_retries=3)
+def run_snapshot_billing(self):
+    """هر ساعت: هزینه‌ی نگهداری هر اسنپ‌شات فعال را ساعتی کسر می‌کند.
+    موجودی ناکافی → اسنپ‌شات از هتزنر و DB حذف می‌شود (اسنپ‌شات قابل تعلیق نیست)."""
+    async def _do():
+        from datetime import datetime, timedelta, timezone
+        from bot.database.session import engine, AsyncSessionFactory
+        from bot.database.models import ProviderAccount, Snapshot, User
+        from bot.services.billing import BillingService
+        from bot.services.snapshot import hourly_toman
+        from bot.providers.hetzner import HetznerProvider
+        from bot.services.log_service import LogService
+        from aiogram import Bot
+        from bot.config import settings
+        from sqlalchemy import select
+        try:
+            await engine.dispose(close=False)
+        except Exception:
+            pass
+
+        one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+        async with AsyncSessionFactory() as session:
+            billing = BillingService(session)
+            snaps = list((await session.execute(
+                select(Snapshot).where(
+                    Snapshot.is_active == True,
+                    (Snapshot.last_billed_at.is_(None)) | (Snapshot.last_billed_at <= one_hour_ago),
+                )
+            )).scalars().all())
+            if not snaps:
+                return
+
+            bot = Bot(token=settings.BOT_TOKEN)
+            log = LogService(bot, session)
+            try:
+                for snap in snaps:
+                    account = await session.get(ProviderAccount, snap.provider_account_id)
+                    if not account:
+                        continue
+                    amount = await hourly_toman(session, snap, account)
+                    if amount <= 0:
+                        continue  # نرخ ارز در دسترس نیست — بدون advance، دور بعد جبران
+                    ok = await billing.debit(
+                        snap.user_id, amount,
+                        description=f"اسنپ‌شات — {snap.source_server_name or '—'}")
+                    if ok:
+                        # anchor به ساخت، مثل بیلینگ ساعتی سرور (بدون drift)
+                        created = snap.created_at
+                        if created.tzinfo is None:
+                            created = created.replace(tzinfo=timezone.utc)
+                        elapsed = int((datetime.now(timezone.utc) - created).total_seconds() // 3600)
+                        snap.last_billed_at = created + timedelta(hours=max(elapsed, 1))
+                    else:
+                        # موجودی ناکافی → حذف اسنپ‌شات
+                        try:
+                            await HetznerProvider(account.api_key or "").delete_image(snap.hetzner_image_id)
+                        except Exception:
+                            pass
+                        snap.is_active = False
+                        user = await session.get(User, snap.user_id)
+                        if user:
+                            try:
+                                await bot.send_message(
+                                    user.telegram_id,
+                                    '‏<tg-emoji emoji-id="4956611513369494230">⚠️</tg-emoji> '
+                                    f"اسنپ‌شات «{snap.source_server_name or '—'}» به‌دلیل کمبود موجودی حذف شد.",
+                                    parse_mode="HTML")
+                            except Exception:
+                                pass
+                        await log.log_snapshot_deleted(user or User(telegram_id=0),
+                                                       snap.source_server_name or "—")
+                await session.commit()
+            finally:
+                await bot.session.close()
+
+    try:
+        _run(_do())
+    except Exception as exc:
+        raise self.retry(exc=exc, countdown=60)
+
+
 @app.task(name="bot.tasks.billing.handle_balance_empty")
 def handle_balance_empty(user_id: int):
     """

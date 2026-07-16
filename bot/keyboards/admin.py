@@ -121,8 +121,10 @@ def plans_groups_kb(entries: list) -> InlineKeyboardMarkup:
 def plans_in_group_kb(plans: list, group_key: str = "") -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for p in plans:
+        # نمای ادمین: لوکیشن کنار اسم تا هر پلن مشخص باشد (سمت کاربر بدون تغییر)
+        loc = f" — {p.location}" if p.location else ""
         builder.button(
-            text=f"{_st(p.is_active)}{p.display_name or p.name}",
+            text=f"{_st(p.is_active)}{p.display_name or p.name}{loc}",
             callback_data=f"admin:plan:{p.id}",
         )
     if group_key and len(plans) > 1:

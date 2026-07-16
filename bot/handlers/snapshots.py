@@ -324,8 +324,8 @@ async def cb_snap_use(cb: CallbackQuery, user: User, session: AsyncSession):
                                       **{"icon_custom_emoji_id": _BACK})])
     await cb.message.edit_text(
         f"{_SNAP} <b>استفاده از اسنپ‌شات روی {server.name}</b>\n\n"
-        "⚠️ با بازگردانی، تمام اطلاعات فعلیِ این سرور پاک و با محتوای اسنپ‌شات "
-        "جایگزین می‌شود. یک اسنپ‌شات انتخاب کنید:",
+        '‏<tg-emoji emoji-id="6008233706039284019">⚠️</tg-emoji> با بازگردانی، تمام اطلاعات '
+        "فعلیِ این سرور پاک و با محتوای اسنپ‌شات جایگزین می‌شود. یک اسنپ‌شات انتخاب کنید:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
@@ -344,7 +344,8 @@ async def cb_snap_restore_confirm(cb: CallbackQuery, user: User, session: AsyncS
         f"{_SNAP} <b>تأیید بازگردانی</b>\n\n"
         f"اسنپ‌شات: {snap.source_server_name or '—'} ({snap.size_gb:g}GB)\n"
         f"روی سرور: {server.name}\n\n"
-        "⚠️ <b>تمام اطلاعات فعلی این سرور پاک می‌شود و قابل بازگشت نیست.</b>\n"
+        '‏<tg-emoji emoji-id="6008233706039284019">⚠️</tg-emoji> '
+        "<b>تمام اطلاعات فعلی این سرور پاک می‌شود و قابل بازگشت نیست.</b>\n"
         "ادامه می‌دهید؟",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[

@@ -192,6 +192,36 @@ class LogService:
             f"{await self._origin_line(server)}",
         )
 
+    async def log_snapshot_created(self, user: User, source_name: str,
+                                   size_gb: float, hourly_toman: float) -> None:
+        await self._send(
+            "server",
+            f"📸 <b>ساخت اسنپ‌شات</b>\n\n"
+            f"{self._user_line(user)}\n"
+            f"🖥 منبع: {source_name}\n"
+            f"💾 حجم: {size_gb:g} GB\n"
+            f"💵 هزینه ساعتی: {hourly_toman:,.0f} تومان",
+        )
+
+    async def log_snapshot_deleted(self, user: User, source_name: str) -> None:
+        await self._send(
+            "server",
+            f"🗑 <b>حذف اسنپ‌شات</b>\n\n"
+            f"{self._user_line(user)}\n"
+            f"🖥 منبع: {source_name}",
+        )
+
+    async def log_snapshot_restored(self, user: User, source_name: str,
+                                    target_server: Server) -> None:
+        await self._send(
+            "server",
+            f"♻️ <b>استفاده از اسنپ‌شات</b>\n\n"
+            f"{self._user_line(user)}\n"
+            f"کاربر از اسنپ‌شات «{source_name}» برای سرور "
+            f"{target_server.name} (<code>{target_server.ip_address or '—'}</code>) استفاده کرد."
+            f"{await self._origin_line(target_server)}",
+        )
+
     async def log_plan_unavailable(self, plan_name: str, location: str) -> None:
         await self._send(
             "server",

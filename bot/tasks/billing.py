@@ -105,7 +105,7 @@ def run_snapshot_billing(self):
                     account = await session.get(ProviderAccount, snap.provider_account_id)
                     if not account:
                         continue
-                    amount = await hourly_toman(session, snap, account)
+                    amount = await hourly_toman(session, snap)
                     if amount <= 0:
                         continue  # نرخ ارز در دسترس نیست — بدون advance، دور بعد جبران
                     ok = await billing.debit(

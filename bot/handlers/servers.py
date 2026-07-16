@@ -1409,40 +1409,7 @@ async def cb_server_usage(cb: CallbackQuery, user: User, session: AsyncSession):
         pass  # message not modified (مقدار تغییری نکرده)
 
 
-# ── Snapshot (قالب — فعال‌سازی در فاز بعد) ───────────────────────────────────
-
-@router.callback_query(F.data.startswith("srv_snap:"))
-async def cb_server_snapshot_menu(cb: CallbackQuery, user: User, session: AsyncSession):
-    server_id = int(cb.data.split(":")[1])
-    server = await session.get(Server, server_id)
-    if not server or server.user_id != user.id:
-        await cb.answer("سرور یافت نشد.", show_alert=True)
-        return
-    await cb.answer()
-    await cb.message.edit_text(
-        f'\u200F<tg-emoji emoji-id="5346269127059196142">📸</tg-emoji> '
-        f"<b>اسنپ شات — {server.name}</b>\n\n"
-        "یک گزینه را انتخاب کنید:",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="ساخت اسنپ شات از این سرویس",
-                                  callback_data=f"srv_snap_new:{server_id}")],
-            [InlineKeyboardButton(text="استفاده از اسنپ شات روی این سرویس",
-                                  callback_data=f"srv_snap_use:{server_id}")],
-            [InlineKeyboardButton(text="بازگشت", callback_data=f"server:{server_id}",
-                                  **{"icon_custom_emoji_id": "5258236805890710909"})],
-        ]),
-    )
-
-
-@router.callback_query(F.data.startswith("srv_snap_new:"))
-async def cb_server_snapshot_new(cb: CallbackQuery):
-    await cb.answer("این قابلیت به‌زودی فعال می‌شود 🚧", show_alert=True)
-
-
-@router.callback_query(F.data.startswith("srv_snap_use:"))
-async def cb_server_snapshot_use(cb: CallbackQuery):
-    await cb.answer("این قابلیت به‌زودی فعال می‌شود 🚧", show_alert=True)
+# Snapshot handlers moved to bot/handlers/snapshots.py
 
 
 # ── Mute hourly billing notification ─────────────────────────────────────────

@@ -50,7 +50,7 @@ class LogService:
             if server.provider_account_id:
                 acc = await self.session.get(ProviderAccount, server.provider_account_id)
                 if acc:
-                    parts.append(f"ارائه‌دهنده: {acc.name}")
+                    parts.append(acc.name)
         except Exception:
             pass
         try:

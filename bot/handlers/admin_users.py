@@ -543,6 +543,12 @@ async def _render_admin_tx_page(msg, session: AsyncSession, user_id: int, page: 
                 callback_data=f"admin:utxs:{user_id}:{item['server_id']}:{page}",
                 **{"style": "danger"},
             )])
+        elif item["kind"] == "snap":
+            buttons.append([InlineKeyboardButton(
+                text=f"اسنپ‌شات — {item['total']:,.0f} تومان",
+                callback_data=f"admin:utxsn:{user_id}:{item['name']}:{page}",
+                **{"style": "danger"},
+            )])
         else:
             is_debit = item["type"] == TransactionType.DEBIT
             buttons.append([InlineKeyboardButton(
@@ -579,6 +585,38 @@ async def cb_admin_tx_page(cb: CallbackQuery, session: AsyncSession):
     parts = cb.data.split(":")
     await cb.answer()
     await _render_admin_tx_page(cb.message, session, int(parts[2]), int(parts[3]))
+
+
+@router.callback_query(F.data.startswith("admin:utxsn:"))
+async def cb_admin_tx_snap(cb: CallbackQuery, session: AsyncSession):
+    parts = cb.data.split(":")
+    user_id, name, back_page = int(parts[2]), parts[3], int(parts[4])
+    await cb.answer()
+    desc = f"اسنپ‌شات — {name}"
+    txs = list((await session.execute(
+        select(Transaction).where(
+            Transaction.user_id == user_id,
+            Transaction.type == TransactionType.DEBIT,
+            Transaction.description == desc,
+        ).order_by(Transaction.created_at.asc())
+    )).scalars().all())
+    back_row = [[InlineKeyboardButton(text="بازگشت", callback_data=f"admin:utxp:{user_id}:{back_page}")]]
+    if not txs:
+        await cb.message.edit_text("تراکنشی یافت نشد.",
+                                   reply_markup=InlineKeyboardMarkup(inline_keyboard=back_row))
+        return
+    rate = txs[0].amount
+    count = len(txs)
+    total = sum(t.amount for t in txs)
+    await cb.message.edit_text(
+        f"<b>جزئیات برداشت</b>\n\n"
+        f"نوع: اسنپ‌شات\n"
+        f"منبع: <b>{name}</b>\n"
+        f"مدت: {count} ساعت × {rate:,.0f} تومان\n"
+        f"مجموع: <b>{total:,.0f} تومان</b>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=back_row),
+    )
 
 
 @router.callback_query(F.data.startswith("admin:utxs:"))

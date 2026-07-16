@@ -55,36 +55,7 @@ def _st(ok: bool) -> str:
     return "✅ " if ok else "❌ "
 
 
-async def _apply_margins(session: AsyncSession, account: ProviderAccount) -> int:
-    """قیمت فروش همه پلن‌های اکانت = قیمت خرید × (۱ + سود٪) — و فعال‌سازی خودکار.
-
-    منطق قیمت‌گذاری هتزنر: به‌جای قیمت دستی تک‌تک پلن‌ها، ادمین درصد سود
-    ساعتی/ماهانه تعیین می‌کند؛ تغییر سود یا تغییر قیمت خرید (سینک ۳۰ دقیقه‌ای)
-    خودکار روی قیمت فروش اعمال می‌شود."""
-    cfg = account.extra_config or {}
-    mh, mm = cfg.get("margin_hourly"), cfg.get("margin_monthly")
-    if mh is None and mm is None:
-        return 0
-    plans = (await session.execute(
-        select(ServerPlan).where(ServerPlan.provider_account_id == account.id)
-    )).scalars().all()
-    count = 0
-    for p in plans:
-        extra = p.extra_data or {}
-        ch, cm = extra.get("cost_hourly"), extra.get("cost_monthly")
-        changed = False
-        if mh is not None and ch:
-            p.price_hourly = round(float(ch) * (1 + float(mh) / 100), 4)
-            changed = True
-        if mm is not None and cm:
-            p.price_monthly = round(float(cm) * (1 + float(mm) / 100), 2)
-            changed = True
-        if changed:
-            if not extra.get("unavailable") and not p.is_active:
-                p.is_active = True
-            count += 1
-    await session.flush()
-    return count
+# سود/گروه سراسری‌اند → bot.services.hetzner_settings
 
 
 # ── لیست اکانت‌ها ─────────────────────────────────────────────────────────────
@@ -98,13 +69,27 @@ async def _hz_accounts(session: AsyncSession) -> list[ProviderAccount]:
 
 
 async def _render_hz_list(msg, session: AsyncSession):
+    from bot.services.hetzner_settings import get_group_name, get_margins
     accounts = await _hz_accounts(session)
+    mh, mm = await get_margins(session)
+    group = await get_group_name(session)
+
     rows = [[InlineKeyboardButton(text=f"{_st(a.is_active)}{a.name}",
                                   callback_data=f"admin:hz:{a.id}")] for a in accounts]
+    # تنظیمات سراسری (کاتالوگ مشترک بین همه‌ی اکانت‌ها)
+    rows.append([
+        InlineKeyboardButton(text=f"سود ساعتی: {mh if mh is not None else '—'}٪",
+                             callback_data="admin:hzm:h"),
+        InlineKeyboardButton(text=f"سود ماهانه: {mm if mm is not None else '—'}٪",
+                             callback_data="admin:hzm:m"),
+    ])
+    rows.append([InlineKeyboardButton(text=f"گروه مقصد: {group}", callback_data="admin:hzgrp")])
     rows.append([InlineKeyboardButton(text="افزودن اکانت", callback_data="admin:hz_add")])
     rows.append([InlineKeyboardButton(text="بازگشت", callback_data="admin:provtypes")])
     await msg.edit_text(
-        f"<b>هتزنر (Hetzner Cloud)</b>\n\n{len(accounts)} اکانت:",
+        f"<b>هتزنر (Hetzner Cloud)</b>\n\n"
+        f"{len(accounts)} اکانت — کاتالوگ و سود بین همه‌ی اکانت‌ها مشترک است.\n"
+        "موقع خرید، سرور روی اکانتی با کمترین بار ساخته می‌شود (توزیع متوازن).",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
@@ -215,6 +200,7 @@ async def _render_hz_detail(msg, session: AsyncSession, account: ProviderAccount
         cap_line = (f"ظرفیت اکانت: نامشخص / {vm_limit or '—'} "
                     "(خطا در خواندن از API)")
 
+    # سود و گروه سراسری‌اند (روی صفحه‌ی لیست اکانت‌ها تنظیم می‌شوند)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="تست اتصال", callback_data=f"admin:hz_test:{account.id}"),
          InlineKeyboardButton(text="ایمپورت محصولات", callback_data=f"admin:hz_import:{account.id}")],
@@ -222,12 +208,6 @@ async def _render_hz_detail(msg, session: AsyncSession, account: ProviderAccount
          InlineKeyboardButton(text="ویرایش توکن", callback_data=f"admin:hz_edit:{account.id}:token")],
         [InlineKeyboardButton(text=f"لیمیت VM: {vm_limit or 'تعیین نشده'}",
                               callback_data=f"admin:hz_limit:{account.id}")],
-        [InlineKeyboardButton(
-            text=f"سود ساعتی: {cfg_m.get('margin_hourly', '—')}٪",
-            callback_data=f"admin:hz_margin:{account.id}:h"),
-         InlineKeyboardButton(
-            text=f"سود ماهانه: {cfg_m.get('margin_monthly', '—')}٪",
-            callback_data=f"admin:hz_margin:{account.id}:m")],
         [InlineKeyboardButton(
             text=("غیرفعال کردن" if account.is_active else "فعال کردن"),
             callback_data=f"admin:hz_toggle:{account.id}")],
@@ -363,18 +343,17 @@ async def hz_limit_value(message: Message, state: FSMContext, session: AsyncSess
     )
 
 
-@router.callback_query(F.data.startswith("admin:hz_margin:"))
+@router.callback_query(F.data.startswith("admin:hzm:"))
 async def cb_hz_margin(cb: CallbackQuery, state: FSMContext):
-    parts = cb.data.split(":")
-    acc_id, kind = int(parts[2]), parts[3]
-    await state.update_data(hz_id=acc_id, hz_margin_kind=kind)
+    kind = cb.data.split(":")[2]
+    await state.update_data(hz_margin_kind=kind)
     await state.set_state(HetznerFSM.edit_margin)
     label = "ساعتی" if kind == "h" else "ماهانه"
     await cb.message.edit_text(
-        f"<b>درصد سود {label}</b>\n\n"
+        f"<b>درصد سود {label} (کل هتزنر)</b>\n\n"
         "قیمت فروش = قیمت خرید هتزنر × (۱ + سود٪)\n"
-        "با تغییر این عدد، قیمت همه‌ی پلن‌های این اکانت خودکار به‌روز می‌شود "
-        "(و در سینک ۳۰ دقیقه‌ای هم دنبالِ قیمت هتزنر می‌ماند).\n\n"
+        "این سود روی <b>همه‌ی محصولات هتزنر</b> (همه اکانت‌ها) اعمال می‌شود "
+        "و در سینک ۳۰ دقیقه‌ای هم دنبالِ قیمت هتزنر می‌ماند.\n\n"
         f"درصد سود {label} را وارد کنید (مثال: 35):",
         parse_mode="HTML", reply_markup=cancel_admin_kb(),
     )
@@ -383,21 +362,15 @@ async def cb_hz_margin(cb: CallbackQuery, state: FSMContext):
 
 @router.message(HetznerFSM.edit_margin, F.text.regexp(r"^\d+(\.\d+)?$"))
 async def hz_margin_value(message: Message, state: FSMContext, session: AsyncSession):
+    from bot.services.hetzner_settings import apply_margins_to_catalog, set_margin
     data = await state.get_data()
     await state.clear()
-    account = await session.get(ProviderAccount, data.get("hz_id"))
-    if not account:
-        await message.answer("اکانت یافت نشد.")
-        return
-    key = "margin_hourly" if data.get("hz_margin_kind") == "h" else "margin_monthly"
-    cfg = dict(account.extra_config or {})
-    cfg[key] = float(message.text)
-    account.extra_config = cfg
+    await set_margin(session, hourly=(data.get("hz_margin_kind") == "h"), value=float(message.text))
     await session.flush()
-    updated = await _apply_margins(session, account)
+    updated = await apply_margins_to_catalog(session)
     await message.answer(
-        f"سود ثبت شد ({message.text}٪) — قیمت فروش {updated} محصول به‌روز و فعال شد.",
-        reply_markup=back_to_admin_kb(f"admin:hz:{account.id}"),
+        f"سود ثبت شد ({message.text}٪) — قیمت فروش {updated} محصول هتزنر به‌روز و فعال شد.",
+        reply_markup=back_to_admin_kb("admin:hetzner"),
     )
 
 
@@ -429,12 +402,36 @@ async def cb_hz_del_do(cb: CallbackQuery, session: AsyncSession):
             show_alert=True,
         )
         return
-    # حذف محصولات ایمپورت‌شده‌ی همین اکانت + خود اکانت
+    # اسنپ‌شات‌های فعال هم مانع حذف‌اند (FK + بیلینگ فعال دارند)
+    from bot.database.models import Snapshot
+    snap_count = (await session.execute(
+        select(func.count(Snapshot.id)).where(
+            Snapshot.provider_account_id == account.id,
+            Snapshot.is_active == True,
+        )
+    )).scalar() or 0
+    if snap_count:
+        await cb.answer(
+            f"این اکانت {snap_count} اسنپ‌شات فعال دارد — اول آن‌ها را حذف کنید.",
+            show_alert=True,
+        )
+        return
+    # کاتالوگ مشترک است: پلن‌هایی که مرجع‌شان این اکانت بود، به یک اکانت هتزنرِ
+    # دیگر منتقل می‌شوند (تا کاتالوگ حفظ شود)؛ اگر اکانت دیگری نمانده، حذف می‌شوند.
+    other = (await session.execute(
+        select(ProviderAccount).where(
+            ProviderAccount.provider_type == ProviderType.HETZNER,
+            ProviderAccount.id != account.id,
+        ).order_by(ProviderAccount.id)
+    )).scalars().first()
     plans = (await session.execute(
         select(ServerPlan).where(ServerPlan.provider_account_id == account.id)
     )).scalars().all()
     for p in plans:
-        await session.delete(p)
+        if other:
+            p.provider_account_id = other.id
+        else:
+            await session.delete(p)
     await session.delete(account)
     await session.flush()
     await cb.answer("اکانت حذف شد.")
@@ -449,7 +446,7 @@ async def cb_hz_del(cb: CallbackQuery, session: AsyncSession):
     await cb.answer()
     await cb.message.edit_text(
         f"حذف اکانت <b>{account.name}</b>؟\n"
-        "محصولات ایمپورت‌شده‌ی این اکانت هم حذف می‌شوند.",
+        "<i>کاتالوگ مشترک حفظ می‌شود؛ اگر آخرین اکانت باشد، محصولات هم حذف می‌شوند.</i>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="بله، حذف شود", callback_data=f"admin:hz_del_do:{account.id}"),
@@ -491,54 +488,32 @@ async def _location_plans(account: ProviderAccount, loc: str):
     return plans
 
 
-async def _imported_map(session: AsyncSession, account: ProviderAccount, loc: str) -> dict:
-    """provider_plan_id → ServerPlan برای پلن‌های ایمپورت‌شده‌ی این اکانت/لوکیشن."""
+async def _imported_map(session: AsyncSession, loc: str) -> dict:
+    """provider_plan_id → ServerPlan برای محصولاتِ ایمپورت‌شده در این لوکیشن
+    (کاتالوگ مشترک — مستقل از اکانت)."""
     rows = (await session.execute(
         select(ServerPlan).where(
-            ServerPlan.provider_account_id == account.id,
+            ServerPlan.provider_type == ProviderType.HETZNER,
             ServerPlan.location == loc,
         )
     )).scalars().all()
     return {p.provider_plan_id: p for p in rows}
 
 
-async def _import_group_name(session: AsyncSession, account: ProviderAccount) -> str:
-    """گروه مقصد ایمپورت — پیش‌فرض گروه «Hetzner» (در صورت نبود، ساخته می‌شود)."""
-    name = (account.extra_config or {}).get("import_group")
-    if name:
-        grp = (await session.execute(
-            select(ProductGroup).where(ProductGroup.name == name)
-        )).scalar_one_or_none()
-        if grp:
-            return name
-    grp = (await session.execute(
-        select(ProductGroup).where(ProductGroup.name == "Hetzner")
-    )).scalar_one_or_none()
-    if not grp:
-        grp = ProductGroup(name="Hetzner", is_hidden=False)
-        session.add(grp)
-        await session.flush()
-    cfg = dict(account.extra_config or {})
-    cfg["import_group"] = grp.name
-    account.extra_config = cfg
-    await session.flush()
-    return grp.name
-
-
 async def _render_import_home(msg, session: AsyncSession, account: ProviderAccount):
-    group_name = await _import_group_name(session, account)
+    from bot.services.hetzner_settings import get_group_name
+    group_name = await get_group_name(session)
     prov = HetznerProvider(api_token=account.api_key or "")
     locs = await asyncio.wait_for(prov.list_locations(), timeout=20)
-    rows = [[InlineKeyboardButton(text=f"گروه مقصد: {group_name}",
-                                  callback_data=f"admin:hzgrp:{account.id}")]]
-    rows += [[InlineKeyboardButton(
+    rows = [[InlineKeyboardButton(
         text=f"{l['city']} ({l['name']}) — {l['country']}",
         callback_data=f"admin:hzloc:{account.id}:{l['name']}",
     )] for l in locs]
     rows.append([InlineKeyboardButton(text="بازگشت", callback_data=f"admin:hz:{account.id}")])
     await msg.edit_text(
         "<b>ایمپورت محصولات هتزنر</b>\n\n"
-        f"محصولات ایمپورت‌شده به گروه «{group_name}» می‌روند.\n"
+        f"کاتالوگ مشترک است؛ محصولات به گروه «{group_name}» می‌روند و برای همه‌ی "
+        "اکانت‌ها یکسان‌اند (کافی است یک‌بار از یک اکانت ایمپورت شوند).\n"
         "لوکیشن را انتخاب کنید:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
@@ -563,39 +538,36 @@ async def cb_hz_import(cb: CallbackQuery, session: AsyncSession):
 
 @router.callback_query(F.data.startswith("admin:hzgrpset:"))
 async def cb_hz_group_set(cb: CallbackQuery, session: AsyncSession):
-    parts = cb.data.split(":")
-    account = await _get_hz_account(cb, session, int(parts[2]))
-    if not account:
-        return
-    group = await session.get(ProductGroup, int(parts[3]))
+    from bot.services.hetzner_settings import set_group_name
+    group = await session.get(ProductGroup, int(cb.data.split(":")[2]))
     if not group:
         await cb.answer("گروه یافت نشد.", show_alert=True)
         return
-    cfg = dict(account.extra_config or {})
-    cfg["import_group"] = group.name
-    account.extra_config = cfg
+    # گروه مقصدِ سراسری + انتقالِ کاتالوگِ موجود به گروه جدید
+    await set_group_name(session, group.name)
+    hz_plans = (await session.execute(
+        select(ServerPlan).where(ServerPlan.provider_type == ProviderType.HETZNER)
+    )).scalars().all()
+    for p in hz_plans:
+        p.category = group.name
     await session.flush()
     await cb.answer(f"گروه مقصد: {group.name}")
-    await _render_import_home(cb.message, session, account)
+    await _render_hz_list(cb.message, session)
 
 
-@router.callback_query(F.data.startswith("admin:hzgrp:"))
+@router.callback_query(F.data == "admin:hzgrp")
 async def cb_hz_group_pick(cb: CallbackQuery, session: AsyncSession):
-    account = await _get_hz_account(cb, session, int(cb.data.split(":")[2]))
-    if not account:
-        return
     groups = (await session.execute(
         select(ProductGroup).order_by(ProductGroup.name)
     )).scalars().all()
     await cb.answer()
     await cb.message.edit_text(
-        "<b>گروه مقصد ایمپورت</b>\n\n"
-        "محصولات ایمپورت‌شده در این گروه قرار می‌گیرند:\n"
+        "<b>گروه مقصد مشترک هتزنر</b>\n\n"
+        "همه‌ی محصولات هتزنر در این گروه قرار می‌گیرند (کاتالوگِ موجود هم منتقل می‌شود):\n"
         "<i>(گروه جدید را از «گروه محصولات» بسازید)</i>",
         parse_mode="HTML",
-        reply_markup=group_pick_kb(groups, f"admin:hzgrpset:{account.id}",
-                                   allow_new=False,
-                                   cancel_cb=f"admin:hz_import:{account.id}"),
+        reply_markup=group_pick_kb(groups, "admin:hzgrpset",
+                                   allow_new=False, cancel_cb="admin:hetzner"),
     )
 
 
@@ -616,7 +588,7 @@ async def cb_hz_location(cb: CallbackQuery, session: AsyncSession):
             parse_mode="HTML",
         )
         return
-    imported = await _imported_map(session, account, loc)
+    imported = await _imported_map(session, loc)
 
     fams: dict = {}
     for p in plans:
@@ -648,7 +620,7 @@ async def _render_family(msg, session: AsyncSession, account: ProviderAccount,
                          loc: str, fam: str):
     plans = [p for p in await _location_plans(account, loc)
              if _family(p.provider_plan_id) == fam]
-    imported = await _imported_map(session, account, loc)
+    imported = await _imported_map(session, loc)
     rows = []
     for p in sorted(plans, key=lambda x: (x.price_monthly or 0)):
         mark = "✅" if p.provider_plan_id in imported else "⬜"
@@ -695,10 +667,11 @@ async def cb_hz_family_all_on(cb: CallbackQuery, session: AsyncSession):
     if fam in _EXCLUDED_FAMILIES:
         await cb.answer("این دسته ارائه نمی‌شود.", show_alert=True)
         return
+    from bot.services.hetzner_settings import apply_margins_to_catalog, get_group_name
     plans = [p for p in await _location_plans(account, loc)
              if _family(p.provider_plan_id) == fam]
-    imported = await _imported_map(session, account, loc)
-    group_name = await _import_group_name(session, account)
+    imported = await _imported_map(session, loc)
+    group_name = await get_group_name(session)
     added = 0
     for info in plans:
         if info.provider_plan_id in imported:
@@ -706,9 +679,8 @@ async def cb_hz_family_all_on(cb: CallbackQuery, session: AsyncSession):
         await _import_one(session, account, loc, info, group_name)
         added += 1
     await session.flush()
-    cfgb = account.extra_config or {}
-    if added and (cfgb.get("margin_hourly") is not None or cfgb.get("margin_monthly") is not None):
-        await _apply_margins(session, account)
+    if added:
+        await apply_margins_to_catalog(session)
     await cb.answer(f"{added} پلن اضافه شد." if added else "همه از قبل ایمپورت شده‌اند.")
     await _render_family(cb.message, session, account, loc, fam)
 
@@ -720,7 +692,7 @@ async def cb_hz_family_all_off(cb: CallbackQuery, session: AsyncSession):
     if not account:
         return
     loc, fam = parts[3], parts[4]
-    imported = await _imported_map(session, account, loc)
+    imported = await _imported_map(session, loc)
     removed = kept = 0
     for pid, plan in imported.items():
         if _family(pid) != fam:
@@ -795,12 +767,9 @@ async def _import_one(session: AsyncSession, account: ProviderAccount,
 
 
 async def _remove_plan(session: AsyncSession, plan: ServerPlan) -> tuple[bool, str]:
-    """حذف پلن ایمپورت‌شده؛ اگر سرور فعال مشتری دارد فقط غیرفعال می‌شود."""
+    """حذف پلن ایمپورت‌شده؛ اگر سرور فعالِ مشتری دارد (روی هر اکانتی) فقط غیرفعال می‌شود."""
     servers = (await session.execute(
-        select(Server).where(
-            Server.provider_account_id == plan.provider_account_id,
-            Server.status != ServerStatus.DELETED,
-        )
+        select(Server).where(Server.status != ServerStatus.DELETED)
     )).scalars().all()
     in_use = any((s.extra_data or {}).get("plan_id") == plan.id for s in servers)
     if in_use:
@@ -818,9 +787,10 @@ async def cb_hz_pick(cb: CallbackQuery, session: AsyncSession):
         return
     loc, pid = parts[3], parts[4]
 
+    from bot.services.hetzner_settings import apply_margins_to_catalog, get_group_name, get_margins
     existing = (await session.execute(
         select(ServerPlan).where(
-            ServerPlan.provider_account_id == account.id,
+            ServerPlan.provider_type == ProviderType.HETZNER,
             ServerPlan.provider_plan_id == pid,
             ServerPlan.location == loc,
         )
@@ -839,13 +809,13 @@ async def cb_hz_pick(cb: CallbackQuery, session: AsyncSession):
         if _family(pid) in _EXCLUDED_FAMILIES:
             await cb.answer("این دسته ارائه نمی‌شود.", show_alert=True)
             return
-        group_name = await _import_group_name(session, account)
+        group_name = await get_group_name(session)
         plan = await _import_one(session, account, loc, info, group_name)
         await session.flush()
-        cfg = account.extra_config or {}
-        if cfg.get("margin_hourly") is not None or cfg.get("margin_monthly") is not None:
-            await _apply_margins(session, account)
-            await cb.answer(f"✅ {pid} اضافه و با سودِ تنظیم‌شده قیمت‌گذاری/فعال شد.")
+        mh, mm = await get_margins(session)
+        if mh is not None or mm is not None:
+            await apply_margins_to_catalog(session)
+            await cb.answer(f"✅ {pid} اضافه و با سودِ هتزنر قیمت‌گذاری/فعال شد.")
         else:
-            await cb.answer(f"✅ {pid} به گروه «{group_name}» اضافه شد — سود اکانت را تنظیم کنید.")
+            await cb.answer(f"✅ {pid} به گروه «{group_name}» اضافه شد — سود هتزنر را تنظیم کنید.")
     await _render_family(cb.message, session, account, loc, _family(pid))

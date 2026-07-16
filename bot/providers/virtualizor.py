@@ -50,7 +50,8 @@ class VirtualizorProvider(BaseProvider):
 
         form_body = _encode_form(dict(params) if params else {})
         connector = aiohttp.TCPConnector(ssl=False)
-        timeout = aiohttp.ClientTimeout(total=30, connect=5)
+        # connect=5 زیادی سخت‌گیر بود و پنل‌های کمی کند «Connection timeout» می‌دادند
+        timeout = aiohttp.ClientTimeout(total=35, connect=12)
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
         candidates = [self.panel_url]

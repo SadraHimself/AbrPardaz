@@ -121,18 +121,38 @@ async def _get_tx_items(user_id: int, session: AsyncSession) -> list[dict]:
     all_txs = list(result.scalars().all())
 
     hourly: dict[int, dict] = {}
+    snaps: dict[str, dict] = {}     # اسنپ‌شات‌های ساعتی (بدون server_id) بر اساس نامِ منبع
     others: list[dict] = []
 
     for tx in all_txs:
+        desc = tx.description or ""
         is_hourly = (
             tx.type == TransactionType.DEBIT
             and tx.server_id is not None
-            and (tx.description or "").startswith("ساعتی — ")
+            and desc.startswith("ساعتی — ")
+        )
+        is_snap = (
+            tx.type == TransactionType.DEBIT
+            and desc.startswith("اسنپ‌شات — ")
         )
         if is_hourly:
             g = hourly.setdefault(tx.server_id, {
                 "kind": "srv",
                 "server_id": tx.server_id,
+                "total": 0.0,
+                "count": 0,
+                "last_date": tx.created_at,
+                "rate": tx.amount,
+            })
+            g["total"] += tx.amount
+            g["count"] += 1
+            if _tz(tx.created_at) > _tz(g["last_date"]):
+                g["last_date"] = tx.created_at
+        elif is_snap:
+            g = snaps.setdefault(desc, {
+                "kind": "snap",
+                "desc": desc,
+                "name": desc[len("اسنپ‌شات — "):],
                 "total": 0.0,
                 "count": 0,
                 "last_date": tx.created_at,
@@ -148,12 +168,12 @@ async def _get_tx_items(user_id: int, session: AsyncSession) -> list[dict]:
                 "tx_id": tx.id,
                 "amount": tx.amount,
                 "type": tx.type,
-                "description": tx.description or "",
+                "description": desc,
                 "server_id": tx.server_id,
                 "created_at": tx.created_at,
             })
 
-    items: list[dict] = list(hourly.values()) + others
+    items: list[dict] = list(hourly.values()) + list(snaps.values()) + others
     items.sort(key=lambda x: _tz(x.get("last_date") or x.get("created_at")), reverse=True)
     return items
 
@@ -163,6 +183,13 @@ def _item_btn(item: dict, page: int) -> InlineKeyboardButton:
         return InlineKeyboardButton(
             text=f"برداشت — {item['total']:,.0f} تومان",
             callback_data=f"tx_srv:{item['server_id']}:{page}",
+            **{"style": "danger"},
+        )
+    if item["kind"] == "snap":
+        # نامِ منبع ascii است (hostname معتبر) → در callback بی‌خطر
+        return InlineKeyboardButton(
+            text=f"اسنپ‌شات — {item['total']:,.0f} تومان",
+            callback_data=f"tx_snap:{item['name']}:{page}",
             **{"style": "danger"},
         )
     is_debit = item["type"] == TransactionType.DEBIT
@@ -279,6 +306,42 @@ async def cb_tx_srv_detail(cb: CallbackQuery, user: User, session: AsyncSession)
         f"نوع: ساعتی\n"
         f"{duration_line}"
         f"{total_line}",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=back_row),
+    )
+
+
+@router.callback_query(F.data.startswith("tx_snap:"))
+async def cb_tx_snap_detail(cb: CallbackQuery, user: User, session: AsyncSession):
+    parts = cb.data.split(":")
+    name = parts[1]
+    back_page = int(parts[2]) if len(parts) > 2 else 0
+    await cb.answer()
+
+    desc = f"اسنپ‌شات — {name}"
+    result = await session.execute(
+        select(Transaction).where(
+            Transaction.user_id == user.id,
+            Transaction.type == TransactionType.DEBIT,
+            Transaction.description == desc,
+        ).order_by(Transaction.created_at.asc())
+    )
+    txs = list(result.scalars().all())
+    back_row = [[InlineKeyboardButton(text="بازگشت", callback_data=f"tx_page:{back_page}", **{"icon_custom_emoji_id": "5258236805890710909"})]]
+    if not txs:
+        await cb.message.edit_text("تراکنشی یافت نشد.",
+                                   reply_markup=InlineKeyboardMarkup(inline_keyboard=back_row))
+        return
+
+    rate = txs[0].amount
+    count = len(txs)
+    total = sum(t.amount for t in txs)
+    await cb.message.edit_text(
+        f"<b>جزئیات برداشت</b>\n\n"
+        f"نوع: اسنپ‌شات\n"
+        f"منبع: <b>{name}</b>\n"
+        f"مدت: {count} ساعت × {rate:,.0f} تومان\n"
+        f"مجموع: <b>{total:,.0f} تومان</b>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=back_row),
     )

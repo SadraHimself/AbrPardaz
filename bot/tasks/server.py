@@ -222,25 +222,44 @@ def check_providers_health():
             log = LogService(bot, session)
             try:
                 for account in accounts:
-                    prev_ok = (account.extra_config or {}).get("health_ok", True)
-                    ok, reason = True, ""
-                    try:
-                        prov = get_provider(account)
-                        if hasattr(prov, "ping"):
-                            await prov.ping()   # سبک (هتزنر) — کل کاتالوگ لازم نیست
-                        else:
-                            await prov.list_plans()
-                    except Exception as e:
-                        ok, reason = False, str(e)[:200]
+                    cfg = dict(account.extra_config or {})
+                    prev_ok = cfg.get("health_ok", True)
 
-                    if ok != prev_ok:
-                        cfg = dict(account.extra_config or {})
-                        cfg["health_ok"] = ok
-                        account.extra_config = cfg
-                        if ok:
+                    # چند تلاش با فاصله — یک تایم‌اوت گذرا نباید «قطعی» اعلام شود
+                    ok, reason = False, ""
+                    for attempt in range(3):
+                        try:
+                            prov = get_provider(account)
+                            if hasattr(prov, "ping"):
+                                await prov.ping()   # سبک (هتزنر)
+                            else:
+                                await prov.list_plans()
+                            ok, reason = True, ""
+                            break
+                        except Exception as e:
+                            reason = str(e)[:200]
+                            await asyncio.sleep(5)
+
+                    # آستانه‌ی تأیید: فقط پس از ۲ چکِ ناموفقِ پشت‌سرهم «قطع» اعلام کن
+                    # (یک اجرای ناموفق تنها = نوسان گذرا، اعلام نمی‌شود)
+                    fail_streak = int(cfg.get("health_fail_streak", 0))
+                    changed = False
+                    if ok:
+                        if fail_streak or not prev_ok:
+                            changed = True
+                        cfg["health_fail_streak"] = 0
+                        if prev_ok is False:
+                            cfg["health_ok"] = True
                             await log.log_provider_up(account.name)
-                        else:
+                    else:
+                        fail_streak += 1
+                        cfg["health_fail_streak"] = fail_streak
+                        if fail_streak >= 2 and prev_ok is not False:
+                            cfg["health_ok"] = False
+                            changed = True
                             await log.log_provider_down(account.name, reason)
+
+                    account.extra_config = cfg
                 await session.commit()
             finally:
                 await bot.session.close()

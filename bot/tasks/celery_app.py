@@ -28,6 +28,11 @@ app.conf.update(
             "task": "bot.tasks.billing.run_monthly_expiry_check",
             "schedule": crontab(hour=0, minute=5),
         },
+        # هر دقیقه چک می‌کند کدام اسنپ‌شات‌ها به ۱ ساعت رسیده‌اند
+        "snapshot-billing": {
+            "task": "bot.tasks.billing.run_snapshot_billing",
+            "schedule": crontab(minute="*/1"),
+        },
         # هر 15 دقیقه ترافیک سرورها آپدیت می‌شود
         "traffic-sync": {
             "task": "bot.tasks.server.sync_all_traffic",

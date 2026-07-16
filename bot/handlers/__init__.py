@@ -10,6 +10,7 @@ from .admin_users import router as admin_users_router
 from .auth import router as auth_router
 from .billing import router as billing_router
 from .servers import router as servers_router
+from .snapshots import router as snapshots_router
 from .start import router as start_router
 from .zarinpal_payment import router as zarinpal_payment_router
 
@@ -19,6 +20,7 @@ def setup_routers(dp):
     dp.include_router(start_router)
     dp.include_router(auth_router)
     dp.include_router(servers_router)
+    dp.include_router(snapshots_router)
     dp.include_router(billing_router)
     dp.include_router(crypto_payment_router)
     dp.include_router(zarinpal_payment_router)

@@ -1096,10 +1096,12 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
             code.use_count += 1
             await session.flush()
 
-    hostname = data.get("hostname") or f"srv-{user.telegram_id}"
-    os_id = data.get("os_id") or ""
     import secrets as _secrets
     import string as _string
+    # اسم خودکار: پسوند رندوم تا سرورهای متعددِ یک کاربر اسم یکسان نگیرند
+    _suffix = "".join(_secrets.choice(_string.ascii_lowercase + _string.digits) for _ in range(6))
+    hostname = data.get("hostname") or f"srv-{_suffix}"
+    os_id = data.get("os_id") or ""
     _alpha = _string.ascii_letters + _string.digits + "!@#$%^&*"
     root_password = "".join(_secrets.choice(_alpha) for _ in range(16))
 

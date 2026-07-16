@@ -284,10 +284,14 @@ def sync_hetzner_catalog(self):
         from bot.config import settings
         from bot.database.models import ProviderAccount, ProviderType, ServerPlan
         from bot.providers.hetzner import HetznerProvider
+        from bot.services.hetzner_settings import get_margins
         from bot.services.log_service import LogService
         from sqlalchemy import select
 
         async with AsyncSessionFactory() as session:
+            # کاتالوگ مشترک: پلن‌ها مستقل از اکانت‌اند؛ برای خواندن قیمت زنده از
+            # اکانتِ مرجعِ هر پلن استفاده می‌کنیم. سود سراسری است.
+            mh, mm = await get_margins(session)
             accounts = list((await session.execute(
                 select(ProviderAccount).where(
                     ProviderAccount.provider_type == ProviderType.HETZNER,
@@ -296,19 +300,21 @@ def sync_hetzner_catalog(self):
             )).scalars().all())
             if not accounts:
                 return
+            acc_by_id = {a.id: a for a in accounts}
+            fallback_acc = accounts[0]
 
             bot = Bot(token=settings.BOT_TOKEN)
             log = LogService(bot, session)
             try:
-                for account in accounts:
-                    plans = list((await session.execute(
-                        select(ServerPlan).where(
-                            ServerPlan.provider_account_id == account.id
-                        )
-                    )).scalars().all())
-                    if not plans:
-                        continue
-                    prov = HetznerProvider(api_token=account.api_key or "")
+                all_plans = list((await session.execute(
+                    select(ServerPlan).where(
+                        ServerPlan.provider_type == ProviderType.HETZNER
+                    )
+                )).scalars().all())
+                if all_plans:
+                    ref = acc_by_id.get(all_plans[0].provider_account_id) or fallback_acc
+                    prov = HetznerProvider(api_token=ref.api_key or "")
+                    plans = all_plans
                     for loc in {p.location for p in plans if p.location}:
                         try:
                             offered = {o.provider_plan_id: o
@@ -342,10 +348,7 @@ def sync_hetzner_catalog(self):
                                     plan.display_name or plan.name, loc)
                             if changed:
                                 plan.extra_data = extra
-                                # قیمت فروش دنبال قیمت خرید (سود درصدی اکانت)
-                                cfg = account.extra_config or {}
-                                mh = cfg.get("margin_hourly")
-                                mm = cfg.get("margin_monthly")
+                                # قیمت فروش دنبال قیمت خرید (سود سراسری هتزنر)
                                 if mh is not None and info.price_hourly:
                                     plan.price_hourly = round(
                                         float(info.price_hourly) * (1 + float(mh) / 100), 4)

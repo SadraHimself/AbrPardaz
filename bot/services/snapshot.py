@@ -11,35 +11,25 @@ from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.database.models import ProviderAccount, Snapshot
+from bot.database.models import Snapshot
 from bot.services.currency import to_toman
 
 HOURS_PER_MONTH = 720
 
 
-def _account_hourly_margin(account: ProviderAccount) -> float:
-    return float((account.extra_config or {}).get("margin_hourly") or 0)
-
-
-def sell_hourly_eur(snapshot: Snapshot, account: ProviderAccount) -> float:
-    """قیمت فروش ساعتیِ اسنپ‌شات به یورو (با سود اکانت)."""
+async def sell_hourly_eur(session: AsyncSession, snapshot: Snapshot) -> float:
+    """قیمت فروش ساعتیِ اسنپ‌شات به یورو (با سودِ ساعتیِ سراسری هتزنر)."""
     cost_monthly = float((snapshot.extra_data or {}).get("cost_monthly_eur") or 0)
     if cost_monthly <= 0:
         return 0.0
-    margin = _account_hourly_margin(account)
+    from bot.services.hetzner_settings import hourly_margin
+    margin = await hourly_margin(session)
     return (cost_monthly / HOURS_PER_MONTH) * (1 + margin / 100)
 
 
-def sell_monthly_eur(snapshot: Snapshot, account: ProviderAccount) -> float:
-    cost_monthly = float((snapshot.extra_data or {}).get("cost_monthly_eur") or 0)
-    margin = _account_hourly_margin(account)
-    return cost_monthly * (1 + margin / 100)
-
-
-async def hourly_toman(session: AsyncSession, snapshot: Snapshot,
-                       account: ProviderAccount) -> float:
+async def hourly_toman(session: AsyncSession, snapshot: Snapshot) -> float:
     """هزینه‌ی ساعتیِ ریالی — 0 یعنی نرخ ارز در دسترس نیست (باید معوق شود)."""
-    eur = sell_hourly_eur(snapshot, account)
+    eur = await sell_hourly_eur(session, snapshot)
     if eur <= 0:
         return 0.0
     return await to_toman(session, eur, "eur")

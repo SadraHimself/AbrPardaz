@@ -41,6 +41,18 @@ async def on_startup(bot: Bot) -> None:
     except Exception as e:
         logger.warning("enum migration skipped: %s", e)
 
+    # drift ستون: servers.provider_account_id در دیتابیس‌های قدیمی NOT NULL است
+    # ولی مدل Optional است (لازم برای حذف اکانت provider). با lock_timeout تا
+    # اگر جدول قفل بود، استارتاپ هنگ نکند — دفعه‌ی بعدِ ری‌استارت اعمال می‌شود.
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(_sql_text("SET LOCAL lock_timeout = '5s'"))
+            await conn.execute(_sql_text(
+                "ALTER TABLE servers ALTER COLUMN provider_account_id DROP NOT NULL"
+            ))
+    except Exception as e:
+        logger.warning("servers.provider_account_id nullable migration skipped: %s", e)
+
     # پاک‌سازی یک‌بارِ display_name محصولات هتزنرِ قدیمی از پسوند لوکیشن («CPX22 — fsn1» → «CPX22»)
     try:
         from bot.database.models import ProviderType, ServerPlan

@@ -467,13 +467,20 @@ async def cb_hz_del_do(cb: CallbackQuery, session: AsyncSession):
             else:
                 await session.delete(s)
 
+        # flush جدا: بین Snapshot/ServerPlan و ProviderAccount رابطه‌ی ORM تعریف
+        # نشده، پس SQLAlchemy ترتیب حذف را نمی‌داند و ممکن است اکانت را قبل از
+        # رکوردهای وابسته DELETE کند (FK violation). اول وابسته‌ها، بعد اکانت.
+        await session.flush()
         await session.delete(account)
         await session.flush()
     except Exception as e:
         logger.exception("hetzner account delete failed")
         await session.rollback()
+        # escape چون parse_mode پیش‌فرض ربات HTML است و متن خطا ممکن است
+        # <class ...> داشته باشد که ارسالِ خودِ پیام خطا را می‌شکند
+        from html import escape as _esc
         await cb.message.answer(
-            "❌ حذف اکانت ناموفق بود:\n" + str(e)[:300]
+            "❌ حذف اکانت ناموفق بود:\n<code>" + _esc(str(e)[:300]) + "</code>"
         )
         return
     await _render_hz_list(cb.message, session)

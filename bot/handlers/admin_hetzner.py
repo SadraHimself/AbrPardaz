@@ -418,7 +418,21 @@ async def cb_hz_del_do(cb: CallbackQuery, session: AsyncSession):
         return
     await cb.answer("در حال حذف...")
     try:
-        from sqlalchemy import update as _update
+        from sqlalchemy import update as _update, text as _text
+        # هیچ کوئری‌ای حق ندارد هنگ کند — اگر جدول قفل بود، بعد از ۸ ثانیه
+        # خطای تمیز می‌گیریم و به ادمین می‌گوییم، نه انتظارِ بی‌نهایت.
+        await session.execute(_text("SET LOCAL statement_timeout = '8s'"))
+        # drift دیتابیس‌های قدیمی: ستون باید نال‌پذیر باشد (idempotent، سریع)
+        # savepoint تا در صورت شکست (قفل/…) تراکنش اصلی سالم بماند
+        try:
+            async with session.begin_nested():
+                await session.execute(_text("SET LOCAL lock_timeout = '2s'"))
+                await session.execute(_text(
+                    "ALTER TABLE servers ALTER COLUMN provider_account_id DROP NOT NULL"
+                ))
+        except Exception:
+            # اگر به‌خاطر قفل نشد، ادامه می‌دهیم — شاید ستون از قبل نال‌پذیر باشد
+            pass
         # کاتالوگ مشترک است: پلن‌هایی که مرجع‌شان این اکانت بود، به یک اکانت هتزنرِ
         # دیگر منتقل می‌شوند (تا کاتالوگ حفظ شود)؛ اگر اکانت دیگری نمانده، حذف می‌شوند.
         other = (await session.execute(

@@ -416,25 +416,52 @@ async def cb_hz_del_do(cb: CallbackQuery, session: AsyncSession):
             show_alert=True,
         )
         return
-    # کاتالوگ مشترک است: پلن‌هایی که مرجع‌شان این اکانت بود، به یک اکانت هتزنرِ
-    # دیگر منتقل می‌شوند (تا کاتالوگ حفظ شود)؛ اگر اکانت دیگری نمانده، حذف می‌شوند.
-    other = (await session.execute(
-        select(ProviderAccount).where(
-            ProviderAccount.provider_type == ProviderType.HETZNER,
-            ProviderAccount.id != account.id,
-        ).order_by(ProviderAccount.id)
-    )).scalars().first()
-    plans = (await session.execute(
-        select(ServerPlan).where(ServerPlan.provider_account_id == account.id)
-    )).scalars().all()
-    for p in plans:
-        if other:
-            p.provider_account_id = other.id
-        else:
-            await session.delete(p)
-    await session.delete(account)
-    await session.flush()
-    await cb.answer("اکانت حذف شد.")
+    await cb.answer("در حال حذف...")
+    try:
+        from sqlalchemy import update as _update
+        # کاتالوگ مشترک است: پلن‌هایی که مرجع‌شان این اکانت بود، به یک اکانت هتزنرِ
+        # دیگر منتقل می‌شوند (تا کاتالوگ حفظ شود)؛ اگر اکانت دیگری نمانده، حذف می‌شوند.
+        other = (await session.execute(
+            select(ProviderAccount).where(
+                ProviderAccount.provider_type == ProviderType.HETZNER,
+                ProviderAccount.id != account.id,
+            ).order_by(ProviderAccount.id)
+        )).scalars().first()
+        plans = (await session.execute(
+            select(ServerPlan).where(ServerPlan.provider_account_id == account.id)
+        )).scalars().all()
+        for p in plans:
+            if other:
+                p.provider_account_id = other.id
+            else:
+                await session.delete(p)
+
+        # سرورهای تاریخیِ حذف‌شده هنوز FK به این اکانت دارند → FK را null کن
+        # (فعال‌ها بالاتر گارد شده‌اند؛ فقط DELETEDها می‌مانند)
+        await session.execute(
+            _update(Server).where(Server.provider_account_id == account.id)
+            .values(provider_account_id=None)
+        )
+        # اسنپ‌شات‌های غیرفعال (FK غیرقابل‌null) → به اکانت دیگر منتقل یا حذف
+        inactive_snaps = (await session.execute(
+            select(Snapshot).where(Snapshot.provider_account_id == account.id)
+        )).scalars().all()
+        for s in inactive_snaps:
+            if other:
+                s.provider_account_id = other.id
+            else:
+                await session.delete(s)
+
+        await session.delete(account)
+        await session.flush()
+    except Exception as e:
+        logger.exception("hetzner account delete failed")
+        await cb.message.answer(
+            f'‏<tg-emoji emoji-id="4956612582816351459">❌</tg-emoji> '
+            f"حذف اکانت ناموفق بود:\n<code>{str(e)[:250]}</code>",
+            parse_mode="HTML",
+        )
+        return
     await _render_hz_list(cb.message, session)
 
 

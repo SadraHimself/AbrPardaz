@@ -438,6 +438,7 @@ async def cb_hz_del_do(cb: CallbackQuery, session: AsyncSession):
 
         # سرورهای تاریخیِ حذف‌شده هنوز FK به این اکانت دارند → FK را null کن
         # (فعال‌ها بالاتر گارد شده‌اند؛ فقط DELETEDها می‌مانند)
+        # نال‌پذیری ستون در استارتاپ main.py تضمین می‌شود (DDL در هندلر = ریسک قفل)
         await session.execute(
             _update(Server).where(Server.provider_account_id == account.id)
             .values(provider_account_id=None)
@@ -456,10 +457,9 @@ async def cb_hz_del_do(cb: CallbackQuery, session: AsyncSession):
         await session.flush()
     except Exception as e:
         logger.exception("hetzner account delete failed")
+        await session.rollback()
         await cb.message.answer(
-            f'‏<tg-emoji emoji-id="4956612582816351459">❌</tg-emoji> '
-            f"حذف اکانت ناموفق بود:\n<code>{str(e)[:250]}</code>",
-            parse_mode="HTML",
+            "❌ حذف اکانت ناموفق بود:\n" + str(e)[:300]
         )
         return
     await _render_hz_list(cb.message, session)

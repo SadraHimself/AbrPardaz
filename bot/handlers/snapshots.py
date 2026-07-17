@@ -24,7 +24,7 @@ from bot.database.models import (
 from bot.providers.hetzner import HetznerProvider
 from bot.services.billing import BillingService
 from bot.services.log_service import LogService
-from bot.services.snapshot import hourly_toman, sell_hourly_eur
+from bot.services.snapshot import hourly_toman
 from bot.utils.loading import ERR
 
 logger = logging.getLogger(__name__)
@@ -156,7 +156,7 @@ async def cb_snap_new_do(cb: CallbackQuery, user: User, session: AsyncSession):
     await session.flush()
 
     # کسر اولین ساعت بلافاصله
-    per_hour = await hourly_toman(session, snap, account)
+    per_hour = await hourly_toman(session, snap)
     charged_note = ""
     if per_hour > 0:
         billing = BillingService(session)
@@ -209,8 +209,6 @@ async def cb_snap_list(cb: CallbackQuery, user: User, session: AsyncSession):
         return
     rows = []
     for s in snaps:
-        acc = await session.get(ProviderAccount, s.provider_account_id)
-        per_hour_eur = sell_hourly_eur(s, acc) if acc else 0
         rows.append([InlineKeyboardButton(
             text=f"{s.source_server_name or '—'} · {s.size_gb:g}GB · {s.architecture}",
             callback_data=f"snap_show:{s.id}:{server_id}")])
@@ -230,15 +228,20 @@ async def cb_snap_show(cb: CallbackQuery, user: User, session: AsyncSession):
     if not snap or snap.user_id != user.id or not snap.is_active:
         await cb.answer("اسنپ‌شات یافت نشد.", show_alert=True)
         return
-    acc = await session.get(ProviderAccount, snap.provider_account_id)
-    per_hour = await hourly_toman(session, snap, acc) if acc else 0
     await cb.answer()
+    # محاسبه‌ی قیمت نباید صفحه‌ی حذف را بشکند (نرخ/تنظیمات ناموجود → نمایش «—»)
+    try:
+        per_hour = await hourly_toman(session, snap)
+        price_line = f"هزینه ساعتی: {per_hour:,.0f} تومان\n"
+    except Exception as e:
+        logger.warning("snap_show price calc failed for %s: %s", snap.id, e)
+        price_line = ""
     await cb.message.edit_text(
         f"{_SNAP} <b>اسنپ‌شات {snap.source_server_name or ''}</b>\n\n"
         f"حجم: {snap.size_gb:g} GB\n"
         f"معماری: {snap.architecture}\n"
         f"حداقل دیسک برای بازگردانی: {snap.disk_size} GB\n"
-        f"هزینه ساعتی: {per_hour:,.0f} تومان\n"
+        f"{price_line}"
         f"ساخته شده: {snap.created_at.strftime('%Y/%m/%d')}",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[

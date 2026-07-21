@@ -56,6 +56,17 @@ class AuthMiddleware(BaseMiddleware):
                 )
                 session.add(user)
                 await session.flush()
+            else:
+                # @username و نام قابل تغییرند؛ کلید پایدار telegram_id است.
+                # با هر آپدیت، پروفایل را تازه نگه دار (فقط در صورت تغییر → بدون رایت اضافه)
+                if (
+                    user.username != tg_user.username
+                    or user.first_name != tg_user.first_name
+                    or user.last_name != tg_user.last_name
+                ):
+                    user.username = tg_user.username
+                    user.first_name = tg_user.first_name
+                    user.last_name = tg_user.last_name
 
             # Auto-unban users whose temporary ban has expired
             if user.status == UserStatus.BANNED:

@@ -57,15 +57,26 @@ async def server_live_price(session: AsyncSession, server, hourly: bool) -> tupl
     تا تغییر قیمت پلن فوراً روی سرورهای موجود مشتری‌ها هم اعمال شود؛
     اگر پلن حذف شده یا لینک نداشت، کپیِ ذخیره‌شده روی خود سرور مبناست.
 
+    سورشارژ per-server: اگر extra_data["price_addon_hourly"/"price_addon_monthly"]
+    ست باشد (به ارز پلن)، روی قیمت پلن اضافه می‌شود — برای سرورهایی که گران‌تر از
+    پلن پایه‌اند (مثلاً ویندوز/دیسک بزرگ‌تر در جیکور). کپی fallback روی خود سرور
+    باید addon-دار ذخیره شده باشد.
+
     خروجی: (مقدار به ارز پلن، ارز)"""
-    plan_id = (getattr(server, "extra_data", None) or {}).get("plan_id")
+    extra = getattr(server, "extra_data", None) or {}
+    plan_id = extra.get("plan_id")
     if plan_id:
         from bot.database.models import ServerPlan
         plan = await session.get(ServerPlan, plan_id)
         if plan:
             amount = plan.price_hourly if hourly else plan.price_monthly
             if amount:
-                return float(amount), obj_currency(plan)
+                addon_key = "price_addon_hourly" if hourly else "price_addon_monthly"
+                try:
+                    addon = float(extra.get(addon_key) or 0)
+                except (TypeError, ValueError):
+                    addon = 0.0
+                return float(amount) + addon, obj_currency(plan)
     amount = server.price_hourly if hourly else server.price_monthly
     return float(amount or 0), obj_currency(server)
 

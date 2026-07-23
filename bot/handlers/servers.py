@@ -807,16 +807,11 @@ async def _fetch_os_list(session: AsyncSession, account: ProviderAccount, data: 
         _rid = (_plan.extra_data or {}).get("region_id") if _plan else None
         if not _rid:
             return []
-        os_list = await asyncio.wait_for(
+        # ایمیج با min_disk بزرگ‌تر از دیسک پلن حذف نمی‌شود — موقع خرید دیسک
+        # خودکار به min_disk همان ایمیج بامپ و قیمت به‌روز محاسبه می‌شود
+        # (رفتار سایت جیکور: انتخاب ویندوز → دیسک ۴۰ گیگ + هزینه لایسنس)
+        return await asyncio.wait_for(
             prov.list_os_templates(location=str(_rid)), timeout=20)
-        # ایمیجی که min_disk آن از دیسک پلن بزرگ‌تر است قابل نصب نیست (ValidationError
-        # هنگام ساخت) → اصلاً نمایش داده نشود. ویندوز (min_disk بزرگ) فقط روی
-        # پلن‌های دیسک‌بالا ظاهر می‌شود.
-        _disk = int(_plan.disk or 0) if _plan else 0
-        if _disk:
-            os_list = [o for o in os_list
-                       if not o.get("min_disk") or int(o["min_disk"]) <= _disk]
-        return os_list
     os_list = await asyncio.wait_for(prov.list_os_templates(), timeout=15)
     # فیلتر معماری (هتزنر): پلن cax = ARM و بقیه x86 — ایمیج ناهم‌معماری خطای ساخت می‌دهد
     if os_list and account.provider_type == ProviderType.HETZNER:
@@ -855,7 +850,11 @@ async def _ask_os(cb: CallbackQuery, state: FSMContext, session: AsyncSession, u
         return
 
     os_name_map = {str(o["id"]): o["name"] for o in os_list[:20]}
-    await state.update_data(os_options=os_name_map)
+    # متادیتای هر OS برای قیمت‌گذاری per-OS جیکور: [min_disk, لایسنس ساعتی]
+    os_meta = {str(o["id"]): [int(o.get("min_disk") or 0),
+                              float(o.get("price_per_hour") or 0)]
+               for o in os_list[:20]}
+    await state.update_data(os_options=os_name_map, os_meta=os_meta)
     await state.set_state(BuyServerStates.selecting_os)
 
     builder = InlineKeyboardBuilder()
@@ -909,7 +908,10 @@ async def _ask_os_message(message: Message, state: FSMContext, session: AsyncSes
         return
 
     os_name_map = {str(o["id"]): o["name"] for o in os_list[:20]}
-    await state.update_data(os_options=os_name_map)
+    os_meta = {str(o["id"]): [int(o.get("min_disk") or 0),
+                              float(o.get("price_per_hour") or 0)]
+               for o in os_list[:20]}
+    await state.update_data(os_options=os_name_map, os_meta=os_meta)
     await state.set_state(BuyServerStates.selecting_os)
     builder = InlineKeyboardBuilder()
     for os_item in os_list[:20]:
@@ -930,7 +932,10 @@ async def cb_select_os(cb: CallbackQuery, user: User, state: FSMContext, session
     data = await state.get_data()
     os_options = data.get("os_options", {})
     os_name = os_options.get(str(os_id), os_id) if isinstance(os_options, dict) else os_id
-    await state.update_data(os_id=os_id, os_name=os_name)
+    _meta = (data.get("os_meta") or {}).get(str(os_id)) or [0, 0]
+    await state.update_data(os_id=os_id, os_name=os_name,
+                            os_min_disk=int(_meta[0] or 0),
+                            os_lic_h=float(_meta[1] or 0))
     if data.get("billing") == "hourly":
         await state.update_data(discount_id=None, discount_percent=0)
         await _ask_email_or_confirm(cb.message, state, session, user)
@@ -1038,6 +1043,14 @@ async def _show_confirm(msg, state: FSMContext, session, from_message=False, use
 
     billing = data["billing"]
     base_price = plan.price_hourly if billing == "hourly" else plan.price_monthly
+    show_disk = plan.disk
+    # جیکور: قیمت مؤثر بر اساس OS انتخابی (بامپ دیسک + لایسنس ویندوز — زنده از API)
+    if plan.provider_type == ProviderType.GCORE and billing == "hourly":
+        try:
+            base_price, _gc_addon, show_disk = await _gcore_os_pricing(session, plan, data)
+        except Exception as e:
+            await msg.answer(f"{ERR} {_esc(e)}", parse_mode="HTML")
+            return
     # تبدیل قیمت ارزی به ریال با نرخ روز (کاربر فقط قیمت ریالی می‌بیند)
     _cur = obj_currency(plan)
     if _cur != "irt" and base_price:
@@ -1062,7 +1075,7 @@ async def _show_confirm(msg, state: FSMContext, session, from_message=False, use
         f'<tg-emoji emoji-id="4987757216040747796">💎</tg-emoji> <b>تأیید سفارش</b>\n\n'
         f"• پلن: {plan.display_name or plan.name}\n"
         f"• ارائه دهنده: {plan.category or ''}\n"
-        f"• رم: {plan.ram} MB | پردازنده: {plan.cpu} | دیسک: {plan.disk} GB\n"
+        f"• رم: {plan.ram} MB | پردازنده: {plan.cpu} | دیسک: {show_disk} GB\n"
         f"• ترافیک: {f'{plan.bandwidth} GB' if plan.bandwidth else 'نامحدود'}\n"
         f"• موقعیت: {plan.location or 'نامشخص'}\n"
         f"{hostname_line}"
@@ -1076,6 +1089,60 @@ async def _show_confirm(msg, state: FSMContext, session, from_message=False, use
         await msg.answer(text, parse_mode="HTML", reply_markup=kb)
     else:
         await msg.edit_text(text, parse_mode="HTML", reply_markup=kb)
+
+
+# کش کوتاه‌مدت قیمت زنده volume برای قیمت‌گذاری per-OS جیکور (صفحه تأیید + خرید)
+_gc_volprice_cache: dict = {}
+
+
+async def _gcore_os_pricing(session: AsyncSession, plan: ServerPlan,
+                            data: dict) -> tuple[float, float, int]:
+    """قیمت ساعتیِ مؤثر یک خرید جیکور بر اساس OS انتخابی (به ارز پلن).
+
+    دیسک مؤثر = max(دیسک پلن، min_disk ایمیج) — انتخاب ویندوز دیسک را خودکار
+    بامپ می‌کند (رفتار سایت جیکور). قیمت = (flavor + دیسک مؤثر + لایسنس image)
+    × (۱ + سود ساعتی) — دیسک و لایسنس زنده از API.
+    خروجی: (قیمت فروش ساعتی، سورشارژ نسبت به قیمت پلن، دیسک مؤثر GB)"""
+    plan_disk = int(plan.disk or 0)
+    md = int(data.get("os_min_disk") or 0)
+    lic_h = float(data.get("os_lic_h") or 0)
+    disk_used = max(plan_disk, md)
+    base = float(plan.price_hourly or 0)
+    if disk_used == plan_disk and lic_h <= 0:
+        return base, 0.0, disk_used   # حالت عادی — همان قیمت پلن
+
+    from bot.services.gcore_settings import get_margins, get_volume_rate
+    extra = plan.extra_data or {}
+    flavor_h = float(extra.get("flavor_cost_hourly") or 0)
+    mh, _ = await get_margins(session)
+    rate = await get_volume_rate(session)
+    if rate > 0:
+        vol_h = disk_used * rate / 720.0
+    else:
+        rid = int(extra.get("region_id") or 0)
+        account = await session.get(ProviderAccount, plan.provider_account_id) \
+            if plan.provider_account_id else None
+        if not account or not rid:
+            raise RuntimeError("اطلاعات قیمت‌گذاری این پلن ناقص است")
+        import asyncio as _aio
+        import time as _time
+        key = (account.id, rid, disk_used)
+        cached = _gc_volprice_cache.get(key)
+        now = _time.monotonic()
+        if cached and now - cached[0] < 300:
+            vol_h = cached[1]
+        else:
+            p = await _aio.wait_for(
+                get_provider(account).preview_volume_price(rid, disk_used),
+                timeout=15)
+            vol_h = float(p.get("price_per_hour") or 0) or \
+                float(p.get("price_per_month") or 0) / 720.0
+            if vol_h <= 0:
+                raise RuntimeError("قیمت دیسک از سرویس‌دهنده خوانده نشد — کمی بعد تلاش کنید")
+            _gc_volprice_cache[key] = (now, vol_h)
+    sale_h = round((flavor_h + vol_h + lic_h) * (1 + float(mh or 0) / 100), 4)
+    addon = max(0.0, round(sale_h - base, 4))
+    return sale_h, addon, disk_used
 
 
 def _delivery_text(server: Server, plan_name: str, password: str) -> str:
@@ -1094,7 +1161,9 @@ def _delivery_text(server: Server, plan_name: str, password: str) -> str:
 
 async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: int,
                                 billing_str: str, hostname: str, os_id: str,
-                                root_password: str, final_price: float) -> None:
+                                root_password: str, final_price: float,
+                                disk_gb: int = 0,
+                                price_addon_hourly: float = 0.0) -> None:
     """ساخت و تحویل در پس‌زمینه (جیکور — ساخت طولانی است و نباید هندلر را بلاک کند).
 
     سشن مستقل باز می‌شود چون سشن هندلر با پایان هندلر بسته می‌شود.
@@ -1122,13 +1191,26 @@ async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: 
             await session.commit()   # کسر قطعی شود قبل از عملیات طولانی
             try:
                 svc = ServerService(session)
+                _create_extra: dict = {"root_password": root_password}
+                if disk_gb and disk_gb != int(plan.disk or 0):
+                    # بامپ دیسک per-OS (ویندوز): caller extra آخرین merge است و
+                    # مقدار disk پلن را override می‌کند
+                    _create_extra["disk"] = disk_gb
                 server = await svc.create_server(
                     user=user, plan=plan, os_id=os_id, billing_type=billing_type,
-                    hostname=hostname, extra={"root_password": root_password},
+                    hostname=hostname, extra=_create_extra,
                 )
                 real_password = (server.extra_data or {}).get("root_password") or root_password
                 _extra = dict(server.extra_data or {})
                 _extra["root_password"] = real_password
+                if price_addon_hourly > 0:
+                    # سورشارژ per-server (دیسک بزرگ‌تر/لایسنس) — بیلینگ ساعتی از
+                    # server_live_price همین را روی قیمت پلن اضافه می‌کند
+                    _extra["price_addon_hourly"] = price_addon_hourly
+                    if server.price_hourly:
+                        server.price_hourly = float(server.price_hourly) + price_addon_hourly
+                if disk_gb and disk_gb != int(server.disk or 0):
+                    server.disk = disk_gb
                 server.extra_data = _extra
                 await session.flush()
                 plan_name = plan.display_name or plan.name
@@ -1167,6 +1249,14 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
     billing_str = data["billing"]
     billing_type = BillingType.HOURLY if billing_str == "hourly" else BillingType.MONTHLY
     base_price = plan.price_hourly if billing_type == BillingType.HOURLY else plan.price_monthly
+    # جیکور: قیمت مؤثر per-OS (بامپ دیسک برای ویندوز + لایسنس — زنده از API)
+    gc_disk_used, gc_addon_h = int(plan.disk or 0), 0.0
+    if plan.provider_type == ProviderType.GCORE and billing_type == BillingType.HOURLY:
+        try:
+            base_price, gc_addon_h, gc_disk_used = await _gcore_os_pricing(session, plan, data)
+        except Exception as e:
+            await cb.answer(f"خطا در قیمت‌گذاری: {str(e)[:150]}", show_alert=True)
+            return
     # کسر همیشه ریالی است — پلن ارزی با نرخ روز تبدیل می‌شود
     _cur = obj_currency(plan)
     if _cur != "irt" and base_price:
@@ -1232,6 +1322,7 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
             plan_db_id=plan.id, billing_str=billing_str, hostname=hostname,
             os_id=os_id, root_password=root_password,
             final_price=float(final_price or 0),
+            disk_gb=gc_disk_used, price_addon_hourly=gc_addon_h,
         ))
         return
 

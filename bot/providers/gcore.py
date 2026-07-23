@@ -521,7 +521,7 @@ class GcoreProvider(BaseProvider):
         region_id = int(location)
         data = await self._request(
             "GET", f"/cloud/v1/images/{self.project_id}/{region_id}",
-            params={"visibility": "public"},
+            params={"visibility": "public", "include_prices": "true"},
         )
         result = []
         for img in data.get("results") or []:
@@ -540,6 +540,8 @@ class GcoreProvider(BaseProvider):
                 "id": img.get("id"),
                 "name": name,
                 "min_disk": int(img.get("min_disk") or 0),
+                # قیمت خود image = لایسنس (ویندوز)؛ لینوکس 0 — مبنای سورشارژ per-OS
+                "price_per_hour": float(img.get("price_per_hour") or 0),
                 "architecture": img.get("architecture", "x86_64"),
                 "_flavor": fam,
                 "_ver": ver,

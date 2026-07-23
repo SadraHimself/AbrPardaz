@@ -241,6 +241,11 @@ async def cb_server_action(cb: CallbackQuery, user: User, session: AsyncSession)
         return
 
     if action == "rebuild_menu":
+        # گیکور برای VM اندپوینت rebuild ندارد (GCORE.md بخش ز) — دکمه هم در
+        # کیبورد گارد شده؛ این گارد برای کیبوردهای قدیمی باقی‌مانده در چت است
+        if server.provider_type == ProviderType.GCORE:
+            await cb.answer("نصب مجدد OS برای این سرویس‌دهنده در دسترس نیست.", show_alert=True)
+            return
         account = await session.get(ProviderAccount, server.provider_account_id) if server.provider_account_id else None
         if not account:
             await cb.message.answer(f"{ERR} اطلاعات پروایدر یافت نشد.", parse_mode="HTML")
@@ -601,14 +606,20 @@ async def _select_category(cb: CallbackQuery, user: User, state: FSMContext,
         await cb.answer("در این دسته‌بندی محصولی موجود نیست.", show_alert=True)
         return
 
-    # گروه‌های چند-لوکیشنه (هتزنر): اول لوکیشن انتخاب می‌شود، بعد محصولات همان لوکیشن
-    if any(p.provider_type == ProviderType.HETZNER for p in plans):
+    # گروه‌های چند-لوکیشنه (هتزنر/گیکور): اول لوکیشن انتخاب می‌شود، بعد محصولات همان لوکیشن
+    _MULTI_LOC = (ProviderType.HETZNER, ProviderType.GCORE)
+    if any(p.provider_type in _MULTI_LOC for p in plans):
         gid = _grp.id if _grp else 0
         locs = sorted({p.location for p in plans if p.location})
+        # لیبل لوکیشن: هتزنر از نگاشت ثابت؛ گیکور نام region را در extra_data پلن دارد
+        _dyn_labels = {}
+        for p in plans:
+            if p.location and (p.extra_data or {}).get("region_name"):
+                _dyn_labels[p.location] = p.extra_data["region_name"]
         rows = []
         pair = []
         for loc in locs:
-            emoji_id, label = _HZ_LOC_META.get(loc, (None, loc))
+            emoji_id, label = _HZ_LOC_META.get(loc, (None, _dyn_labels.get(loc, loc)))
             kw = {"icon_custom_emoji_id": emoji_id} if emoji_id else {}
             pair.append(InlineKeyboardButton(text=label, callback_data=f"buyloc:{gid}:{loc}", **kw))
             if len(pair) == 2:
@@ -635,7 +646,9 @@ async def _render_plan_list(cb: CallbackQuery, state: FSMContext, session: Async
     builder = InlineKeyboardBuilder()
     for plan in plans:
         ram_gb = plan.ram // 1024 if plan.ram >= 1024 else plan.ram
-        if plan.bandwidth and plan.bandwidth >= 1000:
+        if not plan.bandwidth:
+            traffic = "نامحدود"   # bandwidth=0 یعنی ترافیک نامحدود (گیکور)
+        elif plan.bandwidth >= 1000:
             # نمای کاربر: رند به نزدیک‌ترین ترابایت (20.48 → 20)؛ مقدار دقیق در پنل ادمین
             traffic = f"{round(plan.bandwidth / 1000)}ترابایت"
         else:
@@ -785,6 +798,26 @@ async def msg_hostname(message: Message, user: User, state: FSMContext, session:
     await _ask_os_message(message, state, session, user)
 
 
+async def _fetch_os_list(session: AsyncSession, account: ProviderAccount, data: dict) -> list:
+    """لیست OSهای provider — گیکور per-region است (region از extra_data پلن)."""
+    import asyncio
+    prov = get_provider(account)
+    if account.provider_type == ProviderType.GCORE:
+        _plan = await session.get(ServerPlan, data.get("plan_id"))
+        _rid = (_plan.extra_data or {}).get("region_id") if _plan else None
+        if not _rid:
+            return []
+        return await asyncio.wait_for(
+            prov.list_os_templates(location=str(_rid)), timeout=20)
+    os_list = await asyncio.wait_for(prov.list_os_templates(), timeout=15)
+    # فیلتر معماری (هتزنر): پلن cax = ARM و بقیه x86 — ایمیج ناهم‌معماری خطای ساخت می‌دهد
+    if os_list and account.provider_type == ProviderType.HETZNER:
+        _plan_arch = await session.get(ServerPlan, data.get("plan_id"))
+        _is_arm = bool(_plan_arch and (_plan_arch.provider_plan_id or "").lower().startswith("cax"))
+        os_list = [o for o in os_list if (o.get("architecture") == "arm") == _is_arm]
+    return os_list
+
+
 async def _ask_os(cb: CallbackQuery, state: FSMContext, session: AsyncSession, user: User):
     data = await state.get_data()
     account = await session.get(ProviderAccount, data.get("provider_account_id")) if data.get("provider_account_id") else None
@@ -792,14 +825,7 @@ async def _ask_os(cb: CallbackQuery, state: FSMContext, session: AsyncSession, u
     os_list = []
     if account:
         try:
-            import asyncio
-            prov = get_provider(account)
-            os_list = await asyncio.wait_for(prov.list_os_templates(), timeout=15)
-            # فیلتر معماری (هتزنر): پلن cax = ARM و بقیه x86 — ایمیج ناهم‌معماری خطای ساخت می‌دهد
-            if os_list and account.provider_type == ProviderType.HETZNER:
-                _plan_arch = await session.get(ServerPlan, data.get("plan_id"))
-                _is_arm = bool(_plan_arch and (_plan_arch.provider_plan_id or "").lower().startswith("cax"))
-                os_list = [o for o in os_list if (o.get("architecture") == "arm") == _is_arm]
+            os_list = await _fetch_os_list(session, account, data)
         except Exception:
             pass
 
@@ -844,14 +870,7 @@ async def _ask_os_message(message: Message, state: FSMContext, session: AsyncSes
     os_list = []
     if account:
         try:
-            import asyncio
-            prov = get_provider(account)
-            os_list = await asyncio.wait_for(prov.list_os_templates(), timeout=15)
-            # فیلتر معماری (هتزنر): پلن cax = ARM و بقیه x86 — ایمیج ناهم‌معماری خطای ساخت می‌دهد
-            if os_list and account.provider_type == ProviderType.HETZNER:
-                _plan_arch = await session.get(ServerPlan, data.get("plan_id"))
-                _is_arm = bool(_plan_arch and (_plan_arch.provider_plan_id or "").lower().startswith("cax"))
-                os_list = [o for o in os_list if (o.get("architecture") == "arm") == _is_arm]
+            os_list = await _fetch_os_list(session, account, data)
         except Exception:
             pass
 
@@ -1036,7 +1055,7 @@ async def _show_confirm(msg, state: FSMContext, session, from_message=False, use
         f"• پلن: {plan.display_name or plan.name}\n"
         f"• ارائه دهنده: {plan.category or ''}\n"
         f"• رم: {plan.ram} MB | پردازنده: {plan.cpu} | دیسک: {plan.disk} GB\n"
-        f"• ترافیک: {plan.bandwidth} GB\n"
+        f"• ترافیک: {f'{plan.bandwidth} GB' if plan.bandwidth else 'نامحدود'}\n"
         f"• موقعیت: {plan.location or 'نامشخص'}\n"
         f"{hostname_line}"
         f"{os_line}\n"
@@ -1401,9 +1420,14 @@ async def cb_server_usage(cb: CallbackQuery, user: User, session: AsyncSession):
     def _g(v: float) -> str:
         return f"{v:g}" if v < 1000 else f"{v:,.0f}"
 
+    if limit > 0:
+        traffic_line = f"‏ترافیک {bar} {_g(used)} / {_g(limit)} GB ({pct:.0f}%)"
+    else:
+        # لیمیت صفر/خالی = ترافیک نامحدود (گیکور) — مصرف تجمعی هم گزارش نمی‌شود
+        traffic_line = "‏ترافیک: نامحدود ♾"
     text = (
         f'‏<tg-emoji emoji-id="5936143551854285132">📊</tg-emoji> <b>آمار مصرف — {server.name}</b>\n\n'
-        f"‏ترافیک {bar} {_g(used)} / {_g(limit)} GB ({pct:.0f}%)"
+        f"{traffic_line}"
     )
     try:
         await cb.message.edit_text(

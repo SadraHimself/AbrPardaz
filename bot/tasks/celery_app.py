@@ -74,6 +74,12 @@ app.conf.update(
             "task": "bot.tasks.server.sync_hetzner_catalog",
             "schedule": crontab(minute="10,40"),
         },
+        # هر ۳۰ دقیقه موجودی/قیمت خرید کاتالوگ گیکور sync می‌شود
+        # (آفستِ ۱۰ دقیقه‌ای نسبت به هتزنر تا هم‌زمان اجرا نشوند)
+        "gcore-catalog-sync": {
+            "task": "bot.tasks.server.sync_gcore_catalog",
+            "schedule": crontab(minute="20,50"),
+        },
         # هر ساعت تراکنش‌های قدیمی‌تر از ۷۲ ساعت پاک می‌شوند
         # (قبلاً فقط ۳ روزِ هفته اجرا می‌شد و commit هم نداشت → هیچ‌وقت پاک نمی‌شد)
         "cleanup-transactions": {

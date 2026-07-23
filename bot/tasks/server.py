@@ -367,7 +367,7 @@ def sync_hetzner_catalog(self):
 
 @app.task(name="bot.tasks.server.sync_gcore_catalog", bind=True, max_retries=1)
 def sync_gcore_catalog(self):
-    """هر ۳۰ دقیقه (دقیقه ۲۰ و ۵۰) کاتالوگ گیکور sync می‌شود:
+    """هر ۳۰ دقیقه (دقیقه ۲۰ و ۵۰) کاتالوگ جیکور sync می‌شود:
     - flavor ناموجود/غیرفعال‌شده در region → پلن خودکار غیرفعال + لاگ (was_active)
     - دوباره موجود → برگشت وضعیت + لاگ
     - قیمت خرید = flavor تازه + دیسکِ پلن × نرخ دیسک؛ فروش = خرید × (۱+سود٪)
@@ -382,7 +382,9 @@ def sync_gcore_catalog(self):
         from bot.config import settings
         from bot.database.models import ProviderAccount, ProviderType, ServerPlan
         from bot.providers.gcore import GcoreProvider
-        from bot.services.gcore_settings import full_costs, get_margins, get_volume_rate
+        from bot.services.gcore_settings import (
+            full_costs, get_margins, get_volume_rate, is_excluded_flavor,
+        )
         from bot.services.log_service import LogService
         from sqlalchemy import select
 
@@ -403,7 +405,7 @@ def sync_gcore_catalog(self):
             if not all_plans:
                 return
 
-            mh, mm = await get_margins(session)
+            mh, _mm_unused = await get_margins(session)
             vol_rate = await get_volume_rate(session)
             prov = GcoreProvider(
                 api_token=account.api_key or "",
@@ -425,6 +427,11 @@ def sync_gcore_catalog(self):
                         continue  # خطای گذرا — دور بعدی جبران می‌شود
                     for plan in [p for p in all_plans
                                  if int((p.extra_data or {}).get("region_id") or 0) == rid]:
+                        # خانواده‌های استثناشده (shared/memory) نباید در فروش بمانند
+                        if is_excluded_flavor(plan.provider_plan_id or ""):
+                            if plan.is_active:
+                                plan.is_active = False
+                            continue
                         extra = dict(plan.extra_data or {})
                         info = offered.get(plan.provider_plan_id)
                         loc_label = extra.get("region_name") or plan.location or str(rid)
@@ -460,13 +467,12 @@ def sync_gcore_catalog(self):
                                 plan.display_name or plan.name, loc_label)
                         if changed:
                             plan.extra_data = extra
-                            # قیمت فروش دنبال قیمت خرید (سود سراسری گیکور)
+                            # قیمت فروش دنبال قیمت خرید (سود سراسری جیکور — فقط ساعتی)
                             if mh is not None and extra.get("cost_hourly"):
                                 plan.price_hourly = round(
                                     float(extra["cost_hourly"]) * (1 + float(mh) / 100), 4)
-                            if mm is not None and extra.get("cost_monthly"):
-                                plan.price_monthly = round(
-                                    float(extra["cost_monthly"]) * (1 + float(mm) / 100), 2)
+                        if plan.price_monthly is not None:
+                            plan.price_monthly = None  # فروش جیکور فقط ساعتی است
                 await session.commit()
             finally:
                 await bot.session.close()

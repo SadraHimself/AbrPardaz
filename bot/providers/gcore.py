@@ -11,8 +11,8 @@
 - rebuild و change-password برای VM در API وجود ندارند (فقط bare metal rebuild دارد).
 - ترافیک VM رایگان/نامحدود است و usage تجمعی گزارش نمی‌شود → get_traffic = 0.
 - suspend داخلی ربات = stop/start: طبق داکس شارژ VM با stop کامل قطع می‌شود؛
-  وضعیت شارژِ suspend واقعی گیکور در داکس روشن نیست (تصمیم پروژه 2026-07-21).
-- رمز root را گیکور تولید/برنمی‌گرداند — ربات رمز می‌سازد و هنگام ساخت می‌فرستد.
+  وضعیت شارژِ suspend واقعی جیکور در داکس روشن نیست (تصمیم پروژه 2026-07-21).
+- رمز root را جیکور تولید/برنمی‌گرداند — ربات رمز می‌سازد و هنگام ساخت می‌فرستد.
 - ForbiddenError = «ظرفیت پر»، نه خطای دسترسی. نسخه‌ها قاطی‌اند: create/action روی
   v2، بقیه v1 (اشتباه → HTTP 405).
 """
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 API_BASE = "https://api.gcore.com"
 
-# وضعیت‌های گیکور → وضعیت داخلی ربات (active | off | suspended | building)
+# وضعیت‌های جیکور → وضعیت داخلی ربات (active | off | suspended | building)
 _STATUS_MAP = {
     "ACTIVE": "active", "REBOOT": "active", "HARD_REBOOT": "active",
     "MIGRATING": "active", "PASSWORD": "active", "RESCUE": "active",
@@ -52,8 +52,8 @@ class GcoreProvider(BaseProvider):
             self.project_id = int(project_id or 0)
         except (TypeError, ValueError):
             self.project_id = 0
-        # رمزی که خود ربات تولید و موقع ساخت به گیکور می‌دهد — لایه‌ی سرویس
-        # همین را به کاربر تحویل می‌دهد (گیکور هیچ رمزی برنمی‌گرداند)
+        # رمزی که خود ربات تولید و موقع ساخت به جیکور می‌دهد — لایه‌ی سرویس
+        # همین را به کاربر تحویل می‌دهد (جیکور هیچ رمزی برنمی‌گرداند)
         self.last_root_password: str | None = None
 
     # ── HTTP core ─────────────────────────────────────────────────────────────
@@ -134,7 +134,7 @@ class GcoreProvider(BaseProvider):
         """provider_server_id = "{region_id}:{instance_uuid}" — خودکفا برای همه متدها."""
         rid, _, uuid = (server_id or "").partition(":")
         if not uuid:
-            raise RuntimeError(f"شناسه سرور گیکور نامعتبر است: {server_id}")
+            raise RuntimeError(f"شناسه سرور جیکور نامعتبر است: {server_id}")
         return int(rid), uuid
 
     # ── Mapping helpers ───────────────────────────────────────────────────────
@@ -203,14 +203,14 @@ class GcoreProvider(BaseProvider):
     async def create_server(self, params: CreateServerParams) -> ServerInfo:
         region_id = int(params.extra.get("region_id") or 0)
         if not region_id:
-            raise RuntimeError("region_id گیکور در مشخصات پلن نیست — پلن را دوباره ایمپورت کنید")
+            raise RuntimeError("region_id جیکور در مشخصات پلن نیست — پلن را دوباره ایمپورت کنید")
         if not params.os_id:
             raise RuntimeError("سیستم‌عامل انتخاب نشده است")
 
-        disk_gb = int(params.extra.get("disk") or 0) or 25
+        disk_gb = int(params.extra.get("disk") or 0) or 5
         volume_type = str(params.extra.get("volume_type") or "standard")
 
-        # رمز root: ورودی ربات (گیکور رمزی تولید نمی‌کند). fallback: تولید داخلی.
+        # رمز root: ورودی ربات (جیکور رمزی تولید نمی‌کند). fallback: تولید داخلی.
         password = params.extra.get("root_password")
         if not password:
             import secrets as _sec, string as _str
@@ -218,7 +218,7 @@ class GcoreProvider(BaseProvider):
             password = "".join(_sec.choice(_alpha) for _ in range(16))
         self.last_root_password = password
 
-        # الگوی نام گیکور حداقل ۳ کاراکتر می‌خواهد — نام‌های خیلی کوتاه پسوند می‌گیرند
+        # الگوی نام جیکور حداقل ۳ کاراکتر می‌خواهد — نام‌های خیلی کوتاه پسوند می‌گیرند
         _name = params.name if len(params.name or "") >= 3 else f"{params.name or 'srv'}-vm"
         body: dict = {
             "name": _name,
@@ -240,7 +240,7 @@ class GcoreProvider(BaseProvider):
         # دو مسیر تعیین رمز (سوییچ per-account برای تست E2E):
         # پیش‌فرض: فیلد password → رمزِ «کاربر پیش‌فرض image» ست می‌شود.
         # gcore_root_userdata=true → cloud-init با ست صریح رمز root + ssh_pwauth
-        # (توجه: با ارسال password، گیکور user_data را نادیده می‌گیرد — فقط یکی!)
+        # (توجه: با ارسال password، جیکور user_data را نادیده می‌گیرد — فقط یکی!)
         if params.extra.get("gcore_root_userdata"):
             cloud_cfg = (
                 "#cloud-config\n"
@@ -284,7 +284,7 @@ class GcoreProvider(BaseProvider):
                 inst = await self._find_instance_by_name(region_id, body["name"])
                 instance_id = (inst or {}).get("id")
             if not instance_id:
-                raise RuntimeError("گیکور شناسه سرور ساخته‌شده را برنگرداند")
+                raise RuntimeError("جیکور شناسه سرور ساخته‌شده را برنگرداند")
         except Exception:
             # ساخت تراکنشی: شکست وسط راه → سرور نیمه‌ساخته پاک شود تا بیل نخورد
             try:
@@ -379,33 +379,33 @@ class GcoreProvider(BaseProvider):
         return await self._action(server_id, "reboot")
 
     async def rebuild_server(self, server_id: str, os_id: str, rootpass: str = "") -> bool:
-        # گیکور برای VM endpoint ریبیلد ندارد (فقط bare metal) — GCORE.md بخش ز.
+        # جیکور برای VM endpoint ریبیلد ندارد (فقط bare metal) — GCORE.md بخش ز.
         # تصمیم پروژه: در نسخه اول پشتیبانی نمی‌شود؛ دکمه در UI گارد شده است.
         raise NotImplementedError("این سرویس‌دهنده نصب مجدد سیستم‌عامل را پشتیبانی نمی‌کند")
 
     async def suspend_server(self, server_id: str) -> bool:
         # تصمیم پروژه: stop به‌جای suspend واقعی — طبق داکس، شارژ خود VM با stop
         # کامل قطع می‌شود (volume همچنان شارژ دارد ولی ناچیز است)؛ وضعیت شارژ
-        # suspend واقعی گیکور در داکس مشخص نیست.
+        # suspend واقعی جیکور در داکس مشخص نیست.
         return await self._action(server_id, "stop")
 
     async def unsuspend_server(self, server_id: str) -> bool:
         return await self._action(server_id, "start")
 
     async def get_traffic(self, server_id: str) -> float:
-        # گیکور ترافیک تجمعی گزارش نمی‌دهد (metrics فقط نرخ لحظه‌ای Bps است) و
+        # جیکور ترافیک تجمعی گزارش نمی‌دهد (metrics فقط نرخ لحظه‌ای Bps است) و
         # ترافیک VM رایگان/نامحدود است → همیشه صفر؛ سینک/هشدار ۸۰٪ عملاً غیرفعال.
         return 0.0
 
     async def list_plans(self, location: Optional[str] = None) -> list[PlanInfo]:
         """پلن‌ها (flavors) با «قیمت خرید» به ارز اکانت (currency_code هر flavor).
 
-        قرارداد داخلی گیکور: location = str(region_id) عددی.
+        قرارداد داخلی جیکور: location = str(region_id) عددی.
         توجه: قیمت flavor فقط vCPU/RAM است — هزینه‌ی volume بوت را لایه‌ی
         gcore_settings هنگام ایمپورت/سینک اضافه می‌کند (در API نیست).
         """
         if not location:
-            raise RuntimeError("برای گیکور، لیست پلن‌ها per-region است — region بدهید")
+            raise RuntimeError("برای جیکور، لیست پلن‌ها per-region است — region بدهید")
         region_id = int(location)
         data = await self._request(
             "GET", f"/cloud/v1/flavors/{self.project_id}/{region_id}",
@@ -430,7 +430,7 @@ class GcoreProvider(BaseProvider):
                 ram=ram_mb,
                 cpu=cpu,
                 disk=0,        # دیسک پلن را لایه‌ی ایمپورت تعیین می‌کند (volume جدا)
-                bandwidth=0,   # ترافیک گیکور نامحدود است
+                bandwidth=0,   # ترافیک جیکور نامحدود است
                 price_hourly=float(f.get("price_per_hour") or 0),
                 price_monthly=float(f.get("price_per_month") or 0),
                 location=str(region_id),
@@ -438,11 +438,21 @@ class GcoreProvider(BaseProvider):
             ))
         return plans
 
+    # خانواده‌هایی که همه‌ی نسخه‌هایشان ارائه می‌شود؛ بقیه فقط آخرین نسخه
+    # (تصمیم 2026-07-22 — لیست OS خلوت و کاربردی بماند)
+    _OS_FULL_FAMILIES = {"ubuntu", "windows"}
+    # ترتیب نمایش: اوبونتو اول، دبیان دوم، بقیه وسط، ویندوز آخر
+    _OS_PRIORITY = {"ubuntu": 0, "debian": 1, "windows": 8}
+
     async def list_os_templates(self, location: Optional[str] = None) -> list[dict]:
-        """ایمیج‌های عمومی لینوکس x86_64 یک region — id همان image_id (uuid) است
-        که create قبول می‌کند. location = str(region_id) (ایمیج‌ها per-region اند)."""
+        """ایمیج‌های عمومی x86_64 یک region — id همان image_id (uuid) است که
+        create قبول می‌کند. location = str(region_id) (ایمیج‌ها per-region اند).
+
+        سیاست خلوت‌سازی: ubuntu و windows همه‌ی نسخه‌ها؛ سایر توزیع‌ها فقط
+        جدیدترین نسخه. ⚠️ ویندوز min_disk بزرگ دارد و لایسنسش سمت جیکور جدا
+        شارژ می‌شود — فیلتر min_disk نسبت به دیسک پلن در لایه‌ی فلوی خرید است."""
         if not location:
-            raise RuntimeError("برای گیکور، لیست OS per-region است — region بدهید")
+            raise RuntimeError("برای جیکور، لیست OS per-region است — region بدهید")
         region_id = int(location)
         data = await self._request(
             "GET", f"/cloud/v1/images/{self.project_id}/{region_id}",
@@ -452,8 +462,6 @@ class GcoreProvider(BaseProvider):
         for img in data.get("results") or []:
             distro = (img.get("os_distro") or "").lower()
             name = img.get("name") or ""
-            if "windows" in distro or "windows" in name.lower():
-                continue  # نسخه اول: فقط لینوکس (لایسنس ویندوز شارژ جدا دارد)
             if (img.get("architecture") or "x86_64") != "x86_64":
                 continue
             if (img.get("status") or "active") != "active":
@@ -462,17 +470,30 @@ class GcoreProvider(BaseProvider):
                 ver = float(str(img.get("os_version") or "0").split("-")[0])
             except ValueError:
                 ver = 0.0
+            fam = distro or (name.split("-")[0].lower() if name else "other")
             result.append({
                 "id": img.get("id"),
                 "name": name,
                 "min_disk": int(img.get("min_disk") or 0),
                 "architecture": img.get("architecture", "x86_64"),
-                "_flavor": distro,
+                "_flavor": fam,
                 "_ver": ver,
             })
-        # بلوکی: توزیع‌های هم‌خانواده کنار هم، نسخه جدیدتر اول (الگوی هتزنر)
-        result.sort(key=lambda o: (o["_flavor"], -o["_ver"]))
-        return result
+        # خلوت‌سازی: خانواده‌های کامل → همه نسخه‌ها؛ بقیه → فقط جدیدترین
+        latest: dict = {}
+        curated: list[dict] = []
+        for o in result:
+            if o["_flavor"] in self._OS_FULL_FAMILIES:
+                curated.append(o)
+            else:
+                cur = latest.get(o["_flavor"])
+                if cur is None or o["_ver"] > cur["_ver"]:
+                    latest[o["_flavor"]] = o
+        curated.extend(latest.values())
+        # بلوکی: اولویت خانواده، بعد الفبا، داخل خانواده نسخه جدیدتر اول
+        curated.sort(key=lambda o: (self._OS_PRIORITY.get(o["_flavor"], 5),
+                                    o["_flavor"], -o["_ver"]))
+        return curated
 
     # ── Extras (خارج از BaseProvider) ────────────────────────────────────────
 

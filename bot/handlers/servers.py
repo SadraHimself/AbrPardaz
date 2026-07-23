@@ -241,7 +241,7 @@ async def cb_server_action(cb: CallbackQuery, user: User, session: AsyncSession)
         return
 
     if action == "rebuild_menu":
-        # گیکور برای VM اندپوینت rebuild ندارد (GCORE.md بخش ز) — دکمه هم در
+        # جیکور برای VM اندپوینت rebuild ندارد (GCORE.md بخش ز) — دکمه هم در
         # کیبورد گارد شده؛ این گارد برای کیبوردهای قدیمی باقی‌مانده در چت است
         if server.provider_type == ProviderType.GCORE:
             await cb.answer("نصب مجدد OS برای این سرویس‌دهنده در دسترس نیست.", show_alert=True)
@@ -606,12 +606,12 @@ async def _select_category(cb: CallbackQuery, user: User, state: FSMContext,
         await cb.answer("در این دسته‌بندی محصولی موجود نیست.", show_alert=True)
         return
 
-    # گروه‌های چند-لوکیشنه (هتزنر/گیکور): اول لوکیشن انتخاب می‌شود، بعد محصولات همان لوکیشن
+    # گروه‌های چند-لوکیشنه (هتزنر/جیکور): اول لوکیشن انتخاب می‌شود، بعد محصولات همان لوکیشن
     _MULTI_LOC = (ProviderType.HETZNER, ProviderType.GCORE)
     if any(p.provider_type in _MULTI_LOC for p in plans):
         gid = _grp.id if _grp else 0
         locs = sorted({p.location for p in plans if p.location})
-        # لیبل لوکیشن: هتزنر از نگاشت ثابت؛ گیکور نام region را در extra_data پلن دارد
+        # لیبل لوکیشن: هتزنر از نگاشت ثابت؛ جیکور نام region را در extra_data پلن دارد
         _dyn_labels = {}
         for p in plans:
             if p.location and (p.extra_data or {}).get("region_name"):
@@ -647,7 +647,7 @@ async def _render_plan_list(cb: CallbackQuery, state: FSMContext, session: Async
     for plan in plans:
         ram_gb = plan.ram // 1024 if plan.ram >= 1024 else plan.ram
         if not plan.bandwidth:
-            traffic = "نامحدود"   # bandwidth=0 یعنی ترافیک نامحدود (گیکور)
+            traffic = "نامحدود"   # bandwidth=0 یعنی ترافیک نامحدود (جیکور)
         elif plan.bandwidth >= 1000:
             # نمای کاربر: رند به نزدیک‌ترین ترابایت (20.48 → 20)؛ مقدار دقیق در پنل ادمین
             traffic = f"{round(plan.bandwidth / 1000)}ترابایت"
@@ -799,7 +799,7 @@ async def msg_hostname(message: Message, user: User, state: FSMContext, session:
 
 
 async def _fetch_os_list(session: AsyncSession, account: ProviderAccount, data: dict) -> list:
-    """لیست OSهای provider — گیکور per-region است (region از extra_data پلن)."""
+    """لیست OSهای provider — جیکور per-region است (region از extra_data پلن)."""
     import asyncio
     prov = get_provider(account)
     if account.provider_type == ProviderType.GCORE:
@@ -807,8 +807,16 @@ async def _fetch_os_list(session: AsyncSession, account: ProviderAccount, data: 
         _rid = (_plan.extra_data or {}).get("region_id") if _plan else None
         if not _rid:
             return []
-        return await asyncio.wait_for(
+        os_list = await asyncio.wait_for(
             prov.list_os_templates(location=str(_rid)), timeout=20)
+        # ایمیجی که min_disk آن از دیسک پلن بزرگ‌تر است قابل نصب نیست (ValidationError
+        # هنگام ساخت) → اصلاً نمایش داده نشود. ویندوز (min_disk بزرگ) فقط روی
+        # پلن‌های دیسک‌بالا ظاهر می‌شود.
+        _disk = int(_plan.disk or 0) if _plan else 0
+        if _disk:
+            os_list = [o for o in os_list
+                       if not o.get("min_disk") or int(o["min_disk"]) <= _disk]
+        return os_list
     os_list = await asyncio.wait_for(prov.list_os_templates(), timeout=15)
     # فیلتر معماری (هتزنر): پلن cax = ARM و بقیه x86 — ایمیج ناهم‌معماری خطای ساخت می‌دهد
     if os_list and account.provider_type == ProviderType.HETZNER:
@@ -1423,7 +1431,7 @@ async def cb_server_usage(cb: CallbackQuery, user: User, session: AsyncSession):
     if limit > 0:
         traffic_line = f"‏ترافیک {bar} {_g(used)} / {_g(limit)} GB ({pct:.0f}%)"
     else:
-        # لیمیت صفر/خالی = ترافیک نامحدود (گیکور) — مصرف تجمعی هم گزارش نمی‌شود
+        # لیمیت صفر/خالی = ترافیک نامحدود (جیکور) — مصرف تجمعی هم گزارش نمی‌شود
         traffic_line = "‏ترافیک: نامحدود ♾"
     text = (
         f'‏<tg-emoji emoji-id="5936143551854285132">📊</tg-emoji> <b>آمار مصرف — {server.name}</b>\n\n'

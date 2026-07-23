@@ -46,7 +46,7 @@ def server_list_kb(servers: list[Server]) -> InlineKeyboardMarkup:
 def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
     sid = server.id
     is_hourly = server.billing_type == BillingType.HOURLY
-    # گیکور: API ریبیلد/تغییر رمز/تغییر IP برای VM ندارد → دکمه‌ها گارد می‌شوند
+    # جیکور: API ریبیلد/تغییر رمز/تغییر IP برای VM ندارد → دکمه‌ها گارد می‌شوند
     is_gcore = server.provider_type == ProviderType.GCORE
     rows: list[list[InlineKeyboardButton]] = []
 
@@ -64,7 +64,7 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
         # سیاست IP: ویرچولایزور فقط ماهانه؛ هتزنر (IP رایگان) ساعتی و ماهانه
         is_virt = server.provider_type == ProviderType.VIRTUALIZOR
         if is_gcore:
-            pass  # قابلیت‌های اختیاری گیکور در نسخه اول ارائه نمی‌شوند
+            pass  # قابلیت‌های اختیاری جیکور در نسخه اول ارائه نمی‌شوند
         elif is_hourly and is_virt:
             rows.append([
                 _btn("تغییر رمز", f"srv_chpass:{sid}", icon="4904500559203009298"),

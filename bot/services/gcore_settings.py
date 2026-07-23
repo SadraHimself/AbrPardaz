@@ -1,12 +1,12 @@
-"""تنظیمات سراسری گیکور — سود واحد، گروه مقصد، قیمت‌گذاری دیسک (تک-اکانتی).
+"""تنظیمات سراسری جیکور — سود واحد، گروه مقصد، قیمت‌گذاری دیسک (تک-اکانتی).
 
-مدل (تصمیم پروژه 2026-07-21): گیکور فعلاً «تک-اکانتی» است — ماشین چند-اکانتیِ
+مدل (تصمیم پروژه 2026-07-21): جیکور فعلاً «تک-اکانتی» است — ماشین چند-اکانتیِ
 هتزنر (کاتالوگ مشترک/توزیع متوازن) اینجا لازم نیست و کپی هم نمی‌شود (قانون ۵.۱۰#۱:
 اگر روزی چند-اکانتی شد، همان موقع provider_settings.py جنریک ساخته می‌شود).
 
-قیمت‌گذاری (شکاف API گیکور): flavor فقط vCPU/RAM دارد؛ دیسک = volume جدا که
+قیمت‌گذاری (شکاف API جیکور): flavor فقط vCPU/RAM دارد؛ دیسک = volume جدا که
 «از ساخت تا حذف» شارژ می‌شود ولی قیمتش در API نمی‌آید. راه‌حل:
-- ادمین نرخ «قیمت هر GB دیسک در ماه» را از صفحه قیمت گیکور در پنل وارد می‌کند
+- ادمین نرخ «قیمت هر GB دیسک در ماه» را از صفحه قیمت جیکور در پنل وارد می‌کند
   (به ارز اکانت — همان ارز flavorها).
 - حجم دیسک هر پلن هنگام ایمپورت از «دیسک پیش‌فرض» (تنظیم ادمین) تعیین و روی
   plan.disk ذخیره می‌شود.
@@ -32,7 +32,16 @@ _KEY_GROUP = "gcore_group"
 _KEY_VOL_RATE = "gcore_volume_price_gb_month"   # قیمت هر GB دیسک در ماه (ارز اکانت)
 _KEY_DISK_GB = "gcore_default_disk_gb"          # دیسک پیش‌فرض پلن‌های جدید (GB)
 _DEFAULT_GROUP = "Gcore"
-_DEFAULT_DISK_GB = 25
+_DEFAULT_DISK_GB = 5    # دیسک پیش‌فرض Cloud VMهای جیکور (تصمیم 2026-07-22)
+
+
+def is_excluded_flavor(flavor_id: str) -> bool:
+    """خانواده‌های عرضه‌نشدنی (تصمیم‌های 2026-07-21/22):
+    - Basic VM (CPU اشتراکی): «shared» در ID — بدون SLA/اسنپ‌شات، شبکه محدود
+    - memory-optimized: «memory» در ID — ارائه نمی‌شوند
+    منبع واحد سیاست — پنل ایمپورت، اعمال سود و سینک همه از همین استفاده می‌کنند."""
+    fid = (flavor_id or "").lower()
+    return "shared" in fid or "memory" in fid
 
 
 async def _get(session: AsyncSession, key: str):
@@ -96,7 +105,7 @@ def full_costs(flavor_hourly: float, flavor_monthly: float,
 
 
 async def recompute_catalog_costs(session: AsyncSession) -> int:
-    """بازمحاسبه‌ی قیمت خرید کامل همه‌ی پلن‌های گیکور از روی قیمت خامِ flavor
+    """بازمحاسبه‌ی قیمت خرید کامل همه‌ی پلن‌های جیکور از روی قیمت خامِ flavor
     (flavor_cost_*) + دیسکِ خودِ پلن × نرخ فعلی دیسک — بعد از تغییر نرخ دیسک."""
     vol_rate = await get_volume_rate(session)
     plans = (await session.execute(
@@ -142,26 +151,32 @@ async def set_group_name(session: AsyncSession, name: str) -> None:
 # ── اعمال سود روی کاتالوگ ────────────────────────────────────────────────────
 
 async def apply_margins_to_catalog(session: AsyncSession) -> int:
-    """قیمت فروش همه‌ی پلن‌های گیکور = قیمت خرید کامل × (۱ + سود٪) + فعال‌سازی."""
-    mh, mm = await get_margins(session)
-    if mh is None and mm is None:
-        return 0
+    """قیمت فروش همه‌ی پلن‌های جیکور = قیمت خرید کامل × (۱ + سود٪) + فعال‌سازی.
+
+    فروش جیکور فقط «ساعتی» است (تصمیم 2026-07-22): price_monthly همیشه None
+    می‌ماند تا گزینه‌ی ماهانه در فلوی خرید اصلاً ظاهر نشود. پلن‌های خانواده‌های
+    استثناشده (shared/memory) اگر قبلاً ایمپورت شده باشند، غیرفعال می‌شوند."""
+    mh, _ = await get_margins(session)
     plans = (await session.execute(
         select(ServerPlan).where(ServerPlan.provider_type == ProviderType.GCORE)
     )).scalars().all()
     count = 0
     for p in plans:
+        if is_excluded_flavor(p.provider_plan_id or ""):
+            if p.is_active:
+                p.is_active = False
+            continue
         extra = p.extra_data or {}
-        ch, cm = extra.get("cost_hourly"), extra.get("cost_monthly")
+        ch = extra.get("cost_hourly")
         changed = False
         if mh is not None and ch:
             p.price_hourly = round(float(ch) * (1 + mh / 100), 4)
             changed = True
-        if mm is not None and cm:
-            p.price_monthly = round(float(cm) * (1 + mm / 100), 2)
+        if p.price_monthly is not None:
+            p.price_monthly = None   # فروش ماهانه ندارد
             changed = True
         if changed:
-            if not extra.get("unavailable") and not p.is_active:
+            if not extra.get("unavailable") and not p.is_active and p.price_hourly:
                 p.is_active = True
             count += 1
     await session.flush()
@@ -171,7 +186,7 @@ async def apply_margins_to_catalog(session: AsyncSession) -> int:
 # ── انتخاب اکانت هنگام خرید ──────────────────────────────────────────────────
 
 async def get_account(session: AsyncSession) -> ProviderAccount | None:
-    """تنها اکانت گیکور (فعال یا نه) — برای پنل ادمین."""
+    """تنها اکانت جیکور (فعال یا نه) — برای پنل ادمین."""
     return (await session.execute(
         select(ProviderAccount).where(
             ProviderAccount.provider_type == ProviderType.GCORE,
@@ -180,11 +195,11 @@ async def get_account(session: AsyncSession) -> ProviderAccount | None:
 
 
 async def pick_account(session: AsyncSession) -> ProviderAccount | None:
-    """اکانت فعال گیکور اگر زیر لیمیت VM باشد (تک-اکانتی).
+    """اکانت فعال جیکور اگر زیر لیمیت VM باشد (تک-اکانتی).
 
-    گیکور شمارش زنده‌ی سبک ندارد (instanceها per-region اند) → مصرف از DB خودمان
+    جیکور شمارش زنده‌ی سبک ندارد (instanceها per-region اند) → مصرف از DB خودمان
     (سرورهای غیرحذف‌شده روی این اکانت) شمرده می‌شود؛ سقف واقعی اکانت را quota
-    گیکور هنگام create هم گارد می‌کند (QuotaLimitExceed → پیام شفاف)."""
+    جیکور هنگام create هم گارد می‌کند (QuotaLimitExceed → پیام شفاف)."""
     account = (await session.execute(
         select(ProviderAccount).where(
             ProviderAccount.provider_type == ProviderType.GCORE,

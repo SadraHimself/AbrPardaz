@@ -783,7 +783,7 @@ async def _render_admin_server(msg, session: AsyncSession, server: Server):
 
     sid = server.id
     is_susp = server.status == ServerStatus.SUSPENDED
-    # گیکور: rebuild/تغییر IP/آیپی اضافه در API وجود ندارد → دکمه‌ها مخفی
+    # جیکور: rebuild/تغییر IP/آیپی اضافه در API وجود ندارد → دکمه‌ها مخفی
     _is_gcore = server.provider_type == ProviderType.GCORE
     _rows = [
         [
@@ -1051,7 +1051,7 @@ async def cb_admin_usrv_rebuild(cb: CallbackQuery, session: AsyncSession):
     if not server:
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
-    # گیکور برای VM اندپوینت rebuild ندارد — گارد کیبوردهای قدیمی
+    # جیکور برای VM اندپوینت rebuild ندارد — گارد کیبوردهای قدیمی
     if server.provider_type == ProviderType.GCORE:
         await cb.answer("نصب مجدد OS برای این سرویس‌دهنده در دسترس نیست.", show_alert=True)
         return

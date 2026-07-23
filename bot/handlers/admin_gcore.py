@@ -1,14 +1,14 @@
 """Admin panel — Gcore Edge Cloud account + product import (تک-اکانتی).
 
-فلو: محصولات ← سرویس‌دهنده‌ها ← گیکور
-- افزودن اکانت: نام + API Token (پورتال گیکور، اسکیم APIKey) + Project ID →
+فلو: محصولات ← سرویس‌دهنده‌ها ← جیکور
+- افزودن اکانت: نام + API Token (پورتال جیکور، اسکیم APIKey) + Project ID →
   تست زنده (clients/me + regions + probe پروژه) → ذخیره → حذف پیام توکن از چت
 - جزئیات: تست / ایمپورت / ویرایش نام-توکن-project / لیمیت VM دستی /
   سود ساعتی-ماهانه / نرخ دیسک ($/GB/ماه) / دیسک پیش‌فرض / گروه مقصد / حذف
 - ایمپورت: region → خانواده flavor → پلن‌ها با «قیمت خرید» (flavor + دیسک) →
   تپ = ساخت ServerPlan (غیرفعال تا سود ست شود؛ با سود ست‌شده فوراً قیمت می‌خورد)
 
-نکته قیمت: flavor گیکور دیسک ندارد — دیسک volume جداست و قیمتش در API نیست؛
+نکته قیمت: flavor جیکور دیسک ندارد — دیسک volume جداست و قیمتش در API نیست؛
 ادمین نرخ هر GB/ماه را دستی وارد می‌کند (gcore_settings).
 """
 from __future__ import annotations
@@ -77,7 +77,7 @@ async def _gc_account(session: AsyncSession) -> ProviderAccount | None:
     return await get_account(session)
 
 
-# ── صفحه اصلی گیکور (تک-اکانتی: لیست = جزئیات) ──────────────────────────────
+# ── صفحه اصلی جیکور (تک-اکانتی: لیست = جزئیات) ──────────────────────────────
 
 async def _render_gc_home(msg, session: AsyncSession):
     from bot.services.gcore_settings import (
@@ -87,8 +87,8 @@ async def _render_gc_home(msg, session: AsyncSession):
 
     if not account:
         await msg.edit_text(
-            "<b>گیکور (Gcore Cloud)</b>\n\n"
-            "هنوز اکانتی ثبت نشده. توکن از پورتال گیکور ساخته می‌شود:\n"
+            "<b>جیکور (Gcore Cloud)</b>\n\n"
+            "هنوز اکانتی ثبت نشده. توکن از پورتال جیکور ساخته می‌شود:\n"
             "<i>Profile ← API tokens ← Create token (نقش Administrators/Engineers)</i>",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -98,7 +98,7 @@ async def _render_gc_home(msg, session: AsyncSession):
         )
         return
 
-    mh, mm = await get_margins(session)
+    mh, _ = await get_margins(session)   # فروش جیکور فقط ساعتی است
     group = await get_group_name(session)
     vol_rate = await get_volume_rate(session)
     disk_gb = await get_default_disk_gb(session)
@@ -127,9 +127,7 @@ async def _render_gc_home(msg, session: AsyncSession):
          InlineKeyboardButton(text=f"لیمیت VM: {vm_limit or 'تعیین نشده'}",
                               callback_data="admin:gc_limit")],
         [InlineKeyboardButton(text=f"سود ساعتی: {mh if mh is not None else '—'}٪",
-                              callback_data="admin:gcm:h"),
-         InlineKeyboardButton(text=f"سود ماهانه: {mm if mm is not None else '—'}٪",
-                              callback_data="admin:gcm:m")],
+                              callback_data="admin:gcm:h")],
         [InlineKeyboardButton(text=f"نرخ دیسک: {vol_rate:g} /GB/ماه" if vol_rate
                               else "نرخ دیسک: تنظیم نشده!",
                               callback_data="admin:gc_volrate"),
@@ -143,15 +141,16 @@ async def _render_gc_home(msg, session: AsyncSession):
         [InlineKeyboardButton(text="بازگشت", callback_data="admin:provtypes")],
     ])
     await msg.edit_text(
-        f"<b>گیکور (Gcore Cloud)</b>\n\n"
+        f"<b>جیکور (Gcore Cloud)</b>\n\n"
         f"اکانت: {account.name} {'✅' if account.is_active else '❌'}\n"
         f"Token: <code>{token_masked}</code>\n"
         f"سرورهای فعال مشتری: {servers_count}"
         f"{f' / {vm_limit}' if vm_limit else ''}\n"
         f"محصولات ایمپورت‌شده: {plans_count}\n\n"
-        "قیمت خرید هر پلن = قیمت flavor + دیسک×نرخ دیسک — "
+        "فروش جیکور <b>فقط ساعتی</b> است. قیمت خرید = flavor + دیسک×نرخ دیسک — "
         "قیمت فروش = خرید × (۱ + سود٪).\n"
-        "ریبیلد و تغییر رمز برای گیکور در دسترس نیست (محدودیت API).",
+        "محصول ایمپورت‌شده تا تعیین «سود ساعتی» غیرفعال است و در فروش دیده نمی‌شود.\n"
+        "ریبیلد و تغییر رمز برای جیکور در دسترس نیست (محدودیت API).",
         parse_mode="HTML",
         reply_markup=kb,
     )
@@ -168,13 +167,13 @@ async def cb_gcore(cb: CallbackQuery, session: AsyncSession):
 @router.callback_query(F.data == "admin:gc_add")
 async def cb_gc_add(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
     if await _gc_account(session):
-        await cb.answer("گیکور فعلاً تک-اکانتی است — اکانت موجود را ویرایش کنید.",
+        await cb.answer("جیکور فعلاً تک-اکانتی است — اکانت موجود را ویرایش کنید.",
                         show_alert=True)
         return
     await state.set_state(GcoreFSM.add_name)
     await cb.message.edit_text(
-        "<b>افزودن اکانت گیکور</b>\n\n"
-        "نام دلخواه اکانت را وارد کنید:\n<i>مثال: گیکور اصلی</i>",
+        "<b>افزودن اکانت جیکور</b>\n\n"
+        "نام دلخواه اکانت را وارد کنید:\n<i>مثال: جیکور اصلی</i>",
         parse_mode="HTML", reply_markup=cancel_admin_kb(),
     )
     await cb.answer()
@@ -242,11 +241,11 @@ async def gc_add_project(message: Message, state: FSMContext, session: AsyncSess
     await session.flush()
 
     await wait.edit_text(
-        f"✅ <b>اکانت گیکور اضافه شد!</b>\n\n"
+        f"✅ <b>اکانت جیکور اضافه شد!</b>\n\n"
         f"نام: {account.name}\n"
-        f"اکانت گیکور: {info.get('email') or '—'} (client {info.get('client_id')})\n"
+        f"اکانت جیکور: {info.get('email') or '—'} (client {info.get('client_id')})\n"
         f"لوکیشن‌های دارای VM: {info.get('regions')}\n\n"
-        "قبل از ایمپورت، «نرخ دیسک» را از صفحه قیمت گیکور تنظیم کنید.",
+        "قبل از ایمپورت، «نرخ دیسک» را از صفحه قیمت جیکور تنظیم کنید.",
         parse_mode="HTML",
         reply_markup=back_to_admin_kb("admin:gcore"),
     )
@@ -284,7 +283,7 @@ async def cb_gc_edit(cb: CallbackQuery, state: FSMContext):
     label = {"name": "نام جدید", "token": "API Token جدید",
              "project": "Project ID جدید (عدد)"}.get(field, field)
     await cb.message.edit_text(
-        f"<b>ویرایش اکانت گیکور</b>\n\n{label} را وارد کنید:",
+        f"<b>ویرایش اکانت جیکور</b>\n\n{label} را وارد کنید:",
         parse_mode="HTML", reply_markup=cancel_admin_kb(),
     )
     await cb.answer()
@@ -347,8 +346,8 @@ async def gc_edit_value(message: Message, state: FSMContext, session: AsyncSessi
 async def cb_gc_limit(cb: CallbackQuery, state: FSMContext):
     await state.set_state(GcoreFSM.edit_limit)
     await cb.message.edit_text(
-        "<b>لیمیت تعداد VM اکانت گیکور</b>\n\n"
-        "سقف واقعی را quota گیکور هم گارد می‌کند؛ این عدد کنترل داخلی ربات است.\n"
+        "<b>لیمیت تعداد VM اکانت جیکور</b>\n\n"
+        "سقف واقعی را quota جیکور هم گارد می‌کند؛ این عدد کنترل داخلی ربات است.\n"
         "با رسیدن سرورهای فعال ربات به این عدد، خرید جدید مسدود می‌شود.\n\n"
         "عدد لیمیت (0 = بدون کنترل):",
         parse_mode="HTML", reply_markup=cancel_admin_kb(),
@@ -375,16 +374,15 @@ async def gc_limit_value(message: Message, state: FSMContext, session: AsyncSess
 
 @router.callback_query(F.data.startswith("admin:gcm:"))
 async def cb_gc_margin(cb: CallbackQuery, state: FSMContext):
-    kind = cb.data.split(":")[2]
-    await state.update_data(gc_margin_kind=kind)
+    await state.update_data(gc_margin_kind="h")   # فروش جیکور فقط ساعتی است
     await state.set_state(GcoreFSM.edit_margin)
-    label = "ساعتی" if kind == "h" else "ماهانه"
     await cb.message.edit_text(
-        f"<b>درصد سود {label} (کل گیکور)</b>\n\n"
+        "<b>درصد سود ساعتی (کل جیکور)</b>\n\n"
+        "فروش جیکور فقط ساعتی است.\n"
         "قیمت فروش = قیمت خرید کامل (flavor + دیسک) × (۱ + سود٪)\n"
-        "این سود روی <b>همه‌ی محصولات گیکور</b> اعمال می‌شود و در سینک دوره‌ای هم "
-        "دنبال قیمت گیکور می‌ماند.\n\n"
-        f"درصد سود {label} را وارد کنید (مثال: 35):",
+        "این سود روی <b>همه‌ی محصولات جیکور</b> اعمال می‌شود و در سینک دوره‌ای هم "
+        "دنبال قیمت جیکور می‌ماند. با ثبت سود، محصولات ایمپورت‌شده فعال می‌شوند.\n\n"
+        "درصد سود ساعتی را وارد کنید (مثال: 35):",
         parse_mode="HTML", reply_markup=cancel_admin_kb(),
     )
     await cb.answer()
@@ -395,12 +393,17 @@ async def gc_margin_value(message: Message, state: FSMContext, session: AsyncSes
     from bot.services.gcore_settings import apply_margins_to_catalog, set_margin
     data = await state.get_data()
     await state.clear()
-    await set_margin(session, hourly=(data.get("gc_margin_kind") == "h"),
+    await set_margin(session, hourly=(data.get("gc_margin_kind", "h") == "h"),
                      value=float(message.text))
     await session.flush()
     updated = await apply_margins_to_catalog(session)
+    note = ""
+    if not updated:
+        note = ("\n\n⚠️ هیچ محصولی قیمت نگرفت — یا «نرخ دیسک» تنظیم نشده یا قیمت "
+                "flavorها صفر برگشته (اکانت trial؟). بعد از اصلاح، دوباره سود را ثبت کنید.")
     await message.answer(
-        f"سود ثبت شد ({message.text}٪) — قیمت فروش {updated} محصول گیکور به‌روز و فعال شد.",
+        f"سود ثبت شد ({message.text}٪) — قیمت فروش {updated} محصول جیکور به‌روز و فعال شد."
+        f"{note}",
         reply_markup=back_to_admin_kb("admin:gcore"),
     )
 
@@ -409,10 +412,10 @@ async def gc_margin_value(message: Message, state: FSMContext, session: AsyncSes
 async def cb_gc_volrate(cb: CallbackQuery, state: FSMContext):
     await state.set_state(GcoreFSM.edit_volrate)
     await cb.message.edit_text(
-        "<b>نرخ دیسک گیکور</b>\n\n"
+        "<b>نرخ دیسک جیکور</b>\n\n"
         "قیمت هر GB دیسک (volume نوع standard) در «ماه»، به ارز اکانت "
         "(همان ارز flavorها — دلار/یورو).\n"
-        "این عدد در API گیکور نمی‌آید — از صفحه قیمت cloud.gcore.com بردارید.\n\n"
+        "این عدد در API جیکور نمی‌آید — از صفحه قیمت cloud.gcore.com بردارید.\n\n"
         "عدد را وارد کنید (مثال: 0.07):",
         parse_mode="HTML", reply_markup=cancel_admin_kb(),
     )
@@ -439,10 +442,10 @@ async def gc_volrate_value(message: Message, state: FSMContext, session: AsyncSe
 async def cb_gc_diskgb(cb: CallbackQuery, state: FSMContext):
     await state.set_state(GcoreFSM.edit_diskgb)
     await cb.message.edit_text(
-        "<b>دیسک پیش‌فرض پلن‌های گیکور</b>\n\n"
+        "<b>دیسک پیش‌فرض پلن‌های جیکور</b>\n\n"
         "حجم volume بوت (GB) برای پلن‌هایی که از این به بعد ایمپورت می‌شوند.\n"
         "پلن‌های ایمپورت‌شده‌ی قبلی حجم خودشان را نگه می‌دارند.\n\n"
-        "عدد GB را وارد کنید (مثال: 25):",
+        "عدد GB را وارد کنید (مثال: 5):",
         parse_mode="HTML", reply_markup=cancel_admin_kb(),
     )
     await cb.answer()
@@ -483,8 +486,8 @@ async def cb_gc_group_pick(cb: CallbackQuery, session: AsyncSession):
     )).scalars().all()
     await cb.answer()
     await cb.message.edit_text(
-        "<b>گروه مقصد محصولات گیکور</b>\n\n"
-        "همه‌ی محصولات گیکور در این گروه قرار می‌گیرند (کاتالوگِ موجود هم منتقل می‌شود):\n"
+        "<b>گروه مقصد محصولات جیکور</b>\n\n"
+        "همه‌ی محصولات جیکور در این گروه قرار می‌گیرند (کاتالوگِ موجود هم منتقل می‌شود):\n"
         "<i>(گروه جدید را از «گروه محصولات» بسازید)</i>",
         parse_mode="HTML",
         reply_markup=group_pick_kb(groups, "admin:gcgrpset",
@@ -521,7 +524,7 @@ async def cb_gc_del(cb: CallbackQuery, session: AsyncSession):
     await cb.answer()
     await cb.message.edit_text(
         f"حذف اکانت <b>{account.name}</b>؟\n"
-        "<i>چون تک-اکانتی است، همه‌ی محصولات گیکور هم حذف می‌شوند.</i>",
+        "<i>چون تک-اکانتی است، همه‌ی محصولات جیکور هم حذف می‌شوند.</i>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="بله، حذف شود", callback_data="admin:gc_del_do"),
@@ -552,7 +555,7 @@ async def cb_gc_del_do(cb: CallbackQuery, session: AsyncSession):
     try:
         from sqlalchemy import update as _update, text as _text
         await session.execute(_text("SET LOCAL statement_timeout = '8s'"))
-        # پلن‌های گیکور حذف می‌شوند (اکانت دیگری برای انتقال نیست — تک-اکانتی)
+        # پلن‌های جیکور حذف می‌شوند (اکانت دیگری برای انتقال نیست — تک-اکانتی)
         plans = (await session.execute(
             select(ServerPlan).where(ServerPlan.provider_type == ProviderType.GCORE)
         )).scalars().all()
@@ -580,7 +583,7 @@ async def cb_gc_del_do(cb: CallbackQuery, session: AsyncSession):
 
 # ── ایمپورت محصولات ──────────────────────────────────────────────────────────
 
-# کش کوتاه‌مدت تا هر کلیک یک API call نخورد (rate limit گیکور نامشخص → محافظه‌کار)
+# کش کوتاه‌مدت تا هر کلیک یک API call نخورد (rate limit جیکور نامشخص → محافظه‌کار)
 _regions_cache: dict = {}
 _plans_cache: dict = {}
 
@@ -617,11 +620,11 @@ def _family(flavor_id: str) -> str:
     return "-".join(parts[:2]) if len(parts) >= 2 else (flavor_id or "other")
 
 
-def _is_basic(flavor_id: str) -> bool:
-    """Basic VM (CPU اشتراکی — g1s-shared-*/g2s-shared-*) ارائه نمی‌شود:
-    تمرکز فروش روی Cloud VMهای اختصاصی است (بدون SLA/اسنپ‌شات و شبکه محدود
-    در Basic VM — تصمیم پروژه 2026-07-21)."""
-    return "shared" in (flavor_id or "").lower()
+def _is_excluded(flavor_id: str) -> bool:
+    """خانواده‌های عرضه‌نشدنی — Basic VM (shared) و memory-optimized.
+    منبع واحد سیاست در gcore_settings است (سینک/اعمال سود هم از همان می‌خوانند)."""
+    from bot.services.gcore_settings import is_excluded_flavor
+    return is_excluded_flavor(flavor_id)
 
 
 async def _imported_map(session: AsyncSession, slug: str) -> dict:
@@ -671,7 +674,7 @@ async def cb_gc_import(cb: CallbackQuery, session: AsyncSession):
         rows.append(pair)
     rows.append([InlineKeyboardButton(text="بازگشت", callback_data="admin:gcore")])
     await cb.message.edit_text(
-        "<b>ایمپورت محصولات گیکور</b>\n\n"
+        "<b>ایمپورت محصولات جیکور</b>\n\n"
         f"محصولات به گروه «{group_name}» می‌روند.{warn}\n"
         "لوکیشن را انتخاب کنید:",
         parse_mode="HTML",
@@ -705,21 +708,25 @@ async def cb_gc_location(cb: CallbackQuery, session: AsyncSession):
 
     fams: dict = {}
     for p in plans:
-        if _is_basic(p.provider_plan_id):
-            continue  # Basic VM ارائه نمی‌شود
+        if _is_excluded(p.provider_plan_id):
+            continue  # Basic VM و memory ارائه نمی‌شوند
         fams.setdefault(_family(p.provider_plan_id), []).append(p)
+    # خانواده‌هایی که فقط پلن ایمپورت‌شده‌ی قدیمی دارند (استثناشده/حذف‌شده از عرضه)
+    # هم باید دکمه بگیرند تا ادمین بتواند پلن‌هایشان را حذف کند
+    for pid in imported:
+        fams.setdefault(_family(pid), [])
 
     rows = []
     for fam in sorted(fams):
         total = len(fams[fam])
-        n_imp = sum(1 for p in fams[fam] if p.provider_plan_id in imported)
+        n_imp = sum(1 for pid in imported if _family(pid) == fam)
         rows.append([InlineKeyboardButton(
             text=f"{fam} ({n_imp}/{total})",
             callback_data=f"admin:gcfam:{rid}:{fam}",
         )])
     rows.append([InlineKeyboardButton(text="بازگشت", callback_data="admin:gc_import")])
     await cb.message.edit_text(
-        f"<b>پلن‌های گیکور — {region['display_name']}</b>\n\n"
+        f"<b>پلن‌های جیکور — {region['display_name']}</b>\n\n"
         "دسته را انتخاب کنید (ایمپورت‌شده/کل):",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
@@ -734,7 +741,7 @@ async def _render_gc_family(msg, session: AsyncSession, account: ProviderAccount
         return
     plans = [p for p in await _region_plans(account, rid)
              if _family(p.provider_plan_id) == fam
-             and not _is_basic(p.provider_plan_id)]
+             and not _is_excluded(p.provider_plan_id)]
     imported = await _imported_map(session, region["slug"])
     vol_rate = await get_volume_rate(session)
     disk_gb = await get_default_disk_gb(session)
@@ -794,7 +801,7 @@ async def cb_gc_family_all_on(cb: CallbackQuery, session: AsyncSession):
         return
     plans = [p for p in await _region_plans(account, rid)
              if _family(p.provider_plan_id) == fam
-             and not _is_basic(p.provider_plan_id)]
+             and not _is_excluded(p.provider_plan_id)]
     imported = await _imported_map(session, region["slug"])
     group_name = await get_group_name(session)
     added = 0
@@ -893,7 +900,7 @@ async def _import_one(session: AsyncSession, account: ProviderAccount,
         name=f"{info.provider_plan_id}-{region['slug']}",   # نام داخلی — یکتا با لوکیشن
         display_name=info.provider_plan_id.upper(),
         ram=info.ram, cpu=info.cpu, disk=disk_gb,
-        bandwidth=0,                              # ترافیک گیکور نامحدود (0 = نامحدود)
+        bandwidth=0,                              # ترافیک جیکور نامحدود (0 = نامحدود)
         price_hourly=None, price_monthly=None,    # فروش با سود سراسری محاسبه می‌شود
         location=region["slug"],                  # ASCII برای callback_data + نمایش
         is_active=False,                          # تا قیمت‌گذاری، در فروش دیده نمی‌شود
@@ -955,8 +962,8 @@ async def cb_gc_pick(cb: CallbackQuery, session: AsyncSession):
         await session.flush()
         await cb.answer(f"{pid}: {note}", show_alert=not deleted)
     else:
-        if _is_basic(pid):
-            await cb.answer("Basic VM ارائه نمی‌شود (تمرکز روی Cloud VM).", show_alert=True)
+        if _is_excluded(pid):
+            await cb.answer("این خانواده ارائه نمی‌شود (Basic VM / memory).", show_alert=True)
             return
         plans = await _region_plans(account, rid)
         info = next((p for p in plans if p.provider_plan_id == pid), None)
@@ -969,7 +976,7 @@ async def cb_gc_pick(cb: CallbackQuery, session: AsyncSession):
         mh, mm = await get_margins(session)
         if mh is not None or mm is not None:
             await apply_margins_to_catalog(session)
-            await cb.answer(f"✅ {pid} اضافه و با سود گیکور قیمت‌گذاری/فعال شد.")
+            await cb.answer(f"✅ {pid} اضافه و با سود جیکور قیمت‌گذاری/فعال شد.")
         else:
-            await cb.answer(f"✅ {pid} به گروه «{group_name}» اضافه شد — سود گیکور را تنظیم کنید.")
+            await cb.answer(f"✅ {pid} به گروه «{group_name}» اضافه شد — سود جیکور را تنظیم کنید.")
     await _render_gc_family(cb.message, session, account, rid, _family(pid))

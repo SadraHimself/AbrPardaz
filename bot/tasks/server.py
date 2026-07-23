@@ -365,6 +365,118 @@ def sync_hetzner_catalog(self):
         raise self.retry(exc=exc, countdown=120)
 
 
+@app.task(name="bot.tasks.server.sync_gcore_catalog", bind=True, max_retries=1)
+def sync_gcore_catalog(self):
+    """هر ۳۰ دقیقه (دقیقه ۲۰ و ۵۰) کاتالوگ گیکور sync می‌شود:
+    - flavor ناموجود/غیرفعال‌شده در region → پلن خودکار غیرفعال + لاگ (was_active)
+    - دوباره موجود → برگشت وضعیت + لاگ
+    - قیمت خرید = flavor تازه + دیسکِ پلن × نرخ دیسک؛ فروش = خرید × (۱+سود٪)
+    """
+    async def _do():
+        from bot.database.session import AsyncSessionFactory, engine
+        try:
+            await engine.dispose(close=False)
+        except Exception:
+            pass
+        from aiogram import Bot
+        from bot.config import settings
+        from bot.database.models import ProviderAccount, ProviderType, ServerPlan
+        from bot.providers.gcore import GcoreProvider
+        from bot.services.gcore_settings import full_costs, get_margins, get_volume_rate
+        from bot.services.log_service import LogService
+        from sqlalchemy import select
+
+        async with AsyncSessionFactory() as session:
+            account = (await session.execute(
+                select(ProviderAccount).where(
+                    ProviderAccount.provider_type == ProviderType.GCORE,
+                    ProviderAccount.is_active == True,
+                ).order_by(ProviderAccount.id)
+            )).scalars().first()
+            if not account:
+                return
+            all_plans = list((await session.execute(
+                select(ServerPlan).where(
+                    ServerPlan.provider_type == ProviderType.GCORE
+                )
+            )).scalars().all())
+            if not all_plans:
+                return
+
+            mh, mm = await get_margins(session)
+            vol_rate = await get_volume_rate(session)
+            prov = GcoreProvider(
+                api_token=account.api_key or "",
+                project_id=(account.extra_config or {}).get("project_id") or 0,
+            )
+
+            bot = Bot(token=settings.BOT_TOKEN)
+            log = LogService(bot, session)
+            try:
+                # پلن‌ها به تفکیک region (شناسه عددی در extra_data.region_id)
+                region_ids = {int((p.extra_data or {}).get("region_id") or 0)
+                              for p in all_plans}
+                region_ids.discard(0)
+                for rid in region_ids:
+                    try:
+                        offered = {o.provider_plan_id: o
+                                   for o in await prov.list_plans(location=str(rid))}
+                    except Exception:
+                        continue  # خطای گذرا — دور بعدی جبران می‌شود
+                    for plan in [p for p in all_plans
+                                 if int((p.extra_data or {}).get("region_id") or 0) == rid]:
+                        extra = dict(plan.extra_data or {})
+                        info = offered.get(plan.provider_plan_id)
+                        loc_label = extra.get("region_name") or plan.location or str(rid)
+                        if info is None:
+                            if not extra.get("unavailable"):
+                                extra["unavailable"] = True
+                                extra["was_active"] = plan.is_active
+                                plan.is_active = False
+                                plan.extra_data = extra
+                                await log.log_plan_unavailable(
+                                    plan.display_name or plan.name, loc_label)
+                            continue
+                        # قیمت خرید کامل = flavor تازه + دیسک پلن × نرخ فعلی
+                        ch, cm = full_costs(info.price_hourly or 0,
+                                            info.price_monthly or 0,
+                                            int(plan.disk or 0), vol_rate)
+                        changed = False
+                        if extra.get("flavor_cost_hourly") != info.price_hourly or \
+                           extra.get("flavor_cost_monthly") != info.price_monthly or \
+                           extra.get("cost_hourly") != ch or \
+                           extra.get("cost_monthly") != cm:
+                            extra["flavor_cost_hourly"] = info.price_hourly
+                            extra["flavor_cost_monthly"] = info.price_monthly
+                            extra["cost_hourly"], extra["cost_monthly"] = ch, cm
+                            if info.currency:
+                                extra["currency"] = info.currency
+                            changed = True
+                        if extra.get("unavailable"):
+                            extra.pop("unavailable", None)
+                            plan.is_active = bool(extra.pop("was_active", False))
+                            changed = True
+                            await log.log_plan_available(
+                                plan.display_name or plan.name, loc_label)
+                        if changed:
+                            plan.extra_data = extra
+                            # قیمت فروش دنبال قیمت خرید (سود سراسری گیکور)
+                            if mh is not None and extra.get("cost_hourly"):
+                                plan.price_hourly = round(
+                                    float(extra["cost_hourly"]) * (1 + float(mh) / 100), 4)
+                            if mm is not None and extra.get("cost_monthly"):
+                                plan.price_monthly = round(
+                                    float(extra["cost_monthly"]) * (1 + float(mm) / 100), 2)
+                await session.commit()
+            finally:
+                await bot.session.close()
+
+    try:
+        _run(_do())
+    except Exception as exc:
+        raise self.retry(exc=exc, countdown=120)
+
+
 @app.task(name="bot.tasks.server.notify_traffic_warning")
 def notify_traffic_warning(user_id: int, server_id: int, percent: int):
     async def _do():

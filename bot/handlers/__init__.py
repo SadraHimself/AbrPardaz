@@ -3,6 +3,7 @@ from aiogram import Router
 from .admin import router as admin_router
 from .crypto_payment import router as crypto_payment_router
 from .admin_broadcast import router as admin_broadcast_router
+from .admin_gcore import router as admin_gcore_router
 from .admin_hetzner import router as admin_hetzner_router
 from .admin_restore import router as admin_restore_router
 from .admin_stats import router as admin_stats_router
@@ -29,5 +30,6 @@ def setup_routers(dp):
     dp.include_router(admin_stats_router)
     dp.include_router(admin_broadcast_router)
     dp.include_router(admin_hetzner_router)
+    dp.include_router(admin_gcore_router)
     dp.include_router(admin_restore_router)
     dp.include_router(admin_router)

@@ -15,8 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config import settings
 from bot.database.models import (
-    BillingType, DiscountCode, PaymentOrder, ProviderAccount, Server, ServerStatus,
-    SuspendReason, Transaction, TransactionType, User, UserStatus,
+    BillingType, DiscountCode, PaymentOrder, ProviderAccount, ProviderType, Server,
+    ServerStatus, SuspendReason, Transaction, TransactionType, User, UserStatus,
 )
 from bot.keyboards.admin import (
     back_to_admin_kb, cancel_admin_kb, confirm_kb, user_detail_kb, users_list_kb,
@@ -783,25 +783,31 @@ async def _render_admin_server(msg, session: AsyncSession, server: Server):
 
     sid = server.id
     is_susp = server.status == ServerStatus.SUSPENDED
-    kb = InlineKeyboardMarkup(inline_keyboard=[
+    # گیکور: rebuild/تغییر IP/آیپی اضافه در API وجود ندارد → دکمه‌ها مخفی
+    _is_gcore = server.provider_type == ProviderType.GCORE
+    _rows = [
         [
             InlineKeyboardButton(text="روشن", callback_data=f"admin:usrva:{sid}:start"),
             InlineKeyboardButton(text="خاموش", callback_data=f"admin:usrva:{sid}:stop"),
         ],
-        [
-            InlineKeyboardButton(text="ریبوت", callback_data=f"admin:usrva:{sid}:restart"),
-            InlineKeyboardButton(text="ریبیلد", callback_data=f"admin:usrv_rebuild:{sid}"),
-        ],
-        [InlineKeyboardButton(text=("رفع ساسپند" if is_susp else "ساسپند"),
-                              callback_data=f"admin:usrva:{sid}:{'unsuspend' if is_susp else 'suspend'}")],
-        [
+    ]
+    _reboot_row = [InlineKeyboardButton(text="ریبوت", callback_data=f"admin:usrva:{sid}:restart")]
+    if not _is_gcore:
+        _reboot_row.append(
+            InlineKeyboardButton(text="ریبیلد", callback_data=f"admin:usrv_rebuild:{sid}"))
+    _rows.append(_reboot_row)
+    _rows.append([InlineKeyboardButton(
+        text=("رفع ساسپند" if is_susp else "ساسپند"),
+        callback_data=f"admin:usrva:{sid}:{'unsuspend' if is_susp else 'suspend'}")])
+    if not _is_gcore:
+        _rows.append([
             InlineKeyboardButton(text="تغییر IP", callback_data=f"admin:usrva:{sid}:change_ip"),
             InlineKeyboardButton(text="آیپی اضافه", callback_data=f"admin:usrva:{sid}:add_ip"),
-        ],
-        [InlineKeyboardButton(text="آمار مصرف", callback_data=f"admin:usrv_usage:{sid}")],
-        [InlineKeyboardButton(text="حذف سرور", callback_data=f"admin:usrva:{sid}:delete_confirm")],
-        [InlineKeyboardButton(text="بازگشت", callback_data=f"admin:user_servers:{server.user_id}")],
-    ])
+        ])
+    _rows.append([InlineKeyboardButton(text="آمار مصرف", callback_data=f"admin:usrv_usage:{sid}")])
+    _rows.append([InlineKeyboardButton(text="حذف سرور", callback_data=f"admin:usrva:{sid}:delete_confirm")])
+    _rows.append([InlineKeyboardButton(text="بازگشت", callback_data=f"admin:user_servers:{server.user_id}")])
+    kb = InlineKeyboardMarkup(inline_keyboard=_rows)
 
     await msg.edit_text(
         f"<b>نام سرور:</b> {server.name}\n\n"
@@ -1044,6 +1050,10 @@ async def cb_admin_usrv_rebuild(cb: CallbackQuery, session: AsyncSession):
     server = await session.get(Server, int(cb.data.split(":")[2]))
     if not server:
         await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    # گیکور برای VM اندپوینت rebuild ندارد — گارد کیبوردهای قدیمی
+    if server.provider_type == ProviderType.GCORE:
+        await cb.answer("نصب مجدد OS برای این سرویس‌دهنده در دسترس نیست.", show_alert=True)
         return
     account = await session.get(ProviderAccount, server.provider_account_id) if server.provider_account_id else None
     if not account:

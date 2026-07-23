@@ -512,12 +512,21 @@ async def cb_do_add_traffic(cb: CallbackQuery, user: User, session: AsyncSession
 #  BUY SERVER — category → plan → billing → discount → confirm
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def _show_buy_categories(target_msg, user: User, state: FSMContext, session: AsyncSession):
+# صفحه‌بندی لیست ارائه‌دهنده‌ها: ۴ گروه در هر صفحه (۲×۲)
+_GRP_PAGE_SIZE = 4
+_NAV_NEXT_EMOJI = "5345844853009828446"      # بعدی
+_NAV_PREV_EMOJI = "5348414733806484250"      # قبلی
+_NAV_EDGE_EMOJI = "5294096239464295059"      # اول/آخر لیست (غیرفعال)
+_NAV_BLANK = "⠀"  # braille blank — دکمه فقط-آیکون (متن خالی مجاز نیست)
+
+
+async def _show_buy_categories(target_msg, user: User, state: FSMContext,
+                               session: AsyncSession, page: int = 0):
     # فقط دسته‌هایی که حداقل یک محصول فعال (غیرمخفی) دارند
     result = await session.execute(
         select(ServerPlan.category).where(ServerPlan.is_active == True).distinct()
     )
-    categories = sorted({row[0] for row in result.all() if row[0]})
+    categories = {row[0] for row in result.all() if row[0]}
 
     # متادیتای گروه: گروه‌های مخفی حذف، اموجی پریمیوم اضافه.
     # برای هر دسته‌ی بدون ردیف گروه، یک گروه ساخته می‌شود تا دکمه‌ها ID-محور باشند
@@ -531,8 +540,9 @@ async def _show_buy_categories(target_msg, user: User, state: FSMContext, sessio
             groups[cat] = g
     await session.flush()
 
+    # ترتیب بر اساس قدمت گروه (id) — ارائه‌دهنده‌ی جدید آخر لیست اضافه می‌شود
     entries = []
-    for cat in categories:
+    for cat in sorted(categories, key=lambda c: groups[c].id):
         g = groups[cat]
         if g.is_hidden:
             continue
@@ -541,13 +551,38 @@ async def _show_buy_categories(target_msg, user: User, state: FSMContext, sessio
     if not entries:
         await target_msg.edit_text("در حال حاضر هیچ محصولی موجود نیست.", reply_markup=back_kb())
         return
+
+    total_pages = (len(entries) + _GRP_PAGE_SIZE - 1) // _GRP_PAGE_SIZE
+    page = max(0, min(page, total_pages - 1))
+    page_entries = entries[page * _GRP_PAGE_SIZE:(page + 1) * _GRP_PAGE_SIZE]
+
     await state.set_state(BuyServerStates.selecting_category)
     builder = InlineKeyboardBuilder()
-    for gid, cat, emoji_id in entries:
+    for gid, cat, emoji_id in page_entries:
         kwargs = {"icon_custom_emoji_id": emoji_id} if emoji_id else {}
         builder.button(text=cat, callback_data=f"buygrp:{gid}", **kwargs)
+    # گروه‌ها دوتا-دوتا؛ اگر تعدادشان فرد بود ردیف آخر تکی
+    grp_rows = [2] * (len(page_entries) // 2) + ([1] if len(page_entries) % 2 else [])
+
+    nav_rows = []
+    if total_pages > 1:
+        # دکمه‌های فقط-اموجی: قبلی | بعدی — لبه‌ی لیست = اموجی غیرفعال
+        if page > 0:
+            builder.button(text=_NAV_BLANK, callback_data=f"buygpg:{page - 1}",
+                           **{"icon_custom_emoji_id": _NAV_PREV_EMOJI})
+        else:
+            builder.button(text=_NAV_BLANK, callback_data="buygpg:noop",
+                           **{"icon_custom_emoji_id": _NAV_EDGE_EMOJI})
+        if page < total_pages - 1:
+            builder.button(text=_NAV_BLANK, callback_data=f"buygpg:{page + 1}",
+                           **{"icon_custom_emoji_id": _NAV_NEXT_EMOJI})
+        else:
+            builder.button(text=_NAV_BLANK, callback_data="buygpg:noop",
+                           **{"icon_custom_emoji_id": _NAV_EDGE_EMOJI})
+        nav_rows = [2]
+
     builder.button(text="بازگشت به منو", callback_data="cancel", **{"icon_custom_emoji_id": "5258236805890710909"})
-    builder.adjust(1)
+    builder.adjust(*grp_rows, *nav_rows, 1)
     await target_msg.edit_text(
         '<tg-emoji emoji-id="5926980668624998964">🟡</tg-emoji> دسته‌بندی مورد نظر را انتخاب کنید:',
         parse_mode="HTML",
@@ -574,6 +609,16 @@ _BUY_NAV_STATES = StateFilter(
     BuyServerStates.selecting_plan,
     BuyServerStates.selecting_billing,
 )
+
+
+@router.callback_query(_BUY_NAV_STATES, F.data.startswith("buygpg:"))
+async def cb_buy_group_page(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
+    """صفحه‌بندی لیست ارائه‌دهنده‌ها — noop = لبه‌ی لیست (دکمه غیرفعال)."""
+    arg = cb.data.split(":")[1]
+    await cb.answer()
+    if arg == "noop":
+        return
+    await _show_buy_categories(cb.message, user, state, session, page=int(arg))
 
 
 @router.callback_query(_BUY_NAV_STATES, F.data.startswith("buygrp:"))

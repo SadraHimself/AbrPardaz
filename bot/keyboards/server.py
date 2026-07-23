@@ -46,6 +46,8 @@ def server_list_kb(servers: list[Server]) -> InlineKeyboardMarkup:
 def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
     sid = server.id
     is_hourly = server.billing_type == BillingType.HOURLY
+    # گیکور: API ریبیلد/تغییر رمز/تغییر IP برای VM ندارد → دکمه‌ها گارد می‌شوند
+    is_gcore = server.provider_type == ProviderType.GCORE
     rows: list[list[InlineKeyboardButton]] = []
 
     if server.status == ServerStatus.ACTIVE:
@@ -53,13 +55,17 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
             _btn("روشن", f"srv_action:{sid}:start", "success", "5913241115489734452"),
             _btn("خاموش", f"srv_action:{sid}:stop", "danger", "5915991999093149658"),
         ])
-        rows.append([
-            _btn("ریبوت", f"srv_action:{sid}:restart_confirm", "primary", "5346320297299560938"),
-            _btn("ریبیلد", f"srv_action:{sid}:rebuild_menu", "primary", "5346269127059196142"),
-        ])
+        reboot_row = [_btn("ریبوت", f"srv_action:{sid}:restart_confirm", "primary", "5346320297299560938")]
+        if not is_gcore:
+            reboot_row.append(_btn("ریبیلد", f"srv_action:{sid}:rebuild_menu", "primary", "5346269127059196142"))
+        else:
+            reboot_row.append(_btn("آمار مصرف", f"srv_usage:{sid}", icon="5936143551854285132"))
+        rows.append(reboot_row)
         # سیاست IP: ویرچولایزور فقط ماهانه؛ هتزنر (IP رایگان) ساعتی و ماهانه
         is_virt = server.provider_type == ProviderType.VIRTUALIZOR
-        if is_hourly and is_virt:
+        if is_gcore:
+            pass  # قابلیت‌های اختیاری گیکور در نسخه اول ارائه نمی‌شوند
+        elif is_hourly and is_virt:
             rows.append([
                 _btn("تغییر رمز", f"srv_chpass:{sid}", icon="4904500559203009298"),
                 _btn("آمار مصرف", f"srv_usage:{sid}", icon="5936143551854285132"),
@@ -94,10 +100,10 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
             rows[-1].append(_btn("حذف سرور", f"srv_action:{sid}:delete_confirm", "danger", "5258130763148172425"))
 
     elif server.status != ServerStatus.DELETED:
-        rows.append([
-            _btn("روشن کردن", f"srv_action:{sid}:start", "success", "5913241115489734452"),
-            _btn("ریبیلد", f"srv_action:{sid}:rebuild_menu", "primary", "5346269127059196142"),
-        ])
+        off_row = [_btn("روشن کردن", f"srv_action:{sid}:start", "success", "5913241115489734452")]
+        if not is_gcore:
+            off_row.append(_btn("ریبیلد", f"srv_action:{sid}:rebuild_menu", "primary", "5346269127059196142"))
+        rows.append(off_row)
         rows.append([_btn("🔄 بررسی وضعیت", f"srv_refresh:{sid}")])
         if is_hourly:
             rows[-1].append(_btn("حذف سرور", f"srv_action:{sid}:delete_confirm", "danger", "5258130763148172425"))

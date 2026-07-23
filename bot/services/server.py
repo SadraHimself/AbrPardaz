@@ -55,6 +55,14 @@ class ServerService:
                 raise RuntimeError(
                     "ظرفیت ساخت سرور در حال حاضر تکمیل است — لطفاً بعداً تلاش کنید"
                 )
+        elif plan.provider_type == ProviderType.GCORE:
+            # گیکور تک-اکانتی است — همان اکانت فعال، با گاردِ لیمیت VM دستی
+            from bot.services.gcore_settings import pick_account as gcore_pick
+            account = await gcore_pick(self.session)
+            if not account:
+                raise RuntimeError(
+                    "ظرفیت ساخت سرور در حال حاضر تکمیل است — لطفاً بعداً تلاش کنید"
+                )
         else:
             account = await self._get_account(plan.provider_account_id)
         provider = get_provider(account)
@@ -128,7 +136,9 @@ class ServerService:
             billing_type=billing_type,
             price_hourly=plan.price_hourly,
             price_monthly=plan.price_monthly,
-            traffic_limit_gb=float(plan.bandwidth),
+            # bandwidth=0 یعنی ترافیک نامحدود (گیکور) → لیمیت None ذخیره می‌شود؛
+            # مقدار 0.0 ممنوع چون update_traffic آن را «سقفِ پرشده» حساب می‌کند
+            traffic_limit_gb=float(plan.bandwidth) if plan.bandwidth else None,
             last_billed_at=datetime.now(timezone.utc),
             expires_at=(datetime.now(timezone.utc) + timedelta(days=30))
             if billing_type == BillingType.MONTHLY else None,

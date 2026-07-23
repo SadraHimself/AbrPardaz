@@ -242,6 +242,7 @@ class GcoreProvider(BaseProvider):
         # تشخیص خانواده‌ی OS از روی خود image — مسیر تعیین رمز به آن وابسته است
         # (ویندوز user_data ندارد) + os_name برای رکورد سرور
         image_name: Optional[str] = None
+        image_distro = ""
         is_windows = False
         try:
             imgs = await self._request(
@@ -252,7 +253,8 @@ class GcoreProvider(BaseProvider):
                         if i.get("id") == params.os_id), None)
             if img:
                 image_name = img.get("name")
-                _d = f"{img.get('os_distro') or ''} {img.get('name') or ''}".lower()
+                image_distro = (img.get("os_distro") or "").lower()
+                _d = f"{image_distro} {img.get('name') or ''}".lower()
                 is_windows = "windows" in _d
         except Exception:
             pass  # ناموفق = فرض لینوکس (اکثریت مطلق)
@@ -308,6 +310,14 @@ class GcoreProvider(BaseProvider):
             )
             body["user_data"] = base64.b64encode(cloud_cfg.encode()).decode()
         self.last_root_password = password
+
+        # یوزرنیمی که رمز واقعاً رویش می‌نشیند — برای پیام تحویل
+        if is_windows:
+            delivered_user = "Admin"
+        elif params.extra.get("gcore_password_field"):
+            delivered_user = image_distro or "root"   # کاربر پیش‌فرض image
+        else:
+            delivered_user = "root"                    # مسیر cloud-init
 
         async def _do_create(create_body: dict) -> dict:
             return await self._request(
@@ -366,8 +376,10 @@ class GcoreProvider(BaseProvider):
             await asyncio.sleep(5)
         if not inst:
             inst = {"id": instance_id, "status": "BUILD", "name": body["name"]}
-        return self._server_info(inst, region_id, root_password=password,
+        info = self._server_info(inst, region_id, root_password=password,
                                  os_name=image_name)
+        info.extra_data["username"] = delivered_user
+        return info
 
     async def delete_server(self, server_id: str) -> bool:
         region_id, uuid = self._split_sid(server_id)
@@ -570,6 +582,22 @@ class GcoreProvider(BaseProvider):
             })
         out.sort(key=lambda x: x["display_name"])
         return out
+
+    async def preview_volume_price(self, region_id: int, size_gb: int,
+                                   type_name: str = "standard") -> dict:
+        """قیمت زنده‌ی یک volume از endpoint رسمی pricing preview جیکور.
+        (این endpoint در GCORE.md نیامده بود — از داکس آنلاین: 2026-07-24.)
+        خروجی: {price_per_hour, price_per_month, currency}."""
+        data = await self._request(
+            "POST", f"/cloud/v1/pricing/{self.project_id}/{region_id}/volumes",
+            json={"source": "new-volume", "size": int(size_gb),
+                  "type_name": type_name},
+        )
+        return {
+            "price_per_hour": float(data.get("price_per_hour") or 0),
+            "price_per_month": float(data.get("price_per_month") or 0),
+            "currency": (data.get("currency_code") or "USD").lower(),
+        }
 
     async def client_info(self) -> dict:
         """اطلاعات اکانت (id برای quota + email برای نمایش) — تست توکن."""

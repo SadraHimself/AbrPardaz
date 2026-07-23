@@ -78,12 +78,42 @@ async def set_margin(session: AsyncSession, hourly: bool, value: float) -> None:
 # ── دیسک ─────────────────────────────────────────────────────────────────────
 
 async def get_volume_rate(session: AsyncSession) -> float:
-    """قیمت هر GB دیسک در ماه (ارز اکانت). 0 = هنوز تنظیم نشده."""
+    """نرخ دستی هر GB دیسک در ماه (ارز اکانت) — فقط نقش override دارد.
+    0 (پیش‌فرض) = حالت خودکار: قیمت زنده از endpoint pricing خود جیکور."""
     return await _get_float(session, _KEY_VOL_RATE) or 0.0
 
 
 async def set_volume_rate(session: AsyncSession, value: float) -> None:
     await _set(session, _KEY_VOL_RATE, value)
+
+
+async def disk_monthly_cost(session: AsyncSession, provider, region_id: int,
+                            disk_gb: int, cache: dict | None = None) -> float:
+    """هزینه‌ی ماهانه‌ی volume بوت (ارز اکانت).
+
+    نرخ دستی >0 → override (disk×نرخ)؛ وگرنه قیمت زنده از
+    `provider.preview_volume_price` (endpoint رسمی pricing جیکور).
+    خطای API → 0 با لاگ (فراخوان باید قیمت قبلی را نگه دارد، نه صفر بفروشد)."""
+    rate = await get_volume_rate(session)
+    if rate > 0:
+        return float(disk_gb) * rate
+    key = (int(region_id), int(disk_gb))
+    if cache is not None and key in cache:
+        return cache[key]
+    val = 0.0
+    if provider is not None and region_id and disk_gb:
+        try:
+            import asyncio as _aio
+            p = await _aio.wait_for(
+                provider.preview_volume_price(int(region_id), int(disk_gb)),
+                timeout=20)
+            val = float(p.get("price_per_month") or 0)
+        except Exception as e:
+            logger.warning("gcore volume price preview failed (region %s, %sGB): %s",
+                           region_id, disk_gb, e)
+    if cache is not None:
+        cache[key] = val
+    return val
 
 
 async def get_default_disk_gb(session: AsyncSession) -> int:
@@ -96,21 +126,25 @@ async def set_default_disk_gb(session: AsyncSession, value: int) -> None:
 
 
 def full_costs(flavor_hourly: float, flavor_monthly: float,
-               disk_gb: int, vol_rate: float) -> tuple[float, float]:
-    """قیمت خرید کامل (flavor + دیسک) — ساعتی و ماهانه، به ارز اکانت."""
-    disk_monthly = float(disk_gb) * float(vol_rate or 0)
-    cost_monthly = round(float(flavor_monthly or 0) + disk_monthly, 4)
-    cost_hourly = round(float(flavor_hourly or 0) + disk_monthly / 720.0, 6)
+               disk_monthly: float) -> tuple[float, float]:
+    """قیمت خرید کامل (flavor + هزینه‌ی ماهانه‌ی دیسک) — ساعتی و ماهانه."""
+    dm = float(disk_monthly or 0)
+    cost_monthly = round(float(flavor_monthly or 0) + dm, 4)
+    cost_hourly = round(float(flavor_hourly or 0) + dm / 720.0, 6)
     return cost_hourly, cost_monthly
 
 
-async def recompute_catalog_costs(session: AsyncSession) -> int:
+async def recompute_catalog_costs(session: AsyncSession, provider=None) -> int:
     """بازمحاسبه‌ی قیمت خرید کامل همه‌ی پلن‌های جیکور از روی قیمت خامِ flavor
-    (flavor_cost_*) + دیسکِ خودِ پلن × نرخ فعلی دیسک — بعد از تغییر نرخ دیسک."""
-    vol_rate = await get_volume_rate(session)
+    (flavor_cost_*) + هزینه‌ی دیسک (نرخ دستی یا قیمت زنده‌ی API — حالت خودکار
+    provider لازم دارد). بعد از تغییر نرخ دیسک صدا زده می‌شود."""
+    rate = await get_volume_rate(session)
+    if rate <= 0 and provider is None:
+        return 0   # حالت خودکار بدون provider — سینک ۳۰دقیقه‌ای جبران می‌کند
     plans = (await session.execute(
         select(ServerPlan).where(ServerPlan.provider_type == ProviderType.GCORE)
     )).scalars().all()
+    cache: dict = {}
     count = 0
     for p in plans:
         extra = dict(p.extra_data or {})
@@ -118,7 +152,11 @@ async def recompute_catalog_costs(session: AsyncSession) -> int:
         fm = extra.get("flavor_cost_monthly")
         if fh is None and fm is None:
             continue
-        ch, cm = full_costs(float(fh or 0), float(fm or 0), int(p.disk or 0), vol_rate)
+        rid = int(extra.get("region_id") or 0)
+        dm = await disk_monthly_cost(session, provider, rid, int(p.disk or 0), cache)
+        if dm <= 0 and rate <= 0:
+            continue   # قیمت زنده در دسترس نیست — قیمت قبلی حفظ شود
+        ch, cm = full_costs(float(fh or 0), float(fm or 0), dm)
         extra["cost_hourly"], extra["cost_monthly"] = ch, cm
         p.extra_data = extra
         count += 1

@@ -1078,6 +1078,84 @@ async def _show_confirm(msg, state: FSMContext, session, from_message=False, use
         await msg.edit_text(text, parse_mode="HTML", reply_markup=kb)
 
 
+def _delivery_text(server: Server, plan_name: str, password: str) -> str:
+    """پیام تحویل سرویس — یوزرنیم واقعی از provider (root/Admin/...)؛ پیش‌فرض root."""
+    username = (server.extra_data or {}).get("username") or "root"
+    return (
+        f'<tg-emoji emoji-id="5397916757333654639">➕</tg-emoji> <b>سرور {server.name} آماده است!</b>\n\n'
+        f"• پلن: {plan_name}\n"
+        f"• آیپی: <code>{server.ip_address or 'در حال تخصیص...'}</code>\n"
+        f"• یوزرنیم: <code>{username}</code>\n"
+        f"• پسورد: <code>{password}</code>\n"
+        f"\n• این اطلاعات را در جای امنی ذخیره کنید.\n"
+        "• سیستم‌عامل در حال نصب است — چند دقیقه منتظر بمانید."
+    )
+
+
+async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: int,
+                                billing_str: str, hostname: str, os_id: str,
+                                root_password: str, final_price: float) -> None:
+    """ساخت و تحویل در پس‌زمینه (جیکور — ساخت طولانی است و نباید هندلر را بلاک کند).
+
+    سشن مستقل باز می‌شود چون سشن هندلر با پایان هندلر بسته می‌شود.
+    ترتیب: اول کسر (رزرو وجه — کاربر وسط ساخت نتواند موجودی را جای دیگر خرج کند)
+    → ساخت → تحویل؛ شکست ساخت = برگشت کامل وجه + پیام شفاف."""
+    import logging as _logging
+    from bot.database.session import AsyncSessionFactory
+    _log = _logging.getLogger(__name__)
+    billing_type = BillingType.HOURLY if billing_str == "hourly" else BillingType.MONTHLY
+    async with AsyncSessionFactory() as session:
+        try:
+            user = await session.get(User, user_db_id)
+            plan = await session.get(ServerPlan, plan_db_id)
+            if not user or not plan:
+                return
+            billing = BillingService(session)
+            ok = await billing.debit(user.id, final_price,
+                                     description=f"خرید سرور {hostname}")
+            if not ok:
+                await session.commit()
+                await bot.send_message(
+                    chat_id, f"{ERR} موجودی کافی نیست — خرید انجام نشد.",
+                    parse_mode="HTML")
+                return
+            await session.commit()   # کسر قطعی شود قبل از عملیات طولانی
+            try:
+                svc = ServerService(session)
+                server = await svc.create_server(
+                    user=user, plan=plan, os_id=os_id, billing_type=billing_type,
+                    hostname=hostname, extra={"root_password": root_password},
+                )
+                real_password = (server.extra_data or {}).get("root_password") or root_password
+                _extra = dict(server.extra_data or {})
+                _extra["root_password"] = real_password
+                server.extra_data = _extra
+                await session.flush()
+                plan_name = plan.display_name or plan.name
+                await session.commit()
+                await bot.send_message(
+                    chat_id, _delivery_text(server, plan_name, real_password),
+                    parse_mode="HTML")
+                try:
+                    await LogService(bot, session).log_purchase(
+                        user, server, plan_name, billing_str, final_price)
+                    await session.commit()
+                except Exception:
+                    pass
+            except Exception as e:
+                _log.exception("background build failed for %s", hostname)
+                await billing.credit(user.id, final_price,
+                                     description=f"برگشت وجه — شکست ساخت {hostname}")
+                await session.commit()
+                await bot.send_message(
+                    chat_id,
+                    f"{ERR} خطا در ساخت سرور: {_esc(e)}\n"
+                    "مبلغ به‌طور کامل به کیف پول برگشت داده شد.",
+                    parse_mode="HTML")
+        except Exception:
+            _log.exception("background build/deliver fatal error")
+
+
 @router.callback_query(BuyServerStates.confirming, F.data == "confirm_purchase")
 async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
     data = await state.get_data()
@@ -1139,6 +1217,24 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
     _alpha = _string.ascii_letters + _string.digits + "!@#$%^&*"
     root_password = "".join(_secrets.choice(_alpha) for _ in range(16))
 
+    # سرویس‌دهنده‌های با ساخت طولانی (جیکور): پیام «در حال ساخت» فوری، و ادامه‌ی
+    # ساخت/کسر/تحویل در پس‌زمینه با سشن مستقل (سشن هندلر با پایان هندلر بسته می‌شود)
+    if plan.provider_type == ProviderType.GCORE:
+        await cb.message.edit_text(
+            '‏<tg-emoji emoji-id="5258503720928288433">🔔</tg-emoji> '
+            "سرویس شما در حال ساخت است و بین ۱۰ تا ۱۵ دقیقه دیگر برای شما ارسال میشود.\n"
+            "مشخصات و رمز عبور بعد از اتمام پروسه ساخت ارسال میشود.",
+            parse_mode="HTML",
+        )
+        import asyncio as _aio
+        _aio.create_task(_bg_build_and_deliver(
+            bot=cb.bot, chat_id=cb.message.chat.id, user_db_id=user.id,
+            plan_db_id=plan.id, billing_str=billing_str, hostname=hostname,
+            os_id=os_id, root_password=root_password,
+            final_price=float(final_price or 0),
+        ))
+        return
+
     try:
         svc = ServerService(session)
         server = await svc.create_server(
@@ -1159,15 +1255,8 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
         await session.flush()
 
         plan_name = plan.display_name or plan.name
-        delivery = (
-            f'<tg-emoji emoji-id="5397916757333654639">➕</tg-emoji> <b>سرور {server.name} آماده است!</b>\n\n'
-            f"• پلن: {plan_name}\n"
-            f"• آیپی: <code>{server.ip_address or 'در حال تخصیص...'}</code>\n"
-            f"• پسورد: <code>{real_password}</code>\n"
-            f"\n• این اطلاعات را در جای امنی ذخیره کنید.\n"
-            "• سیستم‌عامل در حال نصب است — چند دقیقه منتظر بمانید."
-        )
-        await cb.message.edit_text(delivery, parse_mode="HTML")
+        await cb.message.edit_text(
+            _delivery_text(server, plan_name, real_password), parse_mode="HTML")
         await LogService(cb.bot, session).log_purchase(
             user, server, plan_name, billing_str, final_price or 0
         )

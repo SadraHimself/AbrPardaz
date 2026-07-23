@@ -128,8 +128,8 @@ async def _render_gc_home(msg, session: AsyncSession):
                               callback_data="admin:gc_limit")],
         [InlineKeyboardButton(text=f"سود ساعتی: {mh if mh is not None else '—'}٪",
                               callback_data="admin:gcm:h")],
-        [InlineKeyboardButton(text=f"نرخ دیسک: {vol_rate:g} /GB/ماه" if vol_rate
-                              else "نرخ دیسک: تنظیم نشده!",
+        [InlineKeyboardButton(text=f"نرخ دیسک: {vol_rate:g} /GB/ماه (دستی)" if vol_rate
+                              else "نرخ دیسک: خودکار (از API)",
                               callback_data="admin:gc_volrate"),
          InlineKeyboardButton(text=f"دیسک پیش‌فرض: {disk_gb} GB",
                               callback_data="admin:gc_diskgb")],
@@ -399,8 +399,8 @@ async def gc_margin_value(message: Message, state: FSMContext, session: AsyncSes
     updated = await apply_margins_to_catalog(session)
     note = ""
     if not updated:
-        note = ("\n\n⚠️ هیچ محصولی قیمت نگرفت — یا «نرخ دیسک» تنظیم نشده یا قیمت "
-                "flavorها صفر برگشته (اکانت trial؟). بعد از اصلاح، دوباره سود را ثبت کنید.")
+        note = ("\n\n⚠️ هیچ محصولی قیمت نگرفت — احتمالاً قیمت‌های API صفر برگشته "
+                "(اکانت trial؟). بعد از اصلاح، دوباره سود را ثبت کنید.")
     await message.answer(
         f"سود ثبت شد ({message.text}٪) — قیمت فروش {updated} محصول جیکور به‌روز و فعال شد."
         f"{note}",
@@ -413,10 +413,11 @@ async def cb_gc_volrate(cb: CallbackQuery, state: FSMContext):
     await state.set_state(GcoreFSM.edit_volrate)
     await cb.message.edit_text(
         "<b>نرخ دیسک جیکور</b>\n\n"
-        "قیمت هر GB دیسک (volume نوع standard) در «ماه»، به ارز اکانت "
-        "(همان ارز flavorها — دلار/یورو).\n"
-        "این عدد در API جیکور نمی‌آید — از صفحه قیمت cloud.gcore.com بردارید.\n\n"
-        "عدد را وارد کنید (مثال: 0.07):",
+        "پیش‌فرض «خودکار» است: قیمت دیسک زنده از API قیمت‌گذاری خود جیکور "
+        "خوانده می‌شود و نیازی به تنظیم دستی نیست.\n"
+        "فقط اگر می‌خواهید override دستی بگذارید، قیمت هر GB در ماه را به ارز "
+        "اکانت وارد کنید.\n\n"
+        "عدد را وارد کنید (0 = برگشت به حالت خودکار):",
         parse_mode="HTML", reply_markup=cancel_admin_kb(),
     )
     await cb.answer()
@@ -430,10 +431,14 @@ async def gc_volrate_value(message: Message, state: FSMContext, session: AsyncSe
     await state.clear()
     await set_volume_rate(session, float(message.text))
     await session.flush()
-    n = await recompute_catalog_costs(session)
+    _volprice_cache.clear()
+    account = await _gc_account(session)
+    n = await recompute_catalog_costs(
+        session, provider=_prov(account) if account else None)
     await apply_margins_to_catalog(session)
+    label = message.text if float(message.text) > 0 else "خودکار (از API)"
     await message.answer(
-        f"نرخ دیسک ثبت شد ({message.text}) — قیمت خرید/فروش {n} محصول بازمحاسبه شد.",
+        f"نرخ دیسک: {label} — قیمت خرید/فروش {n} محصول بازمحاسبه شد.",
         reply_markup=back_to_admin_kb("admin:gcore"),
     )
 
@@ -586,6 +591,21 @@ async def cb_gc_del_do(cb: CallbackQuery, session: AsyncSession):
 # کش کوتاه‌مدت تا هر کلیک یک API call نخورد (rate limit جیکور نامشخص → محافظه‌کار)
 _regions_cache: dict = {}
 _plans_cache: dict = {}
+_volprice_cache: dict = {}
+
+
+async def _disk_monthly(session: AsyncSession, account: ProviderAccount,
+                        rid: int, gb: int) -> float:
+    """هزینه ماهانه دیسک با کش ۵ دقیقه‌ای (نرخ دستی یا قیمت زنده API)."""
+    from bot.services.gcore_settings import disk_monthly_cost
+    key = (account.id, int(rid), int(gb))
+    cached = _volprice_cache.get(key)
+    now = time.monotonic()
+    if cached and now - cached[0] < 300:
+        return cached[1]
+    val = await disk_monthly_cost(session, _prov(account), rid, gb)
+    _volprice_cache[key] = (now, val)
+    return val
 
 
 async def _gc_regions(account: ProviderAccount) -> list[dict]:
@@ -640,7 +660,7 @@ async def _imported_map(session: AsyncSession, slug: str) -> dict:
 
 @router.callback_query(F.data == "admin:gc_import")
 async def cb_gc_import(cb: CallbackQuery, session: AsyncSession):
-    from bot.services.gcore_settings import get_group_name, get_volume_rate
+    from bot.services.gcore_settings import get_group_name
     account = await _gc_account(session)
     if not account:
         await cb.answer("اول اکانت را اضافه کنید.", show_alert=True)
@@ -657,9 +677,7 @@ async def cb_gc_import(cb: CallbackQuery, session: AsyncSession):
         )
         return
     group_name = await get_group_name(session)
-    vol_rate = await get_volume_rate(session)
-    warn = ("\n⚠️ «نرخ دیسک» هنوز تنظیم نشده — قیمت خرید بدون هزینه دیسک "
-            "محاسبه می‌شود!") if not vol_rate else ""
+    warn = ""   # هزینه دیسک خودکار از API قیمت جیکور خوانده می‌شود
 
     rows, pair = [], []
     for r in regions:
@@ -735,7 +753,7 @@ async def cb_gc_location(cb: CallbackQuery, session: AsyncSession):
 
 async def _render_gc_family(msg, session: AsyncSession, account: ProviderAccount,
                             rid: int, fam: str):
-    from bot.services.gcore_settings import get_default_disk_gb, get_volume_rate
+    from bot.services.gcore_settings import get_default_disk_gb
     region = await _gc_region(account, rid)
     if not region:
         return
@@ -743,8 +761,8 @@ async def _render_gc_family(msg, session: AsyncSession, account: ProviderAccount
              if _family(p.provider_plan_id) == fam
              and not _is_excluded(p.provider_plan_id)]
     imported = await _imported_map(session, region["slug"])
-    vol_rate = await get_volume_rate(session)
     disk_gb = await get_default_disk_gb(session)
+    dm = await _disk_monthly(session, account, rid, disk_gb)
 
     rows = []
     for p in sorted(plans, key=lambda x: (x.price_monthly or 0)):
@@ -778,8 +796,8 @@ async def _render_gc_family(msg, session: AsyncSession, account: ProviderAccount
     await msg.edit_text(
         f"<b>{fam} — {region['display_name']}</b>\n\n"
         "عدد = قیمت خرید ماهانه‌ی flavor (بدون دیسک) · تپ = افزودن/حذف · ℹ️ = جزئیات\n"
-        f"دیسک پلن‌های جدید: {disk_gb} GB × نرخ {vol_rate:g} = "
-        f"{disk_gb * vol_rate:g} در ماه (به قیمت خرید اضافه می‌شود)\n"
+        f"دیسک پلن‌های جدید: {disk_gb} GB ≈ {dm:g} در ماه "
+        "(قیمت زنده از API — به قیمت خرید اضافه می‌شود)\n"
         "<i>محصول تازه‌ایمپورت‌شده تا تعیین سود غیرفعال می‌ماند.</i>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
@@ -858,9 +876,7 @@ async def cb_gc_family(cb: CallbackQuery, session: AsyncSession):
 
 @router.callback_query(F.data.startswith("admin:gcinfo:"))
 async def cb_gc_info(cb: CallbackQuery, session: AsyncSession):
-    from bot.services.gcore_settings import (
-        full_costs, get_default_disk_gb, get_volume_rate,
-    )
+    from bot.services.gcore_settings import full_costs, get_default_disk_gb
     account = await _gc_account(session)
     if not account:
         await cb.answer("اکانت یافت نشد.", show_alert=True)
@@ -872,14 +888,14 @@ async def cb_gc_info(cb: CallbackQuery, session: AsyncSession):
     if not info:
         await cb.answer("پلن یافت نشد.", show_alert=True)
         return
-    vol_rate = await get_volume_rate(session)
     disk_gb = await get_default_disk_gb(session)
-    ch, cm = full_costs(info.price_hourly or 0, info.price_monthly or 0, disk_gb, vol_rate)
+    dm = await _disk_monthly(session, account, rid, disk_gb)
+    ch, cm = full_costs(info.price_hourly or 0, info.price_monthly or 0, dm)
     s = _sym(info.currency)
     await cb.answer(
         f"{pid} — {info.cpu} vCPU / {info.ram // 1024 if info.ram >= 1024 else info.ram} GB RAM\n"
         f"Flavor: {s}{info.price_hourly:g}/h · {s}{info.price_monthly:g}/mo\n"
-        f"Disk {disk_gb}GB: {s}{disk_gb * vol_rate:g}/mo\n"
+        f"Disk {disk_gb}GB: {s}{dm:g}/mo\n"
         f"قیمت خرید کامل: {s}{ch:g}/h · {s}{cm:g}/mo\n"
         "(ترافیک: نامحدود/رایگان)",
         show_alert=True,
@@ -888,12 +904,10 @@ async def cb_gc_info(cb: CallbackQuery, session: AsyncSession):
 
 async def _import_one(session: AsyncSession, account: ProviderAccount,
                       region: dict, info, group_name: str) -> ServerPlan:
-    from bot.services.gcore_settings import (
-        full_costs, get_default_disk_gb, get_volume_rate,
-    )
-    vol_rate = await get_volume_rate(session)
+    from bot.services.gcore_settings import full_costs, get_default_disk_gb
     disk_gb = await get_default_disk_gb(session)
-    ch, cm = full_costs(info.price_hourly or 0, info.price_monthly or 0, disk_gb, vol_rate)
+    dm = await _disk_monthly(session, account, int(region["id"]), disk_gb)
+    ch, cm = full_costs(info.price_hourly or 0, info.price_monthly or 0, dm)
     plan = ServerPlan(
         provider_type=ProviderType.GCORE,
         provider_account_id=account.id,

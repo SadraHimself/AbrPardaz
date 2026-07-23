@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from bot.database.models import ProviderAccount, ProviderType
 from .base import BaseProvider
+from .gcore import GcoreProvider
 from .hetzner import HetznerProvider
 from .virtualizor import VirtualizorProvider
 
@@ -16,4 +17,9 @@ def get_provider(account: ProviderAccount) -> BaseProvider:
         )
     if account.provider_type == ProviderType.HETZNER:
         return HetznerProvider(api_token=account.api_key or "")
+    if account.provider_type == ProviderType.GCORE:
+        return GcoreProvider(
+            api_token=account.api_key or "",
+            project_id=(account.extra_config or {}).get("project_id") or 0,
+        )
     raise ValueError(f"Unsupported provider type: {account.provider_type}")

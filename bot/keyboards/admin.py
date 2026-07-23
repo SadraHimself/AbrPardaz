@@ -29,6 +29,7 @@ def provider_types_kb() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="سرورهای ویرچولایزور", callback_data="admin:providers")
     builder.button(text="هتزنر (Hetzner)", callback_data="admin:hetzner")
+    builder.button(text="گیکور (Gcore)", callback_data="admin:gcore")
     builder.button(text="بازگشت", callback_data="admin:plans")
     builder.adjust(1)
     return builder.as_markup()

@@ -39,6 +39,7 @@ class BillingType(str, enum.Enum):
 class ProviderType(str, enum.Enum):
     VIRTUALIZOR = "virtualizor"
     HETZNER = "hetzner"
+    GCORE = "gcore"
 
 
 class TransactionType(str, enum.Enum):

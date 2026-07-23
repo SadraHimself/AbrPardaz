@@ -54,6 +54,22 @@ _HZ_LOC_META = {
 }
 
 
+# نوع flavor جیکور از توکن دوم ID («g2-standard-…» → standard) — مرحله «نوع سرور»
+_GC_TYPE_LABELS = {
+    "standard": "Standard",
+    "cpu": "CPU Optimized",
+    "highfreq": "High Frequency",
+    "net": "Network Optimized",
+    "gpu": "GPU",
+}
+_GC_TYPE_ORDER = ["standard", "cpu", "highfreq", "net", "gpu"]
+
+
+def _gc_flavor_type(pid: str) -> str:
+    parts = (pid or "").split("-")
+    return (parts[1] if len(parts) > 1 else (parts[0] or "other")).lower()
+
+
 class BuyServerStates(StatesGroup):
     selecting_category = State()
     selecting_plan = State()
@@ -691,8 +707,56 @@ async def cb_buy_location(cb: CallbackQuery, user: User, state: FSMContext, sess
     if not plans:
         await cb.answer("در این لوکیشن محصولی موجود نیست.", show_alert=True)
         return
+    # جیکور: اگر بیش از یک «نوع» flavor (Standard/CPU Optimized/…) در این
+    # لوکیشن ایمپورت شده باشد، اول نوع سرور انتخاب می‌شود
+    if all(p.provider_type == ProviderType.GCORE for p in plans):
+        types = {_gc_flavor_type(p.provider_plan_id) for p in plans}
+        if len(types) > 1:
+            ordered = [t for t in _GC_TYPE_ORDER if t in types] + \
+                      sorted(t for t in types if t not in _GC_TYPE_ORDER)
+            rows = [[InlineKeyboardButton(
+                text=_GC_TYPE_LABELS.get(t, t.title()),
+                callback_data=f"buyloctype:{gid}:{loc}:{t}")] for t in ordered]
+            rows.append([InlineKeyboardButton(
+                text="بازگشت", callback_data=f"buygrp:{gid}",
+                **{"icon_custom_emoji_id": "5258236805890710909"})])
+            await state.set_state(BuyServerStates.selecting_plan)
+            await cb.message.edit_text(
+                '<tg-emoji emoji-id="5926980668624998964">🟡</tg-emoji> '
+                "نوع سرور را انتخاب کنید:",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+            )
+            await cb.answer()
+            return
     await _render_plan_list(cb, state, session, group.name, plans,
                             back_cb=f"buygrp:{group.id}")
+
+
+@router.callback_query(_BUY_NAV_STATES, F.data.startswith("buyloctype:"))
+async def cb_buy_location_type(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
+    _, gid, loc, ftype = cb.data.split(":")
+    group = await session.get(ProductGroup, int(gid))
+    if not group or group.is_hidden:
+        await cb.answer("این گروه در دسترس نیست.", show_alert=True)
+        return
+    result = await session.execute(
+        select(ServerPlan).where(
+            ServerPlan.category == group.name,
+            ServerPlan.is_active == True,
+            ServerPlan.location == loc,
+        )
+    )
+    plans = sorted(
+        [p for p in result.scalars().all()
+         if _gc_flavor_type(p.provider_plan_id) == ftype],
+        key=plan_sort_key)
+    if not plans:
+        await cb.answer("در این دسته محصولی موجود نیست.", show_alert=True)
+        return
+    # بازگشت از لیست پلن‌ها → همین صفحه‌ی نوع سرور (buyloc دوباره نوع‌ها را می‌سازد)
+    await _render_plan_list(cb, state, session, group.name, plans,
+                            back_cb=f"buyloc:{gid}:{loc}")
 
 
 @router.callback_query(BuyServerStates.selecting_plan, F.data.startswith("buyplan:"))
@@ -852,7 +916,9 @@ async def _ask_os(cb: CallbackQuery, state: FSMContext, session: AsyncSession, u
     os_name_map = {str(o["id"]): o["name"] for o in os_list[:20]}
     # متادیتای هر OS برای قیمت‌گذاری per-OS جیکور: [min_disk, لایسنس ساعتی]
     os_meta = {str(o["id"]): [int(o.get("min_disk") or 0),
-                              float(o.get("price_per_hour") or 0)]
+                              float(o.get("price_per_hour") or 0),
+                              1 if ("windows" in str(o.get("_flavor") or "").lower()
+                                    or "windows" in str(o.get("name") or "").lower()) else 0]
                for o in os_list[:20]}
     await state.update_data(os_options=os_name_map, os_meta=os_meta)
     await state.set_state(BuyServerStates.selecting_os)
@@ -860,8 +926,11 @@ async def _ask_os(cb: CallbackQuery, state: FSMContext, session: AsyncSession, u
     builder = InlineKeyboardBuilder()
     for os_item in os_list[:20]:
         builder.button(text=os_item["name"], callback_data=f"buyos:{os_item['id']}")
-    builder.button(text="بازگشت به منو", callback_data="cancel", **{"icon_custom_emoji_id": "5258236805890710909"})
     builder.adjust(2)
+    # بازگشت: دکمه‌ی مستقل تمام-عرض پایین لیست (نه داخل شبکه‌ی دوستونه)
+    builder.row(InlineKeyboardButton(
+        text="بازگشت به منو", callback_data="cancel",
+        **{"icon_custom_emoji_id": "5258236805890710909"}))
 
     await cb.message.edit_text(
         '<tg-emoji emoji-id="4916105371858240403">🖱</tg-emoji> یک OS برای سرور انتخاب کنید',
@@ -909,15 +978,20 @@ async def _ask_os_message(message: Message, state: FSMContext, session: AsyncSes
 
     os_name_map = {str(o["id"]): o["name"] for o in os_list[:20]}
     os_meta = {str(o["id"]): [int(o.get("min_disk") or 0),
-                              float(o.get("price_per_hour") or 0)]
+                              float(o.get("price_per_hour") or 0),
+                              1 if ("windows" in str(o.get("_flavor") or "").lower()
+                                    or "windows" in str(o.get("name") or "").lower()) else 0]
                for o in os_list[:20]}
     await state.update_data(os_options=os_name_map, os_meta=os_meta)
     await state.set_state(BuyServerStates.selecting_os)
     builder = InlineKeyboardBuilder()
     for os_item in os_list[:20]:
         builder.button(text=os_item["name"], callback_data=f"buyos:{os_item['id']}")
-    builder.button(text="بازگشت به منو", callback_data="cancel", **{"icon_custom_emoji_id": "5258236805890710909"})
     builder.adjust(2)
+    # بازگشت: دکمه‌ی مستقل تمام-عرض پایین لیست (نه داخل شبکه‌ی دوستونه)
+    builder.row(InlineKeyboardButton(
+        text="بازگشت به منو", callback_data="cancel",
+        **{"icon_custom_emoji_id": "5258236805890710909"}))
 
     await message.answer(
         '<tg-emoji emoji-id="4916105371858240403">🖱</tg-emoji> یک OS برای سرور انتخاب کنید',
@@ -932,10 +1006,11 @@ async def cb_select_os(cb: CallbackQuery, user: User, state: FSMContext, session
     data = await state.get_data()
     os_options = data.get("os_options", {})
     os_name = os_options.get(str(os_id), os_id) if isinstance(os_options, dict) else os_id
-    _meta = (data.get("os_meta") or {}).get(str(os_id)) or [0, 0]
+    _meta = (data.get("os_meta") or {}).get(str(os_id)) or [0, 0, 0]
     await state.update_data(os_id=os_id, os_name=os_name,
                             os_min_disk=int(_meta[0] or 0),
-                            os_lic_h=float(_meta[1] or 0))
+                            os_lic_h=float(_meta[1] or 0),
+                            os_is_win=bool(_meta[2] if len(_meta) > 2 else 0))
     if data.get("billing") == "hourly":
         await state.update_data(discount_id=None, discount_percent=0)
         await _ask_email_or_confirm(cb.message, state, session, user)
@@ -1047,7 +1122,7 @@ async def _show_confirm(msg, state: FSMContext, session, from_message=False, use
     # جیکور: قیمت مؤثر بر اساس OS انتخابی (بامپ دیسک + لایسنس ویندوز — زنده از API)
     if plan.provider_type == ProviderType.GCORE and billing == "hourly":
         try:
-            base_price, _gc_addon, show_disk = await _gcore_os_pricing(session, plan, data)
+            base_price, _gc_addon, show_disk, _ = await _gcore_os_pricing(session, plan, data)
         except Exception as e:
             await msg.answer(f"{ERR} {_esc(e)}", parse_mode="HTML")
             return
@@ -1096,53 +1171,76 @@ _gc_volprice_cache: dict = {}
 
 
 async def _gcore_os_pricing(session: AsyncSession, plan: ServerPlan,
-                            data: dict) -> tuple[float, float, int]:
+                            data: dict) -> tuple[float, float, int, str | None]:
     """قیمت ساعتیِ مؤثر یک خرید جیکور بر اساس OS انتخابی (به ارز پلن).
 
-    دیسک مؤثر = max(دیسک پلن، min_disk ایمیج) — انتخاب ویندوز دیسک را خودکار
-    بامپ می‌کند (رفتار سایت جیکور). قیمت = (flavor + دیسک مؤثر + لایسنس image)
-    × (۱ + سود ساعتی) — دیسک و لایسنس زنده از API.
-    خروجی: (قیمت فروش ساعتی، سورشارژ نسبت به قیمت پلن، دیسک مؤثر GB)"""
+    - دیسک مؤثر = max(دیسک پلن، min_disk ایمیج) — انتخاب ویندوز دیسک را خودکار
+      بامپ می‌کند (رفتار سایت جیکور).
+    - ویندوز flavor دوقلوی ویندوزی می‌خواهد (g2- → g2w-؛ خطای E2E جیکور) و
+      قیمت flavor از همان نسخه‌ی wدار زنده خوانده می‌شود (لایسنس داخل آن).
+    - قیمت = (flavor + دیسک مؤثر + قیمت image) × (۱ + سود ساعتی) — همه زنده.
+    خروجی: (قیمت فروش ساعتی، سورشارژ نسبت به پلن، دیسک مؤثر GB، flavor_override)"""
     plan_disk = int(plan.disk or 0)
     md = int(data.get("os_min_disk") or 0)
     lic_h = float(data.get("os_lic_h") or 0)
+    is_win = bool(data.get("os_is_win"))
     disk_used = max(plan_disk, md)
     base = float(plan.price_hourly or 0)
-    if disk_used == plan_disk and lic_h <= 0:
-        return base, 0.0, disk_used   # حالت عادی — همان قیمت پلن
+    if disk_used == plan_disk and lic_h <= 0 and not is_win:
+        return base, 0.0, disk_used, None   # حالت عادی — همان قیمت پلن
 
     from bot.services.gcore_settings import get_margins, get_volume_rate
+    import asyncio as _aio
+    import time as _time
     extra = plan.extra_data or {}
-    flavor_h = float(extra.get("flavor_cost_hourly") or 0)
+    rid = int(extra.get("region_id") or 0)
+    account = await session.get(ProviderAccount, plan.provider_account_id) \
+        if plan.provider_account_id else None
+    if not account or not rid:
+        raise RuntimeError("اطلاعات قیمت‌گذاری این پلن ناقص است")
+    prov = get_provider(account)
     mh, _ = await get_margins(session)
+    now = _time.monotonic()
+
+    flavor_override = None
+    if is_win:
+        parts = (plan.provider_plan_id or "").split("-")
+        if parts and parts[0]:
+            parts[0] += "w"
+        win_flavor = "-".join(parts)
+        wkey = ("wf", account.id, rid, win_flavor)
+        cached = _gc_volprice_cache.get(wkey)
+        if cached and now - cached[0] < 300:
+            fp = cached[1]
+        else:
+            fp = await _aio.wait_for(prov.get_flavor_price(rid, win_flavor), timeout=20)
+            _gc_volprice_cache[wkey] = (now, fp)
+        if not fp or fp.get("disabled") or float(fp.get("price_per_hour") or 0) <= 0:
+            raise RuntimeError("نسخه ویندوزی این پلن در این لوکیشن موجود نیست")
+        flavor_h = float(fp["price_per_hour"])
+        flavor_override = win_flavor
+    else:
+        flavor_h = float(extra.get("flavor_cost_hourly") or 0)
+
     rate = await get_volume_rate(session)
     if rate > 0:
         vol_h = disk_used * rate / 720.0
     else:
-        rid = int(extra.get("region_id") or 0)
-        account = await session.get(ProviderAccount, plan.provider_account_id) \
-            if plan.provider_account_id else None
-        if not account or not rid:
-            raise RuntimeError("اطلاعات قیمت‌گذاری این پلن ناقص است")
-        import asyncio as _aio
-        import time as _time
-        key = (account.id, rid, disk_used)
-        cached = _gc_volprice_cache.get(key)
-        now = _time.monotonic()
+        vkey = (account.id, rid, disk_used)
+        cached = _gc_volprice_cache.get(vkey)
         if cached and now - cached[0] < 300:
             vol_h = cached[1]
         else:
             p = await _aio.wait_for(
-                get_provider(account).preview_volume_price(rid, disk_used),
-                timeout=15)
+                prov.preview_volume_price(rid, disk_used), timeout=15)
             vol_h = float(p.get("price_per_hour") or 0) or \
                 float(p.get("price_per_month") or 0) / 720.0
             if vol_h <= 0:
                 raise RuntimeError("قیمت دیسک از سرویس‌دهنده خوانده نشد — کمی بعد تلاش کنید")
-            _gc_volprice_cache[key] = (now, vol_h)
+            _gc_volprice_cache[vkey] = (now, vol_h)
     sale_h = round((flavor_h + vol_h + lic_h) * (1 + float(mh or 0) / 100), 4)
     addon = max(0.0, round(sale_h - base, 4))
-    return sale_h, addon, disk_used
+    return sale_h, addon, disk_used, flavor_override
 
 
 def _delivery_text(server: Server, plan_name: str, password: str) -> str:
@@ -1163,7 +1261,8 @@ async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: 
                                 billing_str: str, hostname: str, os_id: str,
                                 root_password: str, final_price: float,
                                 disk_gb: int = 0,
-                                price_addon_hourly: float = 0.0) -> None:
+                                price_addon_hourly: float = 0.0,
+                                flavor_override: str | None = None) -> None:
     """ساخت و تحویل در پس‌زمینه (جیکور — ساخت طولانی است و نباید هندلر را بلاک کند).
 
     سشن مستقل باز می‌شود چون سشن هندلر با پایان هندلر بسته می‌شود.
@@ -1196,6 +1295,9 @@ async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: 
                     # بامپ دیسک per-OS (ویندوز): caller extra آخرین merge است و
                     # مقدار disk پلن را override می‌کند
                     _create_extra["disk"] = disk_gb
+                if flavor_override:
+                    # ویندوز: flavor دوقلوی ویندوزی (g2w-…) — الزام API جیکور
+                    _create_extra["flavor_override"] = flavor_override
                 server = await svc.create_server(
                     user=user, plan=plan, os_id=os_id, billing_type=billing_type,
                     hostname=hostname, extra=_create_extra,
@@ -1250,10 +1352,11 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
     billing_type = BillingType.HOURLY if billing_str == "hourly" else BillingType.MONTHLY
     base_price = plan.price_hourly if billing_type == BillingType.HOURLY else plan.price_monthly
     # جیکور: قیمت مؤثر per-OS (بامپ دیسک برای ویندوز + لایسنس — زنده از API)
-    gc_disk_used, gc_addon_h = int(plan.disk or 0), 0.0
+    gc_disk_used, gc_addon_h, gc_flavor_override = int(plan.disk or 0), 0.0, None
     if plan.provider_type == ProviderType.GCORE and billing_type == BillingType.HOURLY:
         try:
-            base_price, gc_addon_h, gc_disk_used = await _gcore_os_pricing(session, plan, data)
+            base_price, gc_addon_h, gc_disk_used, gc_flavor_override = \
+                await _gcore_os_pricing(session, plan, data)
         except Exception as e:
             await cb.answer(f"خطا در قیمت‌گذاری: {str(e)[:150]}", show_alert=True)
             return
@@ -1323,6 +1426,7 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
             os_id=os_id, root_password=root_password,
             final_price=float(final_price or 0),
             disk_gb=gc_disk_used, price_addon_hourly=gc_addon_h,
+            flavor_override=gc_flavor_override,
         ))
         return
 

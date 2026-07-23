@@ -263,7 +263,9 @@ class GcoreProvider(BaseProvider):
         _name = params.name if len(params.name or "") >= 3 else f"{params.name or 'srv'}-vm"
         body: dict = {
             "name": _name,
-            "flavor": params.plan_id,
+            # ایمیج ویندوزی flavor دوقلوی ویندوزی می‌خواهد (g2- → g2w-) —
+            # لایه‌ی خرید آن را در flavor_override می‌گذارد
+            "flavor": params.extra.get("flavor_override") or params.plan_id,
             "interfaces": [{"type": "external", "ip_family": "ipv4"}],
             "volumes": [{
                 "source": "image",
@@ -584,6 +586,22 @@ class GcoreProvider(BaseProvider):
             })
         out.sort(key=lambda x: x["display_name"])
         return out
+
+    async def get_flavor_price(self, region_id: int, flavor_id: str) -> Optional[dict]:
+        """قیمت زنده‌ی یک flavor مشخص (شامل flavorهای ویندوزی wدار که لایسنس
+        در قیمت خودشان است). None = چنین flavorی در region نیست."""
+        data = await self._request(
+            "GET", f"/cloud/v1/flavors/{self.project_id}/{region_id}",
+            params={"include_prices": "true"},
+        )
+        for f in data.get("results") or []:
+            if f.get("flavor_id") == flavor_id:
+                return {
+                    "price_per_hour": float(f.get("price_per_hour") or 0),
+                    "price_per_month": float(f.get("price_per_month") or 0),
+                    "disabled": bool(f.get("disabled")),
+                }
+        return None
 
     async def preview_volume_price(self, region_id: int, size_gb: int,
                                    type_name: str = "standard") -> dict:

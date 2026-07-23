@@ -155,8 +155,30 @@ class GcoreProvider(BaseProvider):
                     ipv4 = ipv4 or addr
         return ipv4, ipv6
 
+    @staticmethod
+    def _windows_password(seed: Optional[str] = None) -> str:
+        """رمز مطابق سیاست ویندوز جیکور: ۸–۱۶ کاراکتر با حداقل یک حرف کوچک،
+        یک حرف بزرگ، یک رقم و یک کاراکتر خاص. ورودی سازگار همان برمی‌گردد."""
+        import secrets as _sec
+        import string as _str
+        specials = "!#$%&'()*+,-./:;<=>?@[]^_{|}~"
+
+        def _ok(p: str) -> bool:
+            return bool(p) and 8 <= len(p) <= 16 \
+                and any(c.islower() for c in p) and any(c.isupper() for c in p) \
+                and any(c.isdigit() for c in p) and any(c in specials for c in p)
+
+        if seed and _ok(seed):
+            return seed
+        while True:
+            p = "".join(_sec.choice(_str.ascii_letters + _str.digits + "!#$%*+-=?@")
+                        for _ in range(14))
+            if _ok(p):
+                return p
+
     def _server_info(self, inst: dict, region_id: int,
-                     root_password: Optional[str] = None) -> ServerInfo:
+                     root_password: Optional[str] = None,
+                     os_name: Optional[str] = None) -> ServerInfo:
         raw_status = (inst.get("status") or "UNKNOWN").upper()
         status = _STATUS_MAP.get(raw_status, "off")
         ipv4, ipv6 = self._extract_ips(inst)
@@ -178,7 +200,7 @@ class GcoreProvider(BaseProvider):
             cpu=int(flavor.get("vcpus") or 0),
             disk=0,   # دیسک در پاسخ instance نیست (volume جدا) — رکورد Server از پلن پر می‌شود
             bandwidth=0,
-            os_name=None,
+            os_name=os_name,
             location=str(inst.get("region") or region_id),
             traffic_used_gb=0.0,
             extra_data=extra,
@@ -216,7 +238,24 @@ class GcoreProvider(BaseProvider):
             import secrets as _sec, string as _str
             _alpha = _str.ascii_letters + _str.digits + "!@#$%^&*"
             password = "".join(_sec.choice(_alpha) for _ in range(16))
-        self.last_root_password = password
+
+        # تشخیص خانواده‌ی OS از روی خود image — مسیر تعیین رمز به آن وابسته است
+        # (ویندوز user_data ندارد) + os_name برای رکورد سرور
+        image_name: Optional[str] = None
+        is_windows = False
+        try:
+            imgs = await self._request(
+                "GET", f"/cloud/v1/images/{self.project_id}/{region_id}",
+                params={"visibility": "public"},
+            )
+            img = next((i for i in imgs.get("results") or []
+                        if i.get("id") == params.os_id), None)
+            if img:
+                image_name = img.get("name")
+                _d = f"{img.get('os_distro') or ''} {img.get('name') or ''}".lower()
+                is_windows = "windows" in _d
+        except Exception:
+            pass  # ناموفق = فرض لینوکس (اکثریت مطلق)
 
         # الگوی نام جیکور حداقل ۳ کاراکتر می‌خواهد — نام‌های خیلی کوتاه پسوند می‌گیرند
         _name = params.name if len(params.name or "") >= 3 else f"{params.name or 'srv'}-vm"
@@ -237,25 +276,38 @@ class GcoreProvider(BaseProvider):
             "tags": {"managed_by": "abrpardaz",
                      **{k: str(v) for k, v in (params.extra.get("labels") or {}).items()}},
         }
-        # دو مسیر تعیین رمز (سوییچ per-account برای تست E2E):
-        # پیش‌فرض: فیلد password → رمزِ «کاربر پیش‌فرض image» ست می‌شود.
-        # gcore_root_userdata=true → cloud-init با ست صریح رمز root + ssh_pwauth
-        # (توجه: با ارسال password، جیکور user_data را نادیده می‌گیرد — فقط یکی!)
-        if params.extra.get("gcore_root_userdata"):
+        # مسیر تعیین رمز — نتیجه‌ی E2E واقعی 2026-07-22: فیلد password رمز root
+        # را ست نمی‌کند (رمزِ «کاربر پیش‌فرض image» + SSH پسوردی/ورود root بسته)
+        # → تحویل «root + رمز» فقط از مسیر cloud-init جواب می‌دهد؛ پس پیش‌فرض شد.
+        # توجه: با ارسال فیلد password، جیکور user_data را نادیده می‌گیرد — فقط یکی!
+        if is_windows:
+            # ویندوز: user_data کار نمی‌کند؛ فیلد password رمز کاربر Admin را ست
+            # می‌کند و باید با سیاست رمز جیکور (۸-۱۶ + هر ۴ دسته) سازگار باشد
+            password = self._windows_password(password)
+            body["password"] = password
+        elif params.extra.get("gcore_password_field"):
+            # سوییچ عیب‌یابی (extra_config اکانت): رفتار قدیمی فیلد password
+            body["password"] = password
+        else:
+            # لینوکس (پیش‌فرض): cloud-init — ست صریح رمز root + بازکردن SSH پسوردی
+            # (ssh_pwauth کاربر را باز می‌کند ولی PermitRootLogin هم لازم است)
             cloud_cfg = (
                 "#cloud-config\n"
                 "disable_root: false\n"
                 "ssh_pwauth: true\n"
                 "chpasswd:\n"
                 "  expire: false\n"
-                "  users:\n"
-                "    - name: root\n"
-                f"      password: \"{password}\"\n"
-                "      type: text\n"
+                "  list: |\n"
+                f"    root:{password}\n"
+                "runcmd:\n"
+                "  - mkdir -p /etc/ssh/sshd_config.d\n"
+                "  - printf 'PermitRootLogin yes\\nPasswordAuthentication yes\\n' > /etc/ssh/sshd_config.d/99-rootpass.conf\n"
+                "  - sed -i 's/^#\\?PermitRootLogin .*/PermitRootLogin yes/' /etc/ssh/sshd_config\n"
+                "  - sed -i 's/^#\\?PasswordAuthentication .*/PasswordAuthentication yes/' /etc/ssh/sshd_config\n"
+                "  - systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || true\n"
             )
             body["user_data"] = base64.b64encode(cloud_cfg.encode()).decode()
-        else:
-            body["password"] = password
+        self.last_root_password = password
 
         async def _do_create(create_body: dict) -> dict:
             return await self._request(
@@ -314,7 +366,8 @@ class GcoreProvider(BaseProvider):
             await asyncio.sleep(5)
         if not inst:
             inst = {"id": instance_id, "status": "BUILD", "name": body["name"]}
-        return self._server_info(inst, region_id, root_password=password)
+        return self._server_info(inst, region_id, root_password=password,
+                                 os_name=image_name)
 
     async def delete_server(self, server_id: str) -> bool:
         region_id, uuid = self._split_sid(server_id)

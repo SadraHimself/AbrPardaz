@@ -181,6 +181,13 @@ async def _render_server_detail(cb: CallbackQuery, user: User, session: AsyncSes
         if _toman > 0:
             price = _toman
 
+    # سرویس فقط-ساعتی (جیکور): معادل ماهانه (۷۲۰ ساعت) هم نمایش داده می‌شود
+    monthly_line = ""
+    if server.billing_type == BillingType.HOURLY and price:
+        _m_amt, _ = await server_live_price(session, server, hourly=False)
+        if not _m_amt:
+            monthly_line = f"• قیمت ماهانه (۷۲۰ ساعت): {price * 720:,.0f} تومان\n"
+
     _extra_ips = (server.extra_data or {}).get("extra_ips") or []
     extra_ip_line = "".join(f"آیپی اضافه: <code>{ip}</code>\n" for ip in _extra_ips)
 
@@ -193,6 +200,7 @@ async def _render_server_detail(cb: CallbackQuery, user: User, session: AsyncSes
         f"• رم: {server.ram} MB | پردازنده: {server.cpu} | دیسک: {server.disk} GB"
         f"{traffic_text}\n"
         f"• {billing_label} — {price:,.0f} {price_unit}\n"
+        f"{monthly_line}"
         f"• ساخته شده: {server.created_at.strftime('%Y/%m/%d')}",
         parse_mode="HTML",
         reply_markup=server_actions_kb(server),
@@ -1145,6 +1153,11 @@ async def _show_confirm(msg, state: FSMContext, session, from_message=False, use
     hostname_line = f"• نام سرور: {data['hostname']}\n" if data.get("hostname") else ""
     os_line = f"• سیستم‌عامل: {data.get('os_name', '')}\n" if data.get("os_name") else ""
     discount_line = f"• تخفیف: {discount_pct:.0f}% (قیمت اصلی: {base_price:,.0f} T)\n" if discount_pct else ""
+    # محصولات فقط-ساعتی (جیکور): معادل یک ماه (۷۲۰ ساعت) هم نمایش داده می‌شود —
+    # بیلینگ همچنان ساعتی است، این فقط برآورد ماهانه برای مقایسه است
+    monthly_line = ""
+    if billing == "hourly" and not plan.price_monthly and final_price:
+        monthly_line = f"• قیمت ماهانه (۷۲۰ ساعت): <b>{final_price * 720:,.0f} تومان</b>\n"
 
     text = (
         f'<tg-emoji emoji-id="4987757216040747796">💎</tg-emoji> <b>تأیید سفارش</b>\n\n'
@@ -1156,8 +1169,9 @@ async def _show_confirm(msg, state: FSMContext, session, from_message=False, use
         f"{hostname_line}"
         f"{os_line}\n"
         f"{discount_line}"
-        f"• قیمت نهایی: <b>{final_price:,.0f} {price_unit}</b>\n\n"
-        "آیا تأیید می‌کنید؟"
+        f"• قیمت نهایی: <b>{final_price:,.0f} {price_unit}</b>\n"
+        f"{monthly_line}"
+        "\nآیا تأیید می‌کنید؟"
     )
 
     if from_message:

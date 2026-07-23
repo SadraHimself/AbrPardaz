@@ -35,6 +35,9 @@ class PlanInfo:
     price_hourly: Optional[float] = None
     price_monthly: Optional[float] = None
     location: Optional[str] = None
+    # ارز قیمت خرید (usd/eur) — سرویس‌دهنده‌هایی که ارز را per-flavor اعلام می‌کنند
+    # (گیکور) اینجا می‌گذارند؛ None یعنی ارز ثابتِ شناخته‌شده‌ی provider (هتزنر=eur)
+    currency: Optional[str] = None
 
 
 @dataclass

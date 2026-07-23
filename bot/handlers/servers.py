@@ -707,28 +707,28 @@ async def cb_buy_location(cb: CallbackQuery, user: User, state: FSMContext, sess
     if not plans:
         await cb.answer("در این لوکیشن محصولی موجود نیست.", show_alert=True)
         return
-    # جیکور: اگر بیش از یک «نوع» flavor (Standard/CPU Optimized/…) در این
-    # لوکیشن ایمپورت شده باشد، اول نوع سرور انتخاب می‌شود
+    # جیکور: مرحله «نوع سرور» (Standard / CPU Optimized / …) همیشه بین لوکیشن و
+    # پلن‌ها می‌آید — حتی تک-نوع — تا سلسله‌مراتب انتخاب همیشه ثابت باشد.
+    # دکمه‌ها از انواعِ واقعاً ایمپورت‌شده ساخته می‌شوند.
     if all(p.provider_type == ProviderType.GCORE for p in plans):
         types = {_gc_flavor_type(p.provider_plan_id) for p in plans}
-        if len(types) > 1:
-            ordered = [t for t in _GC_TYPE_ORDER if t in types] + \
-                      sorted(t for t in types if t not in _GC_TYPE_ORDER)
-            rows = [[InlineKeyboardButton(
-                text=_GC_TYPE_LABELS.get(t, t.title()),
-                callback_data=f"buyloctype:{gid}:{loc}:{t}")] for t in ordered]
-            rows.append([InlineKeyboardButton(
-                text="بازگشت", callback_data=f"buygrp:{gid}",
-                **{"icon_custom_emoji_id": "5258236805890710909"})])
-            await state.set_state(BuyServerStates.selecting_plan)
-            await cb.message.edit_text(
-                '<tg-emoji emoji-id="5926980668624998964">🟡</tg-emoji> '
-                "نوع سرور را انتخاب کنید:",
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
-            )
-            await cb.answer()
-            return
+        ordered = [t for t in _GC_TYPE_ORDER if t in types] + \
+                  sorted(t for t in types if t not in _GC_TYPE_ORDER)
+        rows = [[InlineKeyboardButton(
+            text=_GC_TYPE_LABELS.get(t, t.title()),
+            callback_data=f"buyloctype:{gid}:{loc}:{t}")] for t in ordered]
+        rows.append([InlineKeyboardButton(
+            text="بازگشت", callback_data=f"buygrp:{gid}",
+            **{"icon_custom_emoji_id": "5258236805890710909"})])
+        await state.set_state(BuyServerStates.selecting_plan)
+        await cb.message.edit_text(
+            '<tg-emoji emoji-id="5926980668624998964">🟡</tg-emoji> '
+            "نوع سرور را انتخاب کنید:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+        await cb.answer()
+        return
     await _render_plan_list(cb, state, session, group.name, plans,
                             back_cb=f"buygrp:{group.id}")
 

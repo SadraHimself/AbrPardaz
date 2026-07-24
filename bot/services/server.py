@@ -63,6 +63,14 @@ class ServerService:
                 raise RuntimeError(
                     "ظرفیت ساخت سرور در حال حاضر تکمیل است — لطفاً بعداً تلاش کنید"
                 )
+        elif plan.provider_type == ProviderType.TIMEWEB:
+            # تایم‌وب هم تک-اکانتی است (تصمیم 2026-07-24)
+            from bot.services.timeweb_settings import pick_account as timeweb_pick
+            account = await timeweb_pick(self.session)
+            if not account:
+                raise RuntimeError(
+                    "ظرفیت ساخت سرور در حال حاضر تکمیل است — لطفاً بعداً تلاش کنید"
+                )
         else:
             account = await self._get_account(plan.provider_account_id)
         provider = get_provider(account)

@@ -80,6 +80,12 @@ app.conf.update(
             "task": "bot.tasks.server.sync_gcore_catalog",
             "schedule": crontab(minute="20,50"),
         },
+        # هر ۳۰ دقیقه موجودی/قیمت خرید کاتالوگ تایم‌وب sync می‌شود
+        # (آفست از هتزنر ۱۰,۴۰ و جیکور ۲۰,۵۰)
+        "timeweb-catalog-sync": {
+            "task": "bot.tasks.server.sync_timeweb_catalog",
+            "schedule": crontab(minute="5,35"),
+        },
         # هر ساعت تراکنش‌های قدیمی‌تر از ۷۲ ساعت پاک می‌شوند
         # (قبلاً فقط ۳ روزِ هفته اجرا می‌شد و commit هم نداشت → هیچ‌وقت پاک نمی‌شد)
         "cleanup-transactions": {

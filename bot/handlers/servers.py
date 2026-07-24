@@ -675,8 +675,8 @@ async def _select_category(cb: CallbackQuery, user: User, state: FSMContext,
         await cb.answer("در این دسته‌بندی محصولی موجود نیست.", show_alert=True)
         return
 
-    # گروه‌های چند-لوکیشنه (هتزنر/جیکور): اول لوکیشن انتخاب می‌شود، بعد محصولات همان لوکیشن
-    _MULTI_LOC = (ProviderType.HETZNER, ProviderType.GCORE)
+    # گروه‌های چند-لوکیشنه (هتزنر/جیکور/تایم‌وب): اول لوکیشن، بعد محصولات همان لوکیشن
+    _MULTI_LOC = (ProviderType.HETZNER, ProviderType.GCORE, ProviderType.TIMEWEB)
     if any(p.provider_type in _MULTI_LOC for p in plans):
         gid = _grp.id if _grp else 0
         locs = sorted({p.location for p in plans if p.location})
@@ -929,6 +929,16 @@ async def _fetch_os_list(session: AsyncSession, account: ProviderAccount, data: 
         # (رفتار سایت جیکور: انتخاب ویندوز → دیسک ۴۰ گیگ + هزینه لایسنس)
         return await asyncio.wait_for(
             prov.list_os_templates(location=str(_rid)), timeout=20)
+    if account.provider_type == ProviderType.TIMEWEB:
+        # تایم‌وب: لیست OS سراسری است؛ دیسک تعرفه ثابت است (بامپ ندارد) →
+        # OSهایی که min_disk شان از دیسک پلن بیشتر است نمایش داده نمی‌شوند
+        os_list = await asyncio.wait_for(prov.list_os_templates(), timeout=20)
+        _plan = await session.get(ServerPlan, data.get("plan_id"))
+        _disk = int(_plan.disk or 0) if _plan else 0
+        if _disk:
+            os_list = [o for o in os_list
+                       if not o.get("min_disk") or int(o["min_disk"]) <= _disk]
+        return os_list
     os_list = await asyncio.wait_for(prov.list_os_templates(), timeout=15)
     # فیلتر معماری (هتزنر): پلن cax = ARM و بقیه x86 — ایمیج ناهم‌معماری خطای ساخت می‌دهد
     if os_list and account.provider_type == ProviderType.HETZNER:
@@ -1469,9 +1479,9 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
     _alpha = _string.ascii_letters + _string.digits + "!@#$%^&*"
     root_password = "".join(_secrets.choice(_alpha) for _ in range(16))
 
-    # سرویس‌دهنده‌های با ساخت طولانی (جیکور): پیام «در حال ساخت» فوری، و ادامه‌ی
-    # ساخت/کسر/تحویل در پس‌زمینه با سشن مستقل (سشن هندلر با پایان هندلر بسته می‌شود)
-    if plan.provider_type == ProviderType.GCORE:
+    # سرویس‌دهنده‌های با ساخت طولانی (جیکور/تایم‌وب): پیام «در حال ساخت» فوری، و
+    # ادامه‌ی ساخت/کسر/تحویل در پس‌زمینه با سشن مستقل (سشن هندلر بسته می‌شود)
+    if plan.provider_type in (ProviderType.GCORE, ProviderType.TIMEWEB):
         await cb.message.edit_text(
             '‏<tg-emoji emoji-id="5258503720928288433">🔔</tg-emoji> '
             "سرویس شما در حال ساخت است و بین ۱۰ تا ۱۵ دقیقه دیگر برای شما ارسال میشود.\n"

@@ -15,8 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
-CURRENCY_LABELS = {"irt": "تومان", "usd": "دلار", "eur": "یورو"}
-RATE_KEYS = {"usd": "np_usd_to_irt_rate", "eur": "np_eur_to_irt_rate"}
+CURRENCY_LABELS = {"irt": "تومان", "usd": "دلار", "eur": "یورو", "rub": "روبل"}
+RATE_KEYS = {"usd": "np_usd_to_irt_rate", "eur": "np_eur_to_irt_rate",
+             "rub": "np_rub_to_irt_rate"}
 
 
 def obj_currency(obj) -> str:

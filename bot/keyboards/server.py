@@ -48,6 +48,8 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
     is_hourly = server.billing_type == BillingType.HOURLY
     # جیکور: API ریبیلد/تغییر رمز/تغییر IP برای VM ندارد → دکمه‌ها گارد می‌شوند
     is_gcore = server.provider_type == ProviderType.GCORE
+    # تایم‌وب: ریبیلد و تغییر رمز دارد؛ تغییر IP/آیپی اضافه/اسنپ‌شات در نسخه اول نه
+    is_timeweb = server.provider_type == ProviderType.TIMEWEB
     rows: list[list[InlineKeyboardButton]] = []
 
     if server.status == ServerStatus.ACTIVE:
@@ -65,6 +67,11 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
         is_virt = server.provider_type == ProviderType.VIRTUALIZOR
         if is_gcore:
             pass  # قابلیت‌های اختیاری جیکور در نسخه اول ارائه نمی‌شوند
+        elif is_timeweb:
+            rows.append([
+                _btn("تغییر رمز", f"srv_chpass:{sid}", icon="4904500559203009298"),
+                _btn("آمار مصرف", f"srv_usage:{sid}", icon="5936143551854285132"),
+            ])
         elif is_hourly and is_virt:
             rows.append([
                 _btn("تغییر رمز", f"srv_chpass:{sid}", icon="4904500559203009298"),

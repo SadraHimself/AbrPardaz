@@ -40,9 +40,14 @@ _MAX_TOMAN = 2_000_000
 # item keys read from the single /latest/ response
 _USD_ITEM = "usd_sell"   # دلار تهران (فروش) — used for wallet top-ups
 _EUR_ITEM = "eur"        # یورو — reserved for foreign servers
+_RUB_ITEM = "rub"        # روبل — بیلینگ تایم‌وب؛ اگر Navasan نداشت، نرخ دستی ادمین مبناست
+
+# روبل خیلی ارزان‌تر از دلار/یورو است — بازه‌ی اعتبارسنجی جدا
+_RUB_MIN_TOMAN = 100
+_RUB_MAX_TOMAN = 50_000
 
 
-def _extract(data: dict, item: str) -> int | None:
+def _extract(data: dict, item: str, lo: int = _MIN_TOMAN, hi: int = _MAX_TOMAN) -> int | None:
     """Pull a Toman price out of a Navasan item node, with range validation."""
     node = data.get(item) if isinstance(data, dict) else None
     if not isinstance(node, dict):
@@ -52,14 +57,14 @@ def _extract(data: dict, item: str) -> int | None:
         val = int(float(raw))
     except (ValueError, TypeError):
         return None
-    if _MIN_TOMAN <= val <= _MAX_TOMAN:
+    if lo <= val <= hi:
         return val
     logger.warning("exchange_rate: %s value %s out of range", item, val)
     return None
 
 
-async def _fetch_rates() -> tuple[int, int] | None:
-    """Return (usd_toman, eur_toman) from a SINGLE Navasan request."""
+async def _fetch_rates() -> tuple[int, int, int | None] | None:
+    """Return (usd_toman, eur_toman, rub_toman|None) from a SINGLE Navasan request."""
     api_key = settings.NAVASAN_API_KEY
     if not api_key:
         logger.warning("exchange_rate: NAVASAN_API_KEY is not set")
@@ -82,11 +87,13 @@ async def _fetch_rates() -> tuple[int, int] | None:
 
     usd = _extract(data, _USD_ITEM)
     eur = _extract(data, _EUR_ITEM)
+    # روبل اختیاری است: نبودش نباید آپدیت دلار/یورو را بشکند (fallback = نرخ دستی)
+    rub = _extract(data, _RUB_ITEM, lo=_RUB_MIN_TOMAN, hi=_RUB_MAX_TOMAN)
     if usd is None or eur is None:
         logger.warning("exchange_rate: missing rate (usd=%s eur=%s)", usd, eur)
         return None
-    logger.info("exchange_rate: Navasan→ usd=%s eur=%s Toman", usd, eur)
-    return usd, eur
+    logger.info("exchange_rate: Navasan→ usd=%s eur=%s rub=%s Toman", usd, eur, rub)
+    return usd, eur, rub
 
 
 def _diff_text(old: float | None, new: int) -> str:
@@ -135,10 +142,11 @@ async def _do_update(only_if_empty: bool = False) -> None:
     rates = await _fetch_rates()
     if rates is None:
         return
-    usd, eur = rates
+    usd, eur, rub = rates
 
     old_usd: float | None = None
     old_eur: float | None = None
+    old_rub: float | None = None
 
     async with AsyncSessionFactory() as session:
         usd_row = await session.get(BotSettings, "np_usd_to_irt_rate")
@@ -155,6 +163,16 @@ async def _do_update(only_if_empty: bool = False) -> None:
         else:
             session.add(BotSettings(key="np_eur_to_irt_rate", value=str(eur)))
 
+        # روبل (بیلینگ تایم‌وب): فقط وقتی Navasan داد آپدیت می‌شود —
+        # نبودش، نرخ دستی/قبلی ادمین را دست‌نخورده می‌گذارد
+        if rub is not None:
+            rub_row = await session.get(BotSettings, "np_rub_to_irt_rate")
+            if rub_row:
+                old_rub = float(rub_row.value) if rub_row.value else None
+                rub_row.value = str(rub)
+            else:
+                session.add(BotSettings(key="np_rub_to_irt_rate", value=str(rub)))
+
         now_dt = datetime.now(_TEHRAN)
         for key, val in (
             ("exrate_updated_at", now_dt.strftime("%Y/%m/%d %H:%M")),
@@ -170,7 +188,7 @@ async def _do_update(only_if_empty: bool = False) -> None:
         tid_row = await session.get(BotSettings, "log_topic_exchange_rate")
         await session.commit()
 
-    logger.info("exchange_rate: saved usd=%s eur=%s", usd, eur)
+    logger.info("exchange_rate: saved usd=%s eur=%s rub=%s", usd, eur, rub)
 
     if not gid_row or not gid_row.value or not tid_row or not tid_row.value:
         return
@@ -183,7 +201,8 @@ async def _do_update(only_if_empty: bool = False) -> None:
             f'<tg-emoji emoji-id="5206607081334906820">✔️</tg-emoji> <b>نرخ ارز آپدیت شد</b>\n\n'
             f"دلار: <b>{usd:,.0f} تومان</b>{_diff_text(old_usd, usd)}\n"
             f"یورو: <b>{eur:,.0f} تومان</b>{_diff_text(old_eur, eur)}\n"
-            f"ساعت: {now}",
+            + (f"روبل: <b>{rub:,.0f} تومان</b>{_diff_text(old_rub, rub)}\n" if rub is not None else "")
+            + f"ساعت: {now}",
             parse_mode="HTML",
             message_thread_id=int(tid_row.value),
         )

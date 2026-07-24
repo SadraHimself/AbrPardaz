@@ -784,7 +784,9 @@ async def _render_admin_server(msg, session: AsyncSession, server: Server):
     sid = server.id
     is_susp = server.status == ServerStatus.SUSPENDED
     # جیکور: rebuild/تغییر IP/آیپی اضافه در API وجود ندارد → دکمه‌ها مخفی
+    # تایم‌وب: rebuild دارد ولی تغییر IP/آیپی اضافه در نسخه اول ارائه نمی‌شود
     _is_gcore = server.provider_type == ProviderType.GCORE
+    _no_ip_ops = server.provider_type in (ProviderType.GCORE, ProviderType.TIMEWEB)
     _rows = [
         [
             InlineKeyboardButton(text="روشن", callback_data=f"admin:usrva:{sid}:start"),
@@ -799,7 +801,7 @@ async def _render_admin_server(msg, session: AsyncSession, server: Server):
     _rows.append([InlineKeyboardButton(
         text=("رفع ساسپند" if is_susp else "ساسپند"),
         callback_data=f"admin:usrva:{sid}:{'unsuspend' if is_susp else 'suspend'}")])
-    if not _is_gcore:
+    if not _no_ip_ops:
         _rows.append([
             InlineKeyboardButton(text="تغییر IP", callback_data=f"admin:usrva:{sid}:change_ip"),
             InlineKeyboardButton(text="آیپی اضافه", callback_data=f"admin:usrva:{sid}:add_ip"),

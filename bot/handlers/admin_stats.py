@@ -397,6 +397,7 @@ async def cb_admin_finance(cb: CallbackQuery):
 async def cb_admin_exrate(cb: CallbackQuery, session: AsyncSession):
     usd = await _get_setting(session, "np_usd_to_irt_rate", "")
     eur = await _get_setting(session, "np_eur_to_irt_rate", "")
+    rub = await _get_setting(session, "np_rub_to_irt_rate", "")
     updated = await _get_setting(session, "exrate_updated_at", "")
 
     def _fmt(v: str) -> str:
@@ -409,6 +410,8 @@ async def cb_admin_exrate(cb: CallbackQuery, session: AsyncSession):
         "<b>نرخ ارز</b>\n",
         f"دلار آمریکا: <b>{_fmt(usd)}</b>",
         f"یورو: <b>{_fmt(eur)}</b>",
+        # روبل (بیلینگ تایم‌وب) — خودکار از نوسان یا دستی از پنل تایم‌وب
+        f"روبل: <b>{_fmt(rub)}</b>",
     ]
     if updated:
         lines.append(f"\n<i>آخرین بروزرسانی: {updated}</i>")

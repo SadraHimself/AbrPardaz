@@ -1310,6 +1310,68 @@ def _app_fits_plan(plan: ServerPlan, req: dict) -> tuple[bool, str]:
     return True, ""
 
 
+# وایت‌لیست برنامه‌های مارکت‌پلیس تایم‌وب (تصمیم 2026-07-25) — به ترتیب نمایش.
+# تطبیق با نام نرمال‌شده (حروف کوچک، فقط حرف/رقم) تا تفاوت فاصله/کیس مهم نباشد.
+_TW_APP_ORDER = [
+    "minecraftbe", "minecraftje", "wordpress", "n8n",
+    "openclaw", "rocketchat", "nextcloud", "uptimekuma",
+    "grafana", "openvpn", "l2tp", "ispmanager6host",
+]
+_APP_PAGE_SIZE = 8   # ۴ ردیف دوتایی در هر صفحه
+
+
+def _norm_app(s: str) -> str:
+    return "".join(ch for ch in (s or "").lower() if ch.isalnum())
+
+
+async def _render_apps_page(msg, state: FSMContext, page: int = 0):
+    """صفحه‌ی برنامه‌ها — ۲×۴ + ناوبری فقط-اموجی (همان الگوی لیست ارائه‌دهنده‌ها)."""
+    data = await state.get_data()
+    meta = data.get("app_meta") or {}
+    order = [aid for aid in (data.get("app_order") or []) if aid in meta]
+    entries = [(aid, meta[aid][0]) for aid in order]
+    if not entries:
+        await msg.edit_text("فعلاً برنامه‌ای در دسترس نیست.")
+        return
+    total_pages = (len(entries) + _APP_PAGE_SIZE - 1) // _APP_PAGE_SIZE
+    page = max(0, min(page, total_pages - 1))
+    page_entries = entries[page * _APP_PAGE_SIZE:(page + 1) * _APP_PAGE_SIZE]
+
+    builder = InlineKeyboardBuilder()
+    for aid, name in page_entries:
+        builder.button(text=name, callback_data=f"buyapp:{aid}")
+    app_rows = [2] * (len(page_entries) // 2) + ([1] if len(page_entries) % 2 else [])
+    nav_rows = []
+    if total_pages > 1:
+        if page > 0:
+            builder.button(text=_NAV_BLANK, callback_data=f"buyapppg:{page - 1}",
+                           **{"icon_custom_emoji_id": _NAV_PREV_EMOJI})
+        else:
+            builder.button(text=_NAV_BLANK, callback_data="buyapppg:noop",
+                           **{"icon_custom_emoji_id": _NAV_EDGE_EMOJI})
+        if page < total_pages - 1:
+            builder.button(text=_NAV_BLANK, callback_data=f"buyapppg:{page + 1}",
+                           **{"icon_custom_emoji_id": _NAV_NEXT_EMOJI})
+        else:
+            builder.button(text=_NAV_BLANK, callback_data="buyapppg:noop",
+                           **{"icon_custom_emoji_id": _NAV_EDGE_EMOJI})
+        nav_rows = [2]
+    builder.adjust(*app_rows, *nav_rows)
+    if data.get("software_name"):
+        builder.row(InlineKeyboardButton(text="بدون برنامه", callback_data="buyapp:none"))
+    builder.row(InlineKeyboardButton(
+        text="بازگشت به سیستم‌عامل‌ها", callback_data="buyapps_back",
+        **{"icon_custom_emoji_id": "5258236805890710909"}))
+    await msg.edit_text(
+        '<tg-emoji emoji-id="5346001318668419220">📦</tg-emoji> '
+        "<b>برنامه‌ها</b>\n\n"
+        "برنامه موردنظر هنگام ساخت به‌صورت خودکار روی سرور نصب می‌شود.\n"
+        "بعد از انتخاب، فقط سیستم‌عامل‌های سازگار با همان برنامه نمایش داده می‌شوند:",
+        parse_mode="HTML",
+        reply_markup=builder.as_markup(),
+    )
+
+
 @router.callback_query(BuyServerStates.selecting_os, F.data == "buyapps")
 async def cb_buy_apps(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
     """برنامه‌های مارکت‌پلیس تایم‌وب — نصب خودکار روی سرور هنگام ساخت."""
@@ -1326,31 +1388,27 @@ async def cb_buy_apps(cb: CallbackQuery, user: User, state: FSMContext, session:
     except Exception as e:
         await cb.message.answer(f"{ERR} خطا در دریافت برنامه‌ها: {_esc(e)}", parse_mode="HTML")
         return
-    if not apps:
+    # فقط وایت‌لیست، به ترتیب تعریف‌شده — بقیه‌ی مارکت‌پلیس نمایش داده نمی‌شود
+    by_norm = {_norm_app(a["name"]): a for a in apps}
+    picked = [by_norm[k] for k in _TW_APP_ORDER if k in by_norm]
+    if not picked:
         await cb.answer("فعلاً برنامه‌ای در مارکت‌پلیس موجود نیست.", show_alert=True)
         return
-    apps = apps[:30]
-    # متادیتای هر برنامه در FSM: [نام، OSهای مجاز، requirements]
+    # متادیتای هر برنامه در FSM: [نام، OSهای مجاز، requirements] + ترتیب نمایش
     app_meta = {a["id"]: [a["name"], a["os_ids"], a.get("requirements") or {}]
-                for a in apps}
-    await state.update_data(app_meta=app_meta)
-    builder = InlineKeyboardBuilder()
-    for a in apps:
-        builder.button(text=a["name"], callback_data=f"buyapp:{a['id']}")
-    builder.adjust(2)
-    if data.get("software_name"):
-        builder.row(InlineKeyboardButton(text="بدون برنامه", callback_data="buyapp:none"))
-    builder.row(InlineKeyboardButton(
-        text="بازگشت به سیستم‌عامل‌ها", callback_data="buyapps_back",
-        **{"icon_custom_emoji_id": "5258236805890710909"}))
-    await cb.message.edit_text(
-        '<tg-emoji emoji-id="5346001318668419220">📦</tg-emoji> '
-        "<b>برنامه‌ها</b>\n\n"
-        "برنامه موردنظر هنگام ساخت به‌صورت خودکار روی سرور نصب می‌شود.\n"
-        "بعد از انتخاب، فقط سیستم‌عامل‌های سازگار با همان برنامه نمایش داده می‌شوند:",
-        parse_mode="HTML",
-        reply_markup=builder.as_markup(),
-    )
+                for a in picked}
+    await state.update_data(app_meta=app_meta, app_order=[a["id"] for a in picked])
+    await _render_apps_page(cb.message, state, page=0)
+
+
+@router.callback_query(BuyServerStates.selecting_os, F.data.startswith("buyapppg:"))
+async def cb_buy_apps_page(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
+    arg = cb.data.split(":")[1]
+    if arg == "noop":
+        await cb.answer()
+        return
+    await _render_apps_page(cb.message, state, page=int(arg))
+    await cb.answer()
 
 
 @router.callback_query(BuyServerStates.selecting_os, F.data == "buyapps_back")

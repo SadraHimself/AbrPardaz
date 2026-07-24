@@ -1182,7 +1182,7 @@ async def _ask_os(cb: CallbackQuery, state: FSMContext, session: AsyncSession, u
     if account and account.provider_type == ProviderType.TIMEWEB:
         builder.row(InlineKeyboardButton(
             text="برنامه‌ها", callback_data="buyapps",
-            **{"icon_custom_emoji_id": "5348183286608840968"}))
+            **{"icon_custom_emoji_id": "5346001318668419220"}))
     # بازگشت: دکمه‌ی مستقل تمام-عرض پایین لیست (نه داخل شبکه‌ی دوستونه)
     builder.row(InlineKeyboardButton(
         text="بازگشت به منو", callback_data="cancel",
@@ -1254,7 +1254,7 @@ async def _ask_os_message(message: Message, state: FSMContext, session: AsyncSes
     if account and account.provider_type == ProviderType.TIMEWEB:
         builder.row(InlineKeyboardButton(
             text="برنامه‌ها", callback_data="buyapps",
-            **{"icon_custom_emoji_id": "5348183286608840968"}))
+            **{"icon_custom_emoji_id": "5346001318668419220"}))
     # بازگشت: دکمه‌ی مستقل تمام-عرض پایین لیست (نه داخل شبکه‌ی دوستونه)
     builder.row(InlineKeyboardButton(
         text="بازگشت به منو", callback_data="cancel",
@@ -1344,7 +1344,7 @@ async def cb_buy_apps(cb: CallbackQuery, user: User, state: FSMContext, session:
         text="بازگشت به سیستم‌عامل‌ها", callback_data="buyapps_back",
         **{"icon_custom_emoji_id": "5258236805890710909"}))
     await cb.message.edit_text(
-        '<tg-emoji emoji-id="5348183286608840968">➕</tg-emoji> '
+        '<tg-emoji emoji-id="5346001318668419220">📦</tg-emoji> '
         "<b>برنامه‌ها</b>\n\n"
         "برنامه موردنظر هنگام ساخت به‌صورت خودکار روی سرور نصب می‌شود.\n"
         "بعد از انتخاب، فقط سیستم‌عامل‌های سازگار با همان برنامه نمایش داده می‌شوند:",

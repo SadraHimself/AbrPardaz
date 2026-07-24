@@ -930,10 +930,21 @@ async def cb_select_plan(cb: CallbackQuery, state: FSMContext, session: AsyncSes
         await cb.answer("محصول یافت نشد.", show_alert=True)
         return
 
+    # فلگ‌های فلوی تایم‌وب با هر انتخاب پلن ریست می‌شوند تا از تلاش قبلی
+    # (مثلاً مرور تایم‌وب و بعد خرید هتزنر) حالت کهنه نماند
     await state.update_data(
         plan_id=plan_id,
         provider_account_id=plan.provider_account_id,
+        late_billing=False, software_id=None, software_name=None, app_os_ids=None,
     )
+
+    # تایم‌وب (تصمیم 2026-07-24): چرخه بیلینگ «بعد از» نام/OS/برنامه انتخاب
+    # می‌شود — اول نام سرور، بعد OS (+ برنامه‌های مارکت‌پلیس)، آخر ساعتی/ماهانه
+    if plan.provider_type == ProviderType.TIMEWEB:
+        await state.update_data(billing=None, late_billing=True)
+        await _ask_hostname(cb, state)
+        await cb.answer()
+        return
 
     # Determine available billing types
     has_hourly = bool(plan.price_hourly)
@@ -979,10 +990,71 @@ async def cb_select_plan(cb: CallbackQuery, state: FSMContext, session: AsyncSes
 
 
 @router.callback_query(BuyServerStates.selecting_billing, F.data.startswith("buybilling:"))
-async def cb_select_billing(cb: CallbackQuery, state: FSMContext):
+async def cb_select_billing(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
     billing = cb.data.split(":")[1]
     await state.update_data(billing=billing)
+    data = await state.get_data()
+    if data.get("late_billing"):
+        # فلوی تایم‌وب: بیلینگ آخرین مرحله است → مستقیم تخفیف/تأیید
+        if billing == "hourly":
+            await state.update_data(discount_id=None, discount_percent=0)
+            await _ask_email_or_confirm(cb.message, state, session, user)
+        else:
+            await _ask_discount(cb, state)
+        await cb.answer()
+        return
     await _ask_hostname(cb, state)
+    await cb.answer()
+
+
+async def _ask_billing_late(target, state: FSMContext, session: AsyncSession,
+                            from_message: bool = False):
+    """مرحله‌ی بیلینگ برای فلوی تایم‌وب — بعد از انتخاب OS/برنامه.
+    قیمت‌ها با نرخ روز به تومان نمایش داده می‌شوند؛ بازگشت → لیست OSها."""
+    data = await state.get_data()
+    plan = await session.get(ServerPlan, data.get("plan_id"))
+    if not plan:
+        await (target.answer if from_message else target.edit_text)("محصول یافت نشد.")
+        await state.clear()
+        return
+    _cur = obj_currency(plan)
+    hourly_t = plan.price_hourly or 0
+    monthly_t = plan.price_monthly or 0
+    if _cur != "irt":
+        hourly_t = await to_toman(session, hourly_t, _cur) if hourly_t else 0
+        monthly_t = await to_toman(session, monthly_t, _cur) if monthly_t else 0
+        if (plan.price_hourly and hourly_t <= 0) or (plan.price_monthly and monthly_t <= 0):
+            await (target.answer if from_message else target.edit_text)(
+                "نرخ ارز هنوز تنظیم نشده. کمی بعد دوباره تلاش کنید.")
+            return
+    app_line = f"\nبرنامه: {data['software_name']}" if data.get("software_name") else ""
+    rows = []
+    if plan.price_hourly:
+        rows.append([InlineKeyboardButton(
+            text=f"ساعتی — {hourly_t:,.0f} تومان", callback_data="buybilling:hourly",
+            **{"icon_custom_emoji_id": "5798535677318533269"})])
+    if plan.price_monthly:
+        rows.append([InlineKeyboardButton(
+            text=f"ماهانه — {monthly_t:,.0f} تومان", callback_data="buybilling:monthly",
+            **{"icon_custom_emoji_id": "5778496382117613636"})])
+    rows.append([InlineKeyboardButton(
+        text="بازگشت", callback_data="buyos_back",
+        **{"icon_custom_emoji_id": "5258236805890710909", "style": "primary"})])
+    await state.set_state(BuyServerStates.selecting_billing)
+    text = (f"نوع بیلینگ را انتخاب کنید:\n"
+            f"پلن: {plan.display_name or plan.name}"
+            f"{app_line}")
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+    if from_message:
+        await target.answer(text, reply_markup=kb)
+    else:
+        await target.edit_text(text, reply_markup=kb)
+
+
+@router.callback_query(BuyServerStates.selecting_billing, F.data == "buyos_back")
+async def cb_buyos_back(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
+    """بازگشت از مرحله بیلینگ (فلوی تایم‌وب) به لیست سیستم‌عامل‌ها."""
+    await _ask_os(cb, state, session, user)
     await cb.answer()
 
 
@@ -1041,8 +1113,12 @@ async def _fetch_os_list(session: AsyncSession, account: ProviderAccount, data: 
             prov.list_os_templates(location=str(_rid)), timeout=20)
     if account.provider_type == ProviderType.TIMEWEB:
         # تایم‌وب: لیست OS سراسری است؛ دیسک تعرفه ثابت است (بامپ ندارد) →
-        # OSهایی که min_disk شان از دیسک پلن بیشتر است نمایش داده نمی‌شوند
-        os_list = await asyncio.wait_for(prov.list_os_templates(), timeout=20)
+        # OSهایی که min_disk شان از دیسک پلن بیشتر است نمایش داده نمی‌شوند.
+        # اگر برنامه مارکت‌پلیس انتخاب شده، فقط OSهای مجاز همان برنامه (os_ids)
+        _only = data.get("app_os_ids")
+        os_list = await asyncio.wait_for(
+            prov.list_os_templates(only_ids=set(_only) if _only else None),
+            timeout=20)
         _plan = await session.get(ServerPlan, data.get("plan_id"))
         _disk = int(_plan.disk or 0) if _plan else 0
         if _disk:
@@ -1079,7 +1155,9 @@ async def _ask_os(cb: CallbackQuery, state: FSMContext, session: AsyncSession, u
             if _plan and (_plan.extra_data or {}).get("osid"):
                 plan_osid = str(_plan.extra_data["osid"])
         await state.update_data(os_id=plan_osid or "", os_name="پیش‌فرض")
-        if data.get("billing") == "hourly":
+        if data.get("late_billing"):
+            await _ask_billing_late(cb.message, state, session)
+        elif data.get("billing") == "hourly":
             await state.update_data(discount_id=None, discount_percent=0)
             await _ask_email_or_confirm(cb.message, state, session, user)
         else:
@@ -1100,13 +1178,22 @@ async def _ask_os(cb: CallbackQuery, state: FSMContext, session: AsyncSession, u
     for os_item in os_list[:20]:
         builder.button(text=os_item["name"], callback_data=f"buyos:{os_item['id']}")
     builder.adjust(2)
+    # تایم‌وب: برنامه‌های مارکت‌پلیس (نصب خودکار روی سرور) — دکمه مستقل بالای بازگشت
+    if account and account.provider_type == ProviderType.TIMEWEB:
+        builder.row(InlineKeyboardButton(
+            text="برنامه‌ها", callback_data="buyapps",
+            **{"icon_custom_emoji_id": "5348183286608840968"}))
     # بازگشت: دکمه‌ی مستقل تمام-عرض پایین لیست (نه داخل شبکه‌ی دوستونه)
     builder.row(InlineKeyboardButton(
         text="بازگشت به منو", callback_data="cancel",
         **{"icon_custom_emoji_id": "5258236805890710909"}))
 
+    _app_note = (f"\nبرنامه انتخابی: <b>{data['software_name']}</b> — "
+                 "فقط سیستم‌عامل‌های سازگار نمایش داده شده‌اند"
+                 if data.get("software_name") else "")
     await cb.message.edit_text(
-        '<tg-emoji emoji-id="4916105371858240403">🖱</tg-emoji> یک OS برای سرور انتخاب کنید',
+        '<tg-emoji emoji-id="4916105371858240403">🖱</tg-emoji> یک OS برای سرور انتخاب کنید'
+        + _app_note,
         parse_mode="HTML",
         reply_markup=builder.as_markup(),
     )
@@ -1133,7 +1220,9 @@ async def _ask_os_message(message: Message, state: FSMContext, session: AsyncSes
             if _plan and (_plan.extra_data or {}).get("osid"):
                 plan_osid = str(_plan.extra_data["osid"])
         await state.update_data(os_id=plan_osid or "", os_name="پیش‌فرض")
-        if data.get("billing") == "hourly":
+        if data.get("late_billing"):
+            await _ask_billing_late(message, state, session, from_message=True)
+        elif data.get("billing") == "hourly":
             await state.update_data(discount_id=None, discount_percent=0)
             await _ask_email_or_confirm(message, state, session, user, from_message=True)
         else:
@@ -1161,13 +1250,22 @@ async def _ask_os_message(message: Message, state: FSMContext, session: AsyncSes
     for os_item in os_list[:20]:
         builder.button(text=os_item["name"], callback_data=f"buyos:{os_item['id']}")
     builder.adjust(2)
+    # تایم‌وب: برنامه‌های مارکت‌پلیس — دکمه مستقل بالای بازگشت
+    if account and account.provider_type == ProviderType.TIMEWEB:
+        builder.row(InlineKeyboardButton(
+            text="برنامه‌ها", callback_data="buyapps",
+            **{"icon_custom_emoji_id": "5348183286608840968"}))
     # بازگشت: دکمه‌ی مستقل تمام-عرض پایین لیست (نه داخل شبکه‌ی دوستونه)
     builder.row(InlineKeyboardButton(
         text="بازگشت به منو", callback_data="cancel",
         **{"icon_custom_emoji_id": "5258236805890710909"}))
 
+    _app_note = (f"\nبرنامه انتخابی: <b>{data['software_name']}</b> — "
+                 "فقط سیستم‌عامل‌های سازگار نمایش داده شده‌اند"
+                 if data.get("software_name") else "")
     await message.answer(
-        '<tg-emoji emoji-id="4916105371858240403">🖱</tg-emoji> یک OS برای سرور انتخاب کنید',
+        '<tg-emoji emoji-id="4916105371858240403">🖱</tg-emoji> یک OS برای سرور انتخاب کنید'
+        + _app_note,
         parse_mode="HTML",
         reply_markup=builder.as_markup(),
     )
@@ -1184,12 +1282,135 @@ async def cb_select_os(cb: CallbackQuery, user: User, state: FSMContext, session
                             os_min_disk=int(_meta[0] or 0),
                             os_lic_h=float(_meta[1] or 0),
                             os_is_win=bool(_meta[2] if len(_meta) > 2 else 0))
-    if data.get("billing") == "hourly":
+    if data.get("late_billing"):
+        # فلوی تایم‌وب: بعد از OS/برنامه نوبت انتخاب چرخه بیلینگ است
+        await _ask_billing_late(cb.message, state, session)
+    elif data.get("billing") == "hourly":
         await state.update_data(discount_id=None, discount_percent=0)
         await _ask_email_or_confirm(cb.message, state, session, user)
     else:
         await _ask_discount(cb, state)
     await cb.answer()
+
+
+def _app_fits_plan(plan: ServerPlan, req: dict) -> tuple[bool, str]:
+    """چک حداقل منابع برنامه مارکت‌پلیس روی پلن انتخابی.
+    واحدهای requirements در اسپک تایم‌وب مبهم‌اند — عدد بزرگ = MB، کوچک = GB/هسته."""
+    ram_min = int(req.get("ram_min") or 0)
+    ram_mb = ram_min if ram_min >= 256 else ram_min * 1024
+    cpu_min = int(req.get("cpu_min") or 0)
+    disk_min = int(req.get("disk_min") or 0)
+    disk_gb = disk_min // 1024 if disk_min >= 1024 else disk_min
+    if ram_mb and (plan.ram or 0) < ram_mb:
+        return False, f"حداقل {max(ram_mb // 1024, 1)} گیگ رم"
+    if cpu_min and (plan.cpu or 0) < cpu_min:
+        return False, f"حداقل {cpu_min} هسته پردازنده"
+    if disk_gb and (plan.disk or 0) < disk_gb:
+        return False, f"حداقل {disk_gb} گیگ دیسک"
+    return True, ""
+
+
+@router.callback_query(BuyServerStates.selecting_os, F.data == "buyapps")
+async def cb_buy_apps(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
+    """برنامه‌های مارکت‌پلیس تایم‌وب — نصب خودکار روی سرور هنگام ساخت."""
+    data = await state.get_data()
+    account = await session.get(ProviderAccount, data.get("provider_account_id")) \
+        if data.get("provider_account_id") else None
+    if not account or account.provider_type != ProviderType.TIMEWEB:
+        await cb.answer("برنامه‌ها برای این سرویس‌دهنده در دسترس نیست.", show_alert=True)
+        return
+    await cb.answer("در حال دریافت برنامه‌ها...")
+    try:
+        import asyncio as _aio
+        apps = await _aio.wait_for(get_provider(account).list_software(), timeout=20)
+    except Exception as e:
+        await cb.message.answer(f"{ERR} خطا در دریافت برنامه‌ها: {_esc(e)}", parse_mode="HTML")
+        return
+    if not apps:
+        await cb.answer("فعلاً برنامه‌ای در مارکت‌پلیس موجود نیست.", show_alert=True)
+        return
+    apps = apps[:30]
+    # متادیتای هر برنامه در FSM: [نام، OSهای مجاز، requirements]
+    app_meta = {a["id"]: [a["name"], a["os_ids"], a.get("requirements") or {}]
+                for a in apps}
+    await state.update_data(app_meta=app_meta)
+    builder = InlineKeyboardBuilder()
+    for a in apps:
+        builder.button(text=a["name"], callback_data=f"buyapp:{a['id']}")
+    builder.adjust(2)
+    if data.get("software_name"):
+        builder.row(InlineKeyboardButton(text="بدون برنامه", callback_data="buyapp:none"))
+    builder.row(InlineKeyboardButton(
+        text="بازگشت به سیستم‌عامل‌ها", callback_data="buyapps_back",
+        **{"icon_custom_emoji_id": "5258236805890710909"}))
+    await cb.message.edit_text(
+        '<tg-emoji emoji-id="5348183286608840968">➕</tg-emoji> '
+        "<b>برنامه‌ها</b>\n\n"
+        "برنامه موردنظر هنگام ساخت به‌صورت خودکار روی سرور نصب می‌شود.\n"
+        "بعد از انتخاب، فقط سیستم‌عامل‌های سازگار با همان برنامه نمایش داده می‌شوند:",
+        parse_mode="HTML",
+        reply_markup=builder.as_markup(),
+    )
+
+
+@router.callback_query(BuyServerStates.selecting_os, F.data == "buyapps_back")
+async def cb_buy_apps_back(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
+    """بازگشت از لیست برنامه‌ها به سیستم‌عامل‌ها — بدون تغییر انتخاب فعلی."""
+    await _ask_os(cb, state, session, user)
+    await cb.answer()
+
+
+@router.callback_query(BuyServerStates.selecting_os, F.data.startswith("buyapp:"))
+async def cb_buy_app(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
+    app_id = cb.data.split(":")[1]
+    if app_id == "none":
+        # بدون برنامه — برگشت به لیست کامل سیستم‌عامل‌ها
+        await state.update_data(software_id=None, software_name=None, app_os_ids=None)
+        await _ask_os(cb, state, session, user)
+        await cb.answer()
+        return
+    data = await state.get_data()
+    meta = (data.get("app_meta") or {}).get(app_id)
+    if not meta:
+        await cb.answer("برنامه یافت نشد — دوباره از «برنامه‌ها» انتخاب کنید.", show_alert=True)
+        return
+    app_name, os_ids, req = meta[0], list(meta[1] or []), (meta[2] if len(meta) > 2 else {}) or {}
+    plan = await session.get(ServerPlan, data.get("plan_id")) if data.get("plan_id") else None
+    # چک حداقل منابع برنامه — نصب روی پلن ضعیف از همین‌جا مسدود می‌شود
+    if plan:
+        ok, need = _app_fits_plan(plan, req)
+        if not ok:
+            await cb.answer(
+                f"برنامه {app_name} {need} لازم دارد و با این پلن سازگار نیست — "
+                "پلن بزرگ‌تری انتخاب کنید.",
+                show_alert=True,
+            )
+            return
+    if not os_ids:
+        await cb.answer("سیستم‌عامل سازگاری برای این برنامه اعلام نشده است.", show_alert=True)
+        return
+    # پیش‌چک: بعد از فیلتر min_disk، حداقل یک OS سازگار باقی بماند —
+    # وگرنه state دست نمی‌خورد و کاربر در همان لیست برنامه‌ها می‌ماند
+    account = await session.get(ProviderAccount, data.get("provider_account_id")) \
+        if data.get("provider_account_id") else None
+    if account:
+        try:
+            _trial = dict(data)
+            _trial["app_os_ids"] = os_ids
+            if not await _fetch_os_list(session, account, _trial):
+                await cb.answer(
+                    f"سیستم‌عامل‌های برنامه {app_name} با دیسک این پلن سازگار "
+                    "نیستند — پلن بزرگ‌تری انتخاب کنید.",
+                    show_alert=True,
+                )
+                return
+        except Exception:
+            pass
+    await state.update_data(software_id=app_id, software_name=app_name,
+                            app_os_ids=os_ids)
+    # لیست OSها این بار فیلترشده به OSهای مجازِ برنامه رندر می‌شود
+    await _ask_os(cb, state, session, user)
+    await cb.answer(f"برنامه: {app_name}")
 
 
 async def _ask_discount(cb: CallbackQuery, state: FSMContext):
@@ -1317,11 +1538,13 @@ async def _show_confirm(msg, state: FSMContext, session, from_message=False, use
 
     hostname_line = f"• نام سرور: {data['hostname']}\n" if data.get("hostname") else ""
     os_line = f"• سیستم‌عامل: {data.get('os_name', '')}\n" if data.get("os_name") else ""
+    app_line = (f"• برنامه: {data['software_name']} (نصب خودکار)\n"
+                if data.get("software_name") else "")
     discount_line = f"• تخفیف: {discount_pct:.0f}% (قیمت اصلی: {base_price:,.0f} T)\n" if discount_pct else ""
-    # محصولات فقط-ساعتی (جیکور): معادل یک ماه (۷۲۰ ساعت) هم نمایش داده می‌شود —
-    # بیلینگ همچنان ساعتی است، این فقط برآورد ماهانه برای مقایسه است
+    # خرید ساعتی: معادل یک ماه (۷۲۰ ساعت) هم نمایش داده می‌شود — بیلینگ
+    # همچنان ساعتی است، این فقط برآورد ماهانه برای مقایسه است
     monthly_line = ""
-    if billing == "hourly" and not plan.price_monthly and final_price:
+    if billing == "hourly" and final_price:
         monthly_line = f"• قیمت ماهانه (۷۲۰ ساعت): <b>{final_price * 720:,.0f} تومان</b>\n"
 
     text = (
@@ -1332,7 +1555,8 @@ async def _show_confirm(msg, state: FSMContext, session, from_message=False, use
         f"• ترافیک: {_traffic_desc(plan)}\n"
         f"• موقعیت: {plan.location or 'نامشخص'}\n"
         f"{hostname_line}"
-        f"{os_line}\n"
+        f"{os_line}"
+        f"{app_line}\n"
         f"{discount_line}"
         f"• قیمت نهایی: <b>{final_price:,.0f} {price_unit}</b>\n"
         f"{monthly_line}"
@@ -1447,9 +1671,12 @@ def _traffic_desc(plan: ServerPlan) -> str:
 def _delivery_text(server: Server, plan_name: str, password: str) -> str:
     """پیام تحویل سرویس — یوزرنیم واقعی از provider (root/Admin/...)؛ پیش‌فرض root."""
     username = (server.extra_data or {}).get("username") or "root"
+    software = (server.extra_data or {}).get("software")
+    app_line = f"• برنامه: {software} (نصب خودکار)\n" if software else ""
     return (
         f'<tg-emoji emoji-id="5397916757333654639">➕</tg-emoji> <b>سرور {server.name} آماده است!</b>\n\n'
         f"• پلن: {plan_name}\n"
+        f"{app_line}"
         f"• آیپی: <code>{server.ip_address or 'در حال تخصیص...'}</code>\n"
         f"• یوزرنیم: <code>{username}</code>\n"
         f"• پسورد: <code>{password}</code>\n"
@@ -1481,7 +1708,9 @@ async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: 
                                 root_password: str, final_price: float,
                                 disk_gb: int = 0,
                                 price_addon_hourly: float = 0.0,
-                                flavor_override: str | None = None) -> None:
+                                flavor_override: str | None = None,
+                                software_id: str | None = None,
+                                software_name: str | None = None) -> None:
     """ساخت و تحویل در پس‌زمینه (جیکور — ساخت طولانی است و نباید هندلر را بلاک کند).
 
     سشن مستقل باز می‌شود چون سشن هندلر با پایان هندلر بسته می‌شود.
@@ -1517,6 +1746,9 @@ async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: 
                 if flavor_override:
                     # ویندوز: flavor دوقلوی ویندوزی (g2w-…) — الزام API جیکور
                     _create_extra["flavor_override"] = flavor_override
+                if software_id:
+                    # برنامه مارکت‌پلیس تایم‌وب — نصب خودکار هنگام ساخت
+                    _create_extra["software_id"] = software_id
                 server = await svc.create_server(
                     user=user, plan=plan, os_id=os_id, billing_type=billing_type,
                     hostname=hostname, extra=_create_extra,
@@ -1532,6 +1764,8 @@ async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: 
                         server.price_hourly = float(server.price_hourly) + price_addon_hourly
                 if disk_gb and disk_gb != int(server.disk or 0):
                     server.disk = disk_gb
+                if software_name:
+                    _extra["software"] = software_name
                 server.extra_data = _extra
                 await session.flush()
                 plan_name = plan.display_name or plan.name
@@ -1652,6 +1886,8 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
             final_price=float(final_price or 0),
             disk_gb=gc_disk_used, price_addon_hourly=gc_addon_h,
             flavor_override=gc_flavor_override,
+            software_id=data.get("software_id"),
+            software_name=data.get("software_name"),
         )))
         return
 

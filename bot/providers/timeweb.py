@@ -231,6 +231,11 @@ class TimewebProvider(BaseProvider):
                 body["bandwidth"] = max(100, min(1000, int(_mbit)))
         except (TypeError, ValueError):
             pass
+        # برنامه مارکت‌پلیس (اختیاری) — سازگاری OS در فلوی خرید با os_ids خود
+        # برنامه فیلتر شده؛ نصبش وضعیت software_install دارد و زمان‌برتر است
+        software_id = params.extra.get("software_id")
+        if software_id:
+            body["software_id"] = int(software_id)
         labels = params.extra.get("labels") or {}
         if labels.get("tg_user_id"):
             body["comment"] = f"abrpardaz tg:{labels['tg_user_id']}"
@@ -256,9 +261,11 @@ class TimewebProvider(BaseProvider):
         # ساخت تراکنشی: شکست/مهلت → سرور نیمه‌ساخته حذف شود تا بیل نخورد.
         try:
             # ۷۲۰s نصب + ≤۱۸۰s تضمین IP ≈ سقف ۱۵ دقیقه — هم‌راستا با قول
-            # «۱۰ تا ۱۵ دقیقه» به مشتری؛ بعدش لغو سایلنت + برگشت کامل وجه
+            # «۱۰ تا ۱۵ دقیقه» به مشتری؛ بعدش لغو سایلنت + برگشت کامل وجه.
+            # با برنامه مارکت‌پلیس نصب طولانی‌تر است → ۹۰۰s
             fresh = await self._wait_status(
-                str(server_id), {"on"}, timeout_s=720, need_root_pass=True,
+                str(server_id), {"on"},
+                timeout_s=(900 if software_id else 720), need_root_pass=True,
                 fail_on={"no_paid", "blocked", "permanent_blocked"})
         except Exception:
             try:
@@ -495,16 +502,41 @@ class TimewebProvider(BaseProvider):
                 return p
         return None
 
-    async def list_os_templates(self, location: Optional[str] = None) -> list[dict]:
+    async def list_software(self) -> list[dict]:
+        """برنامه‌های مارکت‌پلیس (ПО) — با لیست OSهای مجاز هر برنامه (os_ids)
+        و حداقل منابع (requirements). مرتب بر اساس محبوبیت (installations)."""
+        data = await self._request("GET", "/api/v1/software/servers")
+        out = []
+        for s in data.get("servers_software") or []:
+            if not s.get("id") or not s.get("name"):
+                continue
+            out.append({
+                "id": str(s.get("id")),
+                "name": s.get("name") or "",
+                "os_ids": [str(i) for i in (s.get("os_ids") or [])],
+                "installations": int(s.get("installations") or 0),
+                "requirements": s.get("requirements") or {},
+            })
+        out.sort(key=lambda x: (-x["installations"], x["name"].lower()))
+        return out
+
+    async def list_os_templates(self, location: Optional[str] = None,
+                                only_ids: Optional[set] = None) -> list[dict]:
         """OSها (سراسری — per-region نیست). خلوت‌سازی مثل جیکور: ubuntu و
         windows همه‌ی نسخه‌ها؛ بقیه فقط جدیدترین. bitrix/brainycp (لایسنس‌دار
         بدون قیمت در API) حذف. min_disk به GB برای گِیت دیسک پلن در فلوی خرید
-        (واحد requirements در اسپک مبهم است — MB فرض شده)."""
+        (واحد requirements در اسپک مبهم است — MB فرض شده).
+
+        only_ids: فقط همین IDها برگردند (OSهای مجازِ یک برنامه‌ی مارکت‌پلیس) —
+        در این حالت خلوت‌سازی اعمال نمی‌شود تا نسخه‌ی سازگارِ برنامه حذف نشود."""
         data = await self._request("GET", "/api/v1/os/servers")
         result = []
         for os_ in data.get("servers_os") or []:
             name = (os_.get("name") or "").lower()
-            if name in _OS_EXCLUDED:
+            if only_ids is not None:
+                if str(os_.get("id")) not in only_ids:
+                    continue
+            elif name in _OS_EXCLUDED:
                 continue
             version = str(os_.get("version") or "").strip()
             try:
@@ -521,6 +553,11 @@ class TimewebProvider(BaseProvider):
                 "_flavor": name,
                 "_ver": ver,
             })
+        if only_ids is not None:
+            # لیست OSهای مجاز برنامه — بدون خلوت‌سازی، فقط مرتب‌سازی
+            result.sort(key=lambda o: (_OS_PRIORITY.get(o["_flavor"], 5),
+                                       o["_flavor"], -o["_ver"]))
+            return result
         latest: dict = {}
         curated: list[dict] = []
         for o in result:

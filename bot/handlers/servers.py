@@ -461,10 +461,11 @@ async def cb_server_rebuild_do(cb: CallbackQuery, user: User, session: AsyncSess
             server.extra_data = _extra
             await session.flush()
             await cb.message.answer(
-                f"✅ <b>ریبیلد شروع شد.</b>\n\n"
-                f"🔑 رمز root جدید: <code>{real_pass}</code>\n\n"
+                '<tg-emoji emoji-id="4987757216040747796">💎</tg-emoji> '
+                "<b>ریبیلد شروع شد.</b>\n\n"
+                f"رمز root جدید: <code>{real_pass}</code>\n\n"
                 f"{WARN} این رمز را در جای امنی ذخیره کنید.\n"
-                "🔔 چند دقیقه منتظر نصب OS بمانید.",
+                "چند دقیقه منتظر نصب OS بمانید.",
                 parse_mode="HTML",
                 reply_markup=back_kb(f"server:{server_id}"),
             )

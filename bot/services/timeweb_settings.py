@@ -9,6 +9,7 @@ Navasan (np_rub_to_irt_rate) + قابل‌تنظیم دستی از پنل ادم
 from __future__ import annotations
 
 import logging
+import time
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +19,11 @@ from bot.database.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+# چون API تایم‌وب فیلد موجودی ندارد، ناموجودی را از «شکست ساخت به‌خاطر ظرفیت»
+# یاد می‌گیریم و پلن را برای این مدت مخفی می‌کنیم؛ بعدش خودکار دوباره برای فروش
+# باز می‌شود (auto-retry). اگر باز شکست خورد، دوباره کول‌داون می‌گیرد.
+_STOCK_COOLDOWN_S = 6 * 3600
 
 _KEY_MH = "timeweb_margin_hourly"
 _KEY_MM = "timeweb_margin_monthly"
@@ -109,6 +115,58 @@ async def apply_margins_to_catalog(session: AsyncSession) -> int:
             count += 1
     await session.flush()
     return count
+
+
+def is_capacity_error(err: str) -> bool:
+    """آیا شکست ساخت به‌خاطر نبود ظرفیت/صف‌شدن است (نه خطای دیگر)."""
+    e = (err or "")
+    return ("ظرفیت سرویس‌دهنده" in e or "مهلت انتظار" in e
+            or "no available resources" in e.lower())
+
+
+async def mark_plan_out_of_stock(session: AsyncSession, plan: ServerPlan) -> None:
+    """پلن تایم‌وب را «ناموجود» علامت بزن و از فروش مخفی کن (کول‌داون ۶ ساعته).
+    was_active نگه داشته می‌شود تا بعد از کول‌داون خودکار برگردد."""
+    extra = dict(plan.extra_data or {})
+    if not extra.get("out_of_stock"):
+        extra["was_active"] = plan.is_active
+    extra["out_of_stock"] = True
+    extra["stock_retry_at"] = int(time.time()) + _STOCK_COOLDOWN_S
+    plan.extra_data = extra
+    plan.is_active = False
+    await session.flush()
+    logger.info("timeweb plan %s marked out-of-stock (retry in 6h)", plan.provider_plan_id)
+
+
+async def mark_plan_in_stock(session: AsyncSession, plan: ServerPlan) -> None:
+    """پلن دوباره موجود شد (ساخت موفق یا فعال‌سازی دستی ادمین) — کول‌داون پاک."""
+    extra = dict(plan.extra_data or {})
+    if not extra.get("out_of_stock"):
+        return
+    extra.pop("out_of_stock", None)
+    extra.pop("stock_retry_at", None)
+    was = extra.pop("was_active", True)
+    plan.extra_data = extra
+    # فقط اگر ناموجودشدنِ سود/سینک آن را غیرفعال نکرده باشد
+    if not extra.get("unavailable"):
+        plan.is_active = bool(was) if plan.price_hourly or plan.price_monthly else False
+    await session.flush()
+
+
+async def restore_cooldown_passed(session: AsyncSession) -> int:
+    """پلن‌هایی که کول‌داونِ ناموجودی‌شان تمام شده را دوباره برای فروش باز کن
+    (auto-retry). در سینک دوره‌ای صدا زده می‌شود."""
+    now = int(time.time())
+    plans = (await session.execute(
+        select(ServerPlan).where(ServerPlan.provider_type == ProviderType.TIMEWEB)
+    )).scalars().all()
+    n = 0
+    for p in plans:
+        extra = p.extra_data or {}
+        if extra.get("out_of_stock") and int(extra.get("stock_retry_at") or 0) <= now:
+            await mark_plan_in_stock(session, p)
+            n += 1
+    return n
 
 
 async def get_account(session: AsyncSession) -> ProviderAccount | None:

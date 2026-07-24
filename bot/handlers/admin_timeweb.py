@@ -527,16 +527,51 @@ async def cb_tw_import(cb: CallbackQuery, session: AsyncSession):
     )
 
 
+def _plan_status_mark(plan: ServerPlan | None) -> str:
+    """نشانگر وضعیت پلن ایمپورت‌شده در پنل ادمین."""
+    if plan is None:
+        return "⬜"                              # ایمپورت‌نشده
+    extra = plan.extra_data or {}
+    if extra.get("out_of_stock"):
+        return "🚫"                              # ناموجودِ ظرفیت (کول‌داون، مخفی از فروش)
+    if extra.get("unavailable"):
+        return "⛔"                              # از کاتالوگ تایم‌وب حذف شده
+    return "✅" if plan.is_active else "☑️"       # فعال / ایمپورت‌شده‌ی غیرفعال (بی‌قیمت)
+
+
+import time as _time  # برای نمایش زمان بازگشایی کول‌داون
+
+# کش کوتاه‌مدت تعرفه‌های خام (description/tags) — یک‌بار به‌جای N فراخوانی
+_raw_presets_cache: dict = {}
+
+
+async def _raw_presets(account: ProviderAccount) -> dict:
+    """map از preset_id به آبجکت خام تعرفه (برای cpu_type/city) — کش ۵ دقیقه."""
+    cached = _raw_presets_cache.get(account.id)
+    now = _time.monotonic()
+    if cached and now - cached[0] < 300:
+        return cached[1]
+    data = await _prov(account)._request("GET", "/api/v1/presets/servers")
+    m = {str(p.get("id")): p for p in data.get("server_presets") or []}
+    _raw_presets_cache[account.id] = (now, m)
+    return m
+
+
 async def _render_tw_plans(msg, session: AsyncSession, account: ProviderAccount, loc: str):
+    from bot.providers.timeweb import cpu_type_from_preset
     plans = await _location_plans(account, loc)
     imported = await _imported_map(session, loc)
+    raw_map = await _raw_presets(account)
     rows = []
+    stock_note = ""
     for p in plans:
-        mark = "✅" if p.provider_plan_id in imported else "⬜"
+        db = imported.get(p.provider_plan_id)
+        mark = _plan_status_mark(db)
         ram_g = p.ram // 1024 if p.ram >= 1024 else p.ram
+        _tk, _tl = cpu_type_from_preset(raw_map.get(p.provider_plan_id) or {})
         rows.append([
             InlineKeyboardButton(
-                text=f"{mark} {p.cpu}c/{ram_g}G/{p.disk}G · ₽{p.price_monthly:g}",
+                text=f"{mark} {_tl} · {p.cpu}c/{ram_g}G/{p.disk}G · ₽{p.price_monthly:g}",
                 callback_data=f"admin:twpick:{loc}:{p.provider_plan_id}",
             ),
             InlineKeyboardButton(
@@ -544,27 +579,69 @@ async def _render_tw_plans(msg, session: AsyncSession, account: ProviderAccount,
                 callback_data=f"admin:twinfo:{loc}:{p.provider_plan_id}",
             ),
         ])
-    # ایمپورت‌شده‌هایی که دیگر عرضه نمی‌شوند — قابل حذف بمانند
+    # ایمپورت‌شده‌هایی که دیگر عرضه نمی‌شوند یا ناموجودِ ظرفیت‌اند
     shown = {p.provider_plan_id for p in plans}
+    now = int(_time.time())
     for pid in sorted(imported):
-        if pid in shown:
-            continue
-        rows.append([InlineKeyboardButton(
-            text=f"⛔ {pid} · ناموجود — حذف",
-            callback_data=f"admin:twpick:{loc}:{pid}",
-        )])
+        db = imported[pid]
+        extra = db.extra_data or {}
+        if extra.get("out_of_stock"):
+            # ناموجودِ ظرفیت: در پنل نشان داده می‌شود + دکمه‌ی فعال‌سازی دستی
+            mins = max(0, (int(extra.get("stock_retry_at") or 0) - now) // 60)
+            stock_note = ("\n🚫 = ناموجودِ ظرفیت (مخفی از فروش) — خودکار پس از "
+                          "کول‌داون باز می‌شود؛ یا دستی «موجود کن».")
+            rows.append([
+                InlineKeyboardButton(
+                    text=f"🚫 {db.display_name or pid} — ناموجود (~{mins}د)",
+                    callback_data=f"admin:twinfo:{loc}:{pid}"),
+                InlineKeyboardButton(
+                    text="موجود کن", callback_data=f"admin:twrestock:{loc}:{pid}"),
+            ])
+        elif pid not in shown:
+            rows.append([InlineKeyboardButton(
+                text=f"⛔ {pid} · حذف‌شده از تایم‌وب — حذف",
+                callback_data=f"admin:twpick:{loc}:{pid}",
+            )])
     rows.append([
         InlineKeyboardButton(text="ایمپورت همه", callback_data=f"admin:twallon:{loc}"),
         InlineKeyboardButton(text="حذف همه", callback_data=f"admin:twalloff:{loc}"),
     ])
     rows.append([InlineKeyboardButton(text="بازگشت", callback_data="admin:tw_import")])
+    _city = LOC_LABELS.get(loc, loc)
     await msg.edit_text(
-        f"<b>تعرفه‌های تایم‌وب — {LOC_LABELS.get(loc, loc)}</b>\n\n"
-        "عدد = قیمت خرید ماهانه (₽) · تپ = افزودن/حذف · ℹ️ = جزئیات\n"
-        "<i>محصول تازه‌ایمپورت‌شده تا تعیین سود غیرفعال می‌ماند.</i>",
+        f"<b>تعرفه‌های تایم‌وب — {_city}</b>\n\n"
+        "✅فعال · ☑️ایمپورت بی‌قیمت · 🚫ناموجود · ⬜ایمپورت‌نشده\n"
+        "عدد = قیمت خرید ماهانه (₽) · تپ = افزودن/حذف · ℹ️ = جزئیات"
+        f"{stock_note}",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
+
+
+@router.callback_query(F.data.startswith("admin:twrestock:"))
+async def cb_tw_restock(cb: CallbackQuery, session: AsyncSession):
+    """فعال‌سازی دستی پلن ناموجود (ادمین دیده در سایت دوباره موجود شده)."""
+    from bot.services.timeweb_settings import mark_plan_in_stock
+    account = await _tw_account(session)
+    if not account:
+        await cb.answer("اکانت یافت نشد.", show_alert=True)
+        return
+    parts = cb.data.split(":")
+    loc, pid = parts[2], parts[3]
+    plan = (await session.execute(
+        select(ServerPlan).where(
+            ServerPlan.provider_type == ProviderType.TIMEWEB,
+            ServerPlan.provider_plan_id == pid,
+            ServerPlan.location == loc,
+        )
+    )).scalar_one_or_none()
+    if not plan:
+        await cb.answer("پلن یافت نشد.", show_alert=True)
+        return
+    await mark_plan_in_stock(session, plan)
+    await session.flush()
+    await cb.answer("موجود شد — دوباره در فروش قرار گرفت.")
+    await _render_tw_plans(cb.message, session, account, loc)
 
 
 @router.callback_query(F.data.startswith("admin:twloc:"))
@@ -620,7 +697,9 @@ async def cb_tw_info(cb: CallbackQuery, session: AsyncSession):
 async def _import_one(session: AsyncSession, account: ProviderAccount,
                       loc: str, info, group_name: str) -> ServerPlan:
     from bot.services.timeweb_settings import full_costs
+    from bot.providers.timeweb import city_from_preset, cpu_type_from_preset
     disk_type = ""
+    raw: dict = {}
     try:
         raw = await _prov(account).preset_details(info.provider_plan_id) or {}
         disk_type = (raw.get("disk_type") or "").upper()
@@ -628,13 +707,17 @@ async def _import_one(session: AsyncSession, account: ProviderAccount,
         cpu_freq = raw.get("cpu_frequency")
     except Exception:
         bandwidth_mbit = cpu_freq = None
+    city = city_from_preset(raw, loc)
+    cpu_key, cpu_label = cpu_type_from_preset(raw)
+    ram_g = info.ram // 1024 if info.ram >= 1024 else info.ram
     # قیمت خرید کامل = تعرفه + IPv4 عمومی (سرویس جدا در فاکتور تایم‌وب)
     ch, cm = full_costs(info.price_monthly or 0)
     plan = ServerPlan(
         provider_type=ProviderType.TIMEWEB,
         provider_account_id=account.id,
         name=f"tw{info.provider_plan_id}-{loc}",
-        display_name=f"{info.disk}G {disk_type}".strip(),
+        # نمایش کامل: نوع · مشخصات · شهر (به‌جای «40G NVME» خالی)
+        display_name=f"{cpu_label} · {info.cpu}c/{ram_g}G/{info.disk}G {disk_type} · {city}".strip(),
         ram=info.ram, cpu=info.cpu, disk=info.disk,
         bandwidth=0,                              # ترافیک نامحدود (کانال Mbit جدا)
         price_hourly=None, price_monthly=None,    # فروش با سود سراسری
@@ -647,7 +730,9 @@ async def _import_one(session: AsyncSession, account: ProviderAccount,
             "preset_rub": info.price_monthly,     # تعرفه‌ی خام (برای سینک/مقایسه)
             "cost_hourly": ch,                    # خرید کامل ₽/ساعت (تعرفه+IP ÷۷۲۰)
             "cost_monthly": cm,                   # خرید کامل ₽/ماه (تعرفه+IP)
-            "region_name": LOC_LABELS.get(loc, loc),
+            "region_name": city,                  # شهر واقعی (نمای لوکیشن خرید)
+            "cpu_type": cpu_key,                  # نوع سرور (مرحله‌ی «نوع» خرید)
+            "cpu_type_label": cpu_label,
             "disk_type": disk_type,
             "bandwidth_mbit": bandwidth_mbit,
             "cpu_frequency": cpu_freq,

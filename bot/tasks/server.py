@@ -509,7 +509,7 @@ def sync_timeweb_catalog(self):
         from bot.database.models import ProviderAccount, ProviderType, ServerPlan
         from bot.providers.timeweb import TimewebProvider
         from bot.services.timeweb_settings import full_costs as tw_full_costs
-        from bot.services.timeweb_settings import get_margins
+        from bot.services.timeweb_settings import get_margins, restore_cooldown_passed
         from bot.services.log_service import LogService
         from sqlalchemy import select
 
@@ -530,12 +530,25 @@ def sync_timeweb_catalog(self):
             if not all_plans:
                 return
 
+            # موجودی: پلن‌هایی که کول‌داونِ ناموجودی‌شان تمام شده دوباره باز شوند
+            # (auto-retry — چون API تایم‌وب فیلد موجودی ندارد و از شکست یاد می‌گیریم)
+            try:
+                await restore_cooldown_passed(session)
+            except Exception:
+                pass
+
             mh, mm = await get_margins(session)
             prov = TimewebProvider(api_token=account.api_key or "")
             try:
                 offered = {p.provider_plan_id: p for p in await prov.list_plans()}
+                # تعرفه‌های خام برای بازسازی نام/شهر/نوع پلن‌های قدیمی
+                _raw = await prov._request("GET", "/api/v1/presets/servers")
+                raw_map = {str(x.get("id")): x for x in _raw.get("server_presets") or []}
             except Exception:
+                await session.commit()   # restore_cooldown_passed را از دست نده
                 return  # خطای گذرا — دور بعدی جبران می‌کند
+
+            from bot.providers.timeweb import city_from_preset, cpu_type_from_preset
 
             bot = Bot(token=settings.BOT_TOKEN)
             log = LogService(bot, session)
@@ -543,6 +556,19 @@ def sync_timeweb_catalog(self):
                 for plan in all_plans:
                     extra = dict(plan.extra_data or {})
                     info = offered.get(plan.provider_plan_id)
+                    # بازسازی نام/شهر/نوع برای پلن‌های قدیمیِ بی‌متادیتا (یک‌بار)
+                    _rawp = raw_map.get(plan.provider_plan_id)
+                    if _rawp is not None and not extra.get("cpu_type"):
+                        _city = city_from_preset(_rawp, plan.location or "")
+                        _tk, _tl = cpu_type_from_preset(_rawp)
+                        extra["region_name"] = _city
+                        extra["cpu_type"] = _tk
+                        extra["cpu_type_label"] = _tl
+                        ram_g = plan.ram // 1024 if plan.ram >= 1024 else plan.ram
+                        _dt = (extra.get("disk_type") or "").upper()
+                        plan.display_name = (
+                            f"{_tl} · {plan.cpu}c/{ram_g}G/{plan.disk}G {_dt} · {_city}".strip())
+                        plan.extra_data = extra
                     loc_label = extra.get("region_name") or plan.location or "?"
                     if info is None or (plan.location and info.location != plan.location):
                         if not extra.get("unavailable"):
@@ -565,7 +591,9 @@ def sync_timeweb_catalog(self):
                         changed = True
                     if extra.get("unavailable"):
                         extra.pop("unavailable", None)
-                        plan.is_active = bool(extra.pop("was_active", False))
+                        _was = bool(extra.pop("was_active", False))
+                        # اگر هنوز ناموجودِ ظرفیت است (کول‌داون فعال)، مخفی بماند
+                        plan.is_active = _was and not extra.get("out_of_stock")
                         changed = True
                         await log.log_plan_available(
                             plan.display_name or plan.name, loc_label)

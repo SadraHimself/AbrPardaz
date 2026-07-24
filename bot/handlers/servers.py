@@ -63,6 +63,8 @@ _GC_TYPE_LABELS = {
     "gpu": "GPU",
 }
 _GC_TYPE_ORDER = ["standard", "cpu", "highfreq", "net", "gpu"]
+# ترتیب نمایش نوع سرور تایم‌وب (cpu_type در extra_data پلن)
+_TW_TYPE_ORDER = ["standard", "premium", "highcpu", "dedicated"]
 
 
 def _gc_flavor_type(pid: str) -> str:
@@ -870,8 +872,8 @@ async def cb_buy_location(cb: CallbackQuery, user: User, state: FSMContext, sess
     if not plans:
         await cb.answer("در این لوکیشن محصولی موجود نیست.", show_alert=True)
         return
-    # جیکور: مرحله «نوع سرور» (Standard / CPU Optimized / …) همیشه بین لوکیشن و
-    # پلن‌ها می‌آید — حتی تک-نوع — تا سلسله‌مراتب انتخاب همیشه ثابت باشد.
+    # مرحله «نوع سرور» (Standard / CPU Optimized / Premium / …) بین لوکیشن و
+    # پلن‌ها — برای جیکور (از flavor id) و تایم‌وب (از extra_data.cpu_type).
     # دکمه‌ها از انواعِ واقعاً ایمپورت‌شده ساخته می‌شوند.
     if all(p.provider_type == ProviderType.GCORE for p in plans):
         types = {_gc_flavor_type(p.provider_plan_id) for p in plans}
@@ -892,8 +894,57 @@ async def cb_buy_location(cb: CallbackQuery, user: User, state: FSMContext, sess
         )
         await cb.answer()
         return
+    if all(p.provider_type == ProviderType.TIMEWEB for p in plans):
+        type_labels = {}
+        for p in plans:
+            _e = p.extra_data or {}
+            type_labels.setdefault(_e.get("cpu_type") or "standard",
+                                   _e.get("cpu_type_label") or "Standard")
+        if len(type_labels) > 1:
+            ordered = [t for t in _TW_TYPE_ORDER if t in type_labels] + \
+                      sorted(t for t in type_labels if t not in _TW_TYPE_ORDER)
+            rows = [[InlineKeyboardButton(
+                text=type_labels[t], callback_data=f"buytwtype:{gid}:{loc}:{t}")]
+                for t in ordered]
+            rows.append([InlineKeyboardButton(
+                text="بازگشت", callback_data=f"buygrp:{gid}",
+                **{"icon_custom_emoji_id": "5258236805890710909"})])
+            await state.set_state(BuyServerStates.selecting_plan)
+            await cb.message.edit_text(
+                '<tg-emoji emoji-id="5926980668624998964">🟡</tg-emoji> '
+                "نوع سرور را انتخاب کنید:",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+            )
+            await cb.answer()
+            return
     await _render_plan_list(cb, state, session, group.name, plans,
                             back_cb=f"buygrp:{group.id}")
+
+
+@router.callback_query(_BUY_NAV_STATES, F.data.startswith("buytwtype:"))
+async def cb_buy_tw_type(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
+    _, gid, loc, ttype = cb.data.split(":")
+    group = await session.get(ProductGroup, int(gid))
+    if not group or group.is_hidden:
+        await cb.answer("این گروه در دسترس نیست.", show_alert=True)
+        return
+    result = await session.execute(
+        select(ServerPlan).where(
+            ServerPlan.category == group.name,
+            ServerPlan.is_active == True,
+            ServerPlan.location == loc,
+        )
+    )
+    plans = sorted(
+        [p for p in result.scalars().all()
+         if ((p.extra_data or {}).get("cpu_type") or "standard") == ttype],
+        key=plan_sort_key)
+    if not plans:
+        await cb.answer("در این دسته محصولی موجود نیست.", show_alert=True)
+        return
+    await _render_plan_list(cb, state, session, group.name, plans,
+                            back_cb=f"buyloc:{gid}:{loc}")
 
 
 @router.callback_query(_BUY_NAV_STATES, F.data.startswith("buyloctype:"))
@@ -1851,6 +1902,15 @@ async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: 
                 if software_name:
                     _extra["software"] = software_name
                 server.extra_data = _extra
+                # ساخت موفق = پلن قطعاً موجود بود → اگر «ناموجود» علامت خورده بود
+                # پاکش کن (auto-recovery موجودی تایم‌وب)
+                if plan.provider_type == ProviderType.TIMEWEB \
+                        and (plan.extra_data or {}).get("out_of_stock"):
+                    try:
+                        from bot.services.timeweb_settings import mark_plan_in_stock
+                        await mark_plan_in_stock(session, plan)
+                    except Exception:
+                        pass
                 await session.flush()
                 plan_name = plan.display_name or plan.name
                 await session.commit()
@@ -1869,6 +1929,23 @@ async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: 
                 _log.exception("background build failed for %s", hostname)
                 await billing.credit(user.id, final_price,
                                      description=f"برگشت وجه — شکست ساخت {hostname}")
+                # تایم‌وب: شکست به‌خاطر نبود ظرفیت/صف → پلن را ناموجود کن تا مشتری
+                # بعدی روی همان پلن به همین ارور نخورد (auto-retry بعد از کول‌داون)
+                try:
+                    from bot.services.timeweb_settings import (
+                        is_capacity_error, mark_plan_out_of_stock,
+                    )
+                    if plan.provider_type == ProviderType.TIMEWEB \
+                            and is_capacity_error(str(e)):
+                        await mark_plan_out_of_stock(session, plan)
+                        try:
+                            await LogService(bot, session).log_plan_unavailable(
+                                plan.display_name or plan.name,
+                                (plan.extra_data or {}).get("region_name") or plan.location or "")
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
                 await session.commit()
                 await bot.send_message(
                     chat_id,

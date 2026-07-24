@@ -42,11 +42,46 @@ _STATUS_MAP = {
 }
 _RUNNING = {"on", "rebooting", "hard_rebooting"}
 
-# لیبل انگلیسی لوکیشن‌ها برای مرحله‌ی لوکیشن خرید (region_name در extra پلن)
+# لیبل شهرِ لوکیشن‌ها برای مرحله‌ی لوکیشن خرید (region_name در extra پلن).
+# شهر واقعی از description خودِ preset («Cloud MSK 50») هم استخراج می‌شود؛ این
+# نگاشت fallback و برای زمانی است که description شهر را نداشته باشد.
 LOC_LABELS = {
-    "ru-1": "Russia (SPb)", "ru-2": "Russia 2", "ru-3": "Russia 3",
-    "pl-1": "Poland", "kz-1": "Kazakhstan", "nl-1": "Netherlands",
+    "ru-1": "Saint Petersburg", "ru-2": "Moscow", "ru-3": "Novosibirsk",
+    "pl-1": "Poland", "kz-1": "Almaty (Kazakhstan)", "nl-1": "Amsterdam",
 }
+# کد شهر داخل description تعرفه («Cloud MSK 50») → نام کامل شهر
+_CITY_CODE = {
+    "spb": "Saint Petersburg", "msk": "Moscow", "nsk": "Novosibirsk",
+    "ekb": "Yekaterinburg", "kzn": "Kazan", "ala": "Almaty",
+    "ams": "Amsterdam", "fra": "Frankfurt", "gdn": "Gdansk", "waw": "Warsaw",
+}
+
+
+def city_from_preset(preset: dict, location: str = "") -> str:
+    """نام شهر یک تعرفه — اول از description («Cloud MSK 50»)، بعد از نگاشت
+    location. برای نمایش یکدست به کاربر و ادمین."""
+    desc = f"{preset.get('description') or ''} {preset.get('description_short') or ''}".lower()
+    for code, city in _CITY_CODE.items():
+        if code in desc:
+            return city
+    return LOC_LABELS.get(location, location or "?")
+
+
+def cpu_type_from_preset(preset: dict) -> tuple[str, str]:
+    """نوع سرور (کلید, لیبل) از description/tags تعرفه — مثل تفکیک جیکور.
+    Premium NVMe / High CPU / Dedicated CPU / Standard."""
+    blob = " ".join([
+        str(preset.get("description") or ""),
+        str(preset.get("description_short") or ""),
+        " ".join(str(t) for t in (preset.get("tags") or [])),
+    ]).lower()
+    if "dedicated" in blob:
+        return "dedicated", "Dedicated CPU"
+    if "high" in blob and "cpu" in blob:
+        return "highcpu", "High CPU"
+    if "premium" in blob:
+        return "premium", "Premium NVMe"
+    return "standard", "Standard"
 
 # خانواده‌هایی که همه‌ی نسخه‌هایشان ارائه می‌شود؛ بقیه فقط آخرین نسخه
 _OS_FULL_FAMILIES = {"ubuntu", "windows"}

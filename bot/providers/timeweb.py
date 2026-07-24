@@ -113,9 +113,12 @@ class TimewebProvider(BaseProvider):
         return data.get("server") or {}
 
     async def _wait_status(self, server_id: str, targets: set[str],
-                           timeout_s: int = 300, need_root_pass: bool = False) -> dict:
+                           timeout_s: int = 300, need_root_pass: bool = False,
+                           fail_on: set[str] | None = None) -> dict:
         """Poll وضعیت سرور تا رسیدن به یکی از حالت‌های هدف (بدون task-id).
-        هر ۵ ثانیه — rate limit تایم‌وب ۲۰/ثانیه است، خیالمان راحت."""
+        هر ۵ ثانیه — rate limit تایم‌وب ۲۰/ثانیه است، خیالمان راحت.
+        fail_on: وضعیت‌هایی که یعنی هرگز به هدف نمی‌رسیم → شکست فوری
+        (مثل no_paid = موجودی اکانت تایم‌وب کافی نیست)."""
         deadline = asyncio.get_event_loop().time() + timeout_s
         last: dict = {}
         while asyncio.get_event_loop().time() < deadline:
@@ -126,6 +129,11 @@ class TimewebProvider(BaseProvider):
             st = (last.get("status") or "").lower()
             if st in targets and (not need_root_pass or last.get("root_pass")):
                 return last
+            if fail_on and st in fail_on:
+                logger.warning("timeweb server %s entered %s — aborting wait",
+                               server_id, st)
+                raise RuntimeError(
+                    "ظرفیت سرویس‌دهنده موقتاً در دسترس نیست — لطفاً بعداً تلاش کنید")
             await asyncio.sleep(5)
         raise RuntimeError("Timeweb: مهلت انتظار عملیات تمام شد")
 
@@ -194,6 +202,23 @@ class TimewebProvider(BaseProvider):
             raise RuntimeError("تعرفه (preset) مشخص نیست")
         if not params.os_id:
             raise RuntimeError("سیستم‌عامل انتخاب نشده است")
+
+        # پیش‌چک موجودی اکانت تایم‌وب: اگر موجودی از هزینه‌ی ماهانه سرور کمتر
+        # باشد، سرور با وضعیت «Not paid» ساخته می‌شود و هرگز روشن نمی‌شود (E2E)
+        # → قبل از ساخت جلویش را بگیریم که پول مشتری الکی گیر نکند
+        need_rub = float(params.extra.get("cost_monthly") or 0)
+        if need_rub:
+            try:
+                fin = (await self._request(
+                    "GET", "/api/v1/account/finances")).get("finances") or {}
+                bal = float(fin.get("balance") or 0)
+            except Exception:
+                bal = None
+            if bal is not None and bal < need_rub:
+                logger.warning("timeweb balance %.2f RUB < needed %.2f RUB — refusing create",
+                               bal, need_rub)
+                raise RuntimeError(
+                    "ظرفیت سرویس‌دهنده موقتاً در دسترس نیست — لطفاً بعداً تلاش کنید")
         body: dict = {
             "name": params.name,
             "preset_id": int(params.plan_id),
@@ -230,8 +255,9 @@ class TimewebProvider(BaseProvider):
         # نصب چند دقیقه طول می‌کشد؛ تحویل به IP و رمز (root_pass) نیاز دارد.
         # ساخت تراکنشی: شکست/مهلت → سرور نیمه‌ساخته حذف شود تا بیل نخورد.
         try:
-            fresh = await self._wait_status(str(server_id), {"on"},
-                                            timeout_s=900, need_root_pass=True)
+            fresh = await self._wait_status(
+                str(server_id), {"on"}, timeout_s=900, need_root_pass=True,
+                fail_on={"no_paid", "blocked", "permanent_blocked"})
         except Exception:
             try:
                 await self.delete_server(str(server_id))

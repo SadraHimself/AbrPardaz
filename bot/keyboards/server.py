@@ -31,12 +31,16 @@ def status_dot(server: Server) -> str:
     return "🔴"
 
 
-def server_list_kb(servers: list[Server]) -> InlineKeyboardMarkup:
+def server_list_kb(servers: list[Server], building: int = 0) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for s in servers:
         icon = status_dot(s)
         builder.button(text=f"{icon} {s.name} ({s.ip_address or 'بدون IP'})",
                        callback_data=f"server:{s.id}")
+    # ساخت‌های در جریانِ پس‌زمینه (جیکور/تایم‌وب) — placeholder بدون جزئیات
+    for _ in range(building):
+        builder.button(text="در حال ساخت", callback_data="srv_building",
+                       **{"icon_custom_emoji_id": "5258077393884562645"})
     builder.button(text="خرید سرور جدید", callback_data="buy_server", **{"icon_custom_emoji_id": "5348183286608840968"})
     builder.button(text="بازگشت", callback_data="main_menu", **{"icon_custom_emoji_id": "5258236805890710909"})
     builder.adjust(1)

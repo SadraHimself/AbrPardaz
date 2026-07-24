@@ -104,17 +104,26 @@ async def _show_server_list(target_msg, user: User, session: AsyncSession):
                 await _aio.wait_for(svc.sync_server_status(s), timeout=8)
             except Exception:
                 pass
-    if not servers:
+    # ساخت‌های در جریان پس‌زمینه (جیکور/تایم‌وب) — placeholder «در حال ساخت»
+    building = _BUILDING_NOW.get(user.id, 0)
+    if not servers and not building:
         await target_msg.edit_text(
             "شما هیچ سروری ندارید.\nبرای خرید از منوی زیر استفاده کنید:",
             reply_markup=server_list_kb([]),
         )
     else:
+        total = len(servers) + building
         await target_msg.edit_text(
-            f'<tg-emoji emoji-id="5345837435601305335">◼</tg-emoji> <b>سرور‌های شما</b> ({len(servers)} سرور):',
+            f'<tg-emoji emoji-id="5345837435601305335">◼</tg-emoji> <b>سرور‌های شما</b> ({total} سرور):',
             parse_mode="HTML",
-            reply_markup=server_list_kb(servers),
+            reply_markup=server_list_kb(servers, building=building),
         )
+
+
+@router.callback_query(F.data == "srv_building")
+async def cb_srv_building(cb: CallbackQuery):
+    """Placeholder سرورِ در حال ساخت — جزئیاتی برای نمایش ندارد."""
+    await cb.answer("سرور شما در حال ساخت است — پس از اتمام، مشخصات ارسال می‌شود.")
 
 
 @router.callback_query(F.data == "my_servers")
@@ -1350,6 +1359,24 @@ def _delivery_text(server: Server, plan_name: str, password: str) -> str:
     )
 
 
+# ساخت‌های پس‌زمینه‌ی در جریان به‌ازای هر کاربر (user_db_id → تعداد) — برای
+# نمایش placeholder «در حال ساخت» در «سرورهای من». در-حافظه کافی است چون تسک
+# پس‌زمینه هم در همین پروسه زندگی می‌کند (ری‌استارت = هر دو با هم می‌میرند).
+_BUILDING_NOW: dict[int, int] = {}
+
+
+async def _bg_build_tracked(user_db_id: int, coro) -> None:
+    _BUILDING_NOW[user_db_id] = _BUILDING_NOW.get(user_db_id, 0) + 1
+    try:
+        await coro
+    finally:
+        n = _BUILDING_NOW.get(user_db_id, 1) - 1
+        if n > 0:
+            _BUILDING_NOW[user_db_id] = n
+        else:
+            _BUILDING_NOW.pop(user_db_id, None)
+
+
 async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: int,
                                 billing_str: str, hostname: str, os_id: str,
                                 root_password: str, final_price: float,
@@ -1514,14 +1541,14 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
             parse_mode="HTML",
         )
         import asyncio as _aio
-        _aio.create_task(_bg_build_and_deliver(
+        _aio.create_task(_bg_build_tracked(user.id, _bg_build_and_deliver(
             bot=cb.bot, chat_id=cb.message.chat.id, user_db_id=user.id,
             plan_db_id=plan.id, billing_str=billing_str, hostname=hostname,
             os_id=os_id, root_password=root_password,
             final_price=float(final_price or 0),
             disk_gb=gc_disk_used, price_addon_hourly=gc_addon_h,
             flavor_override=gc_flavor_override,
-        ))
+        )))
         return
 
     try:

@@ -1293,20 +1293,26 @@ async def cb_select_os(cb: CallbackQuery, user: User, state: FSMContext, session
     await cb.answer()
 
 
-def _app_fits_plan(plan: ServerPlan, req: dict) -> tuple[bool, str]:
+def _app_fits_plan(plan: ServerPlan, req: dict, app_key: str = "") -> tuple[bool, str]:
     """چک حداقل منابع برنامه مارکت‌پلیس روی پلن انتخابی.
-    واحدهای requirements در اسپک تایم‌وب مبهم‌اند — عدد بزرگ = MB، کوچک = GB/هسته."""
+
+    مبنا = بیشینه‌ی (حداقل هاردکدِ ما، requirements API). requirements تایم‌وب
+    اغلب خالی/مبهم است، پس هاردکد قابل‌اتکاتر است — عدد بزرگ در req = MB، کوچک
+    = GB/هسته (heuristic)."""
+    hc_ram, hc_disk = _TW_APP_MIN.get(app_key, (0, 0))
     ram_min = int(req.get("ram_min") or 0)
-    ram_mb = ram_min if ram_min >= 256 else ram_min * 1024
-    cpu_min = int(req.get("cpu_min") or 0)
+    api_ram = ram_min if ram_min >= 256 else ram_min * 1024
     disk_min = int(req.get("disk_min") or 0)
-    disk_gb = disk_min // 1024 if disk_min >= 1024 else disk_min
-    if ram_mb and (plan.ram or 0) < ram_mb:
-        return False, f"حداقل {max(ram_mb // 1024, 1)} گیگ رم"
+    api_disk = disk_min // 1024 if disk_min >= 1024 else disk_min
+    need_ram = max(hc_ram, api_ram)
+    need_disk = max(hc_disk, api_disk)
+    cpu_min = int(req.get("cpu_min") or 0)
+    if need_ram and (plan.ram or 0) < need_ram:
+        return False, f"حداقل {max(need_ram // 1024, 1)} گیگ رم"
     if cpu_min and (plan.cpu or 0) < cpu_min:
         return False, f"حداقل {cpu_min} هسته پردازنده"
-    if disk_gb and (plan.disk or 0) < disk_gb:
-        return False, f"حداقل {disk_gb} گیگ دیسک"
+    if need_disk and (plan.disk or 0) < need_disk:
+        return False, f"حداقل {need_disk} گیگ دیسک"
     return True, ""
 
 
@@ -1317,6 +1323,24 @@ _TW_APP_ORDER = [
     "openclaw", "rocketchat", "nextcloud", "uptimekuma",
     "grafana", "openvpn", "l2tp", "ispmanager6host",
 ]
+# حداقل منابع واقعیِ هر برنامه (min_ram_MB, min_disk_GB) — چون requirements خودِ
+# API تایم‌وب یا خالی است یا واحدش گمراه‌کننده، نصب روی پلن ضعیف با «error in
+# setup» شکست می‌خورد و ۱۵ دقیقه بعد لغو می‌شود. این مقادیر جلوی آن را از همان
+# لحظه‌ی انتخاب می‌گیرند (max با requirements API گرفته می‌شود).
+_TW_APP_MIN = {
+    "minecraftbe": (4096, 20),   # سرور بازی — رم سنگین
+    "minecraftje": (4096, 20),   # جاوا از بدراک هم سنگین‌تر
+    "wordpress": (1024, 15),
+    "n8n": (2048, 15),
+    "openclaw": (2048, 15),
+    "rocketchat": (4096, 20),    # Meteor/Mongo — رم‌خور
+    "nextcloud": (2048, 20),
+    "uptimekuma": (1024, 15),
+    "grafana": (1024, 15),
+    "openvpn": (1024, 15),
+    "l2tp": (1024, 15),
+    "ispmanager6host": (2048, 20),
+}
 _APP_PAGE_SIZE = 8   # ۴ ردیف دوتایی در هر صفحه
 
 
@@ -1434,13 +1458,14 @@ async def cb_buy_app(cb: CallbackQuery, user: User, state: FSMContext, session: 
         return
     app_name, os_ids, req = meta[0], list(meta[1] or []), (meta[2] if len(meta) > 2 else {}) or {}
     plan = await session.get(ServerPlan, data.get("plan_id")) if data.get("plan_id") else None
-    # چک حداقل منابع برنامه — نصب روی پلن ضعیف از همین‌جا مسدود می‌شود
+    # چک حداقل منابع برنامه (هاردکد ما ⊔ requirements API) — نصب روی پلن ضعیف
+    # «error in setup» می‌دهد؛ از همین لحظه‌ی انتخاب مسدود می‌شود
     if plan:
-        ok, need = _app_fits_plan(plan, req)
+        ok, need = _app_fits_plan(plan, req, _norm_app(app_name))
         if not ok:
             await cb.answer(
                 f"برنامه {app_name} {need} لازم دارد و با این پلن سازگار نیست — "
-                "پلن بزرگ‌تری انتخاب کنید.",
+                "پلن قوی‌تری انتخاب کنید.",
                 show_alert=True,
             )
             return
@@ -1706,10 +1731,11 @@ async def _gcore_os_pricing(session: AsyncSession, plan: ServerPlan,
 
 def _friendly_fail_reason(err: str) -> str:
     """دلیل قابل‌نمایش به کاربر برای شکست ساخت — خطاهای فنی/انگلیسی عمومی می‌شوند،
-    پیام‌های فارسیِ از قبل کاربرپسند (ظرفیت/موجودی/مهلت) همان‌طور می‌مانند."""
+    پیام‌های فارسیِ از قبل کاربرپسند (ظرفیت/موجودی/سازگاری) همان‌طور می‌مانند."""
     e = (err or "").strip()
     if "مهلت انتظار" in e or "timeout" in e.lower():
-        return "ساخت سرویس بیش از حد معمول طول کشید"
+        return ("زمان آماده‌سازی و تحویل سرویس بیش از حد مجاز طول کشید و سفارش "
+                "به‌صورت خودکار لغو شد")
     if e.startswith(("Timeweb API", "Gcore API", "Hetzner API")) or "retry limit" in e:
         return "بروز مشکل موقت در سرویس‌دهنده"
     return e[:200] if e else "بروز مشکل موقت در سرویس‌دهنده"

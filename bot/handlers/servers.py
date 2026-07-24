@@ -188,6 +188,15 @@ async def _render_server_detail(cb: CallbackQuery, user: User, session: AsyncSes
         if not _m_amt:
             monthly_line = f"• قیمت ماهانه (۷۲۰ ساعت): {price * 720:,.0f} تومان\n"
 
+    # پهنای باند کانال (تایم‌وب) از پلنِ متصل — رکورد سرور خودش این متادیتا را ندارد
+    bw_line = ""
+    _lp_id = extra_data.get("plan_id")
+    if _lp_id:
+        _lp = await session.get(ServerPlan, _lp_id)
+        _mbit = (_lp.extra_data or {}).get("bandwidth_mbit") if _lp else None
+        if _mbit:
+            bw_line = f"• پهنای باند: {_mbit} مگابیت\n"
+
     _extra_ips = (server.extra_data or {}).get("extra_ips") or []
     extra_ip_line = "".join(f"آیپی اضافه: <code>{ip}</code>\n" for ip in _extra_ips)
 
@@ -199,6 +208,7 @@ async def _render_server_detail(cb: CallbackQuery, user: User, session: AsyncSes
         f"وضعیت: {status_label}\n\n"
         f"• رم: {server.ram} MB | پردازنده: {server.cpu} | دیسک: {server.disk} GB"
         f"{traffic_text}\n"
+        f"{bw_line}"
         f"• {billing_label} — {price:,.0f} {price_unit}\n"
         f"{monthly_line}"
         f"• ساخته شده: {server.created_at.strftime('%Y/%m/%d')}",

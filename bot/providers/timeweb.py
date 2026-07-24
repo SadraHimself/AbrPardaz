@@ -199,6 +199,13 @@ class TimewebProvider(BaseProvider):
             "preset_id": int(params.plan_id),
             "os_id": int(params.os_id),
         }
+        # پهنای باند تعرفه (از extra پلن) — مطابق رفتار پنل تایم‌وب پاس داده می‌شود
+        _mbit = params.extra.get("bandwidth_mbit")
+        try:
+            if _mbit:
+                body["bandwidth"] = max(100, min(1000, int(_mbit)))
+        except (TypeError, ValueError):
+            pass
         labels = params.extra.get("labels") or {}
         if labels.get("tg_user_id"):
             body["comment"] = f"abrpardaz tg:{labels['tg_user_id']}"
@@ -220,7 +227,12 @@ class TimewebProvider(BaseProvider):
                 pass
             raise
         self.last_root_password = fresh.get("root_pass")
-        return self._server_info(fresh)
+        info = self._server_info(fresh)
+        # E2E 2026-07-24: پاسخ سرور گاهی بدون IP است (networks.ips دیر پر می‌شود
+        # یا سرور API-ساخته IPv4 عمومی نگرفته) — تحویل بدون IP بی‌معناست
+        if not info.ip_address:
+            info = await self._ensure_public_ip(str(server_id), info)
+        return info
 
     async def delete_server(self, server_id: str) -> bool:
         sid = int(server_id)
@@ -247,8 +259,61 @@ class TimewebProvider(BaseProvider):
             )
         return False
 
+    async def _ips_endpoint(self, server_id: str) -> tuple[Optional[str], Optional[str]]:
+        """IPها از endpoint اختصاصی /ips — منبع قابل‌اتکاتر از networks آبجکت سرور
+        (که ips آن nullable است و گاهی دیر پر می‌شود)."""
+        data = await self._request("GET", f"/api/v1/servers/{int(server_id)}/ips")
+        ipv4 = ipv6 = None
+        for e in data.get("server_ips") or []:
+            addr = (e or {}).get("ip")
+            if not addr:
+                continue
+            if (e.get("type") or "") == "ipv6" or ":" in addr:
+                if e.get("is_main") or not ipv6:
+                    ipv6 = addr
+            else:
+                if e.get("is_main") or not ipv4:
+                    ipv4 = addr
+        return ipv4, ipv6
+
+    async def _ensure_public_ip(self, server_id: str, info: ServerInfo) -> ServerInfo:
+        """اگر سرور بعد از ساخت IPv4 عمومی نداشت: اول endpoint اختصاصی IPها،
+        و اگر واقعاً IP نبود، یک IPv4 اضافه کن و تا ظاهرشدنش poll کن."""
+        try:
+            ipv4, ipv6 = await self._ips_endpoint(server_id)
+            if not ipv4:
+                try:
+                    await self._request(
+                        "POST", f"/api/v1/servers/{int(server_id)}/ips",
+                        json={"type": "ipv4"})
+                except RuntimeError as e:
+                    logger.warning("timeweb add-ip failed for %s: %s", server_id, e)
+                deadline = asyncio.get_event_loop().time() + 90
+                while asyncio.get_event_loop().time() < deadline and not ipv4:
+                    await asyncio.sleep(5)
+                    ipv4, ipv6 = await self._ips_endpoint(server_id)
+            if ipv4:
+                info.ip_address = ipv4
+            if ipv6 and not info.ipv6_address:
+                info.ipv6_address = ipv6
+        except Exception as e:
+            logger.warning("timeweb ensure_public_ip(%s): %s", server_id, e)
+        return info
+
     async def get_server(self, server_id: str) -> ServerInfo:
-        return self._server_info(await self._get_server_raw(server_id))
+        info = self._server_info(await self._get_server_raw(server_id))
+        if not info.ip_address:
+            # networks آبجکت سرور IP نداد → از endpoint اختصاصی /ips بخوان
+            # (سرورهای موجودِ بدون IP در رکورد هم با همین سینک درست می‌شوند)
+            try:
+                ipv4, ipv6 = await self._ips_endpoint(server_id)
+                if ipv4:
+                    info.ip_address = ipv4
+                if ipv6 and not info.ipv6_address:
+                    info.ipv6_address = ipv6
+            except Exception:
+                pass
+        return info
 
     async def start_server(self, server_id: str) -> bool:
         await self._request("POST", f"/api/v1/servers/{int(server_id)}/start")

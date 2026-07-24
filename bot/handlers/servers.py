@@ -715,8 +715,11 @@ async def _render_plan_list(cb: CallbackQuery, state: FSMContext, session: Async
     builder = InlineKeyboardBuilder()
     for plan in plans:
         ram_gb = plan.ram // 1024 if plan.ram >= 1024 else plan.ram
+        _mbit = (plan.extra_data or {}).get("bandwidth_mbit")
         if not plan.bandwidth:
-            traffic = "نامحدود"   # bandwidth=0 یعنی ترافیک نامحدود (جیکور)
+            # ترافیک نامحدود: اگر provider سقفِ «پهنای باند کانال» دارد (تایم‌وب)
+            # همان را نشان بده — گویاتر از «نامحدود» خالی است
+            traffic = f"{_mbit}مگابیت" if _mbit else "نامحدود"
         elif plan.bandwidth >= 1000:
             # نمای کاربر: رند به نزدیک‌ترین ترابایت (20.48 → 20)؛ مقدار دقیق در پنل ادمین
             traffic = f"{round(plan.bandwidth / 1000)}ترابایت"
@@ -1219,7 +1222,7 @@ async def _show_confirm(msg, state: FSMContext, session, from_message=False, use
         f"• پلن: {plan.display_name or plan.name}\n"
         f"• ارائه دهنده: {plan.category or ''}\n"
         f"• رم: {plan.ram} MB | پردازنده: {plan.cpu} | دیسک: {show_disk} GB\n"
-        f"• ترافیک: {f'{plan.bandwidth} GB' if plan.bandwidth else 'نامحدود'}\n"
+        f"• ترافیک: {_traffic_desc(plan)}\n"
         f"• موقعیت: {plan.location or 'نامشخص'}\n"
         f"{hostname_line}"
         f"{os_line}\n"
@@ -1310,6 +1313,17 @@ async def _gcore_os_pricing(session: AsyncSession, plan: ServerPlan,
     sale_h = round((flavor_h + vol_h + lic_h) * (1 + float(mh or 0) / 100), 4)
     addon = max(0.0, round(sale_h - base, 4))
     return sale_h, addon, disk_used, flavor_override
+
+
+def _traffic_desc(plan: ServerPlan) -> str:
+    """شرح ترافیک پلن: حجمی (GB) یا نامحدود؛ برای providerهای با سقف پهنای
+    باند کانال (تایم‌وب) سرعت کانال هم ذکر می‌شود."""
+    if plan.bandwidth:
+        return f"{plan.bandwidth} GB"
+    _mbit = (plan.extra_data or {}).get("bandwidth_mbit")
+    if _mbit:
+        return f"نامحدود — پهنای باند {_mbit} مگابیت"
+    return "نامحدود"
 
 
 def _delivery_text(server: Server, plan_name: str, password: str) -> str:

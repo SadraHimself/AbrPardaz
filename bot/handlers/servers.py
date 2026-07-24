@@ -430,6 +430,73 @@ async def cb_server_rebuild_confirm(cb: CallbackQuery, user: User, session: Asyn
     await cb.answer()
 
 
+async def _bg_rebuild_and_notify(bot, chat_id: int, server_db_id: int, user_db_id: int,
+                                 os_id: str, fallback_password: str) -> None:
+    """ریبیلد در پس‌زمینه برای providerهای دیرپاسخ (تایم‌وب — رمز فقط بعد از
+    اتمام نصب می‌آید). سشن مستقل چون سشن هندلر بسته می‌شود؛ در پایان
+    یوزرنیم + رمز جدید ارسال می‌شود."""
+    import logging as _logging
+    from bot.database.session import AsyncSessionFactory
+    _log = _logging.getLogger(__name__)
+    async with AsyncSessionFactory() as session:
+        try:
+            server = await session.get(Server, server_db_id)
+            user = await session.get(User, user_db_id)
+            if not server or not user:
+                return
+            svc = ServerService(session)
+            ok = await svc.perform_action(server, "rebuild", os_id=os_id,
+                                          new_password=fallback_password)
+            if not ok:
+                await session.commit()
+                await bot.send_message(chat_id, f"{ERR} ریبیلد ناموفق بود.",
+                                       parse_mode="HTML")
+                return
+            real_pass = svc.last_root_password or fallback_password
+            _extra = dict(server.extra_data or {})
+            _extra["root_password"] = real_pass
+            # یوزرنیم ممکن است با تعویض OS عوض شود (ویندوز↔لینوکس) — از provider تازه بخوان
+            try:
+                account = await session.get(ProviderAccount, server.provider_account_id) \
+                    if server.provider_account_id else None
+                if account:
+                    info = await get_provider(account).get_server(server.provider_server_id)
+                    if (info.extra_data or {}).get("username"):
+                        _extra["username"] = info.extra_data["username"]
+                    if info.os_name:
+                        server.os_name = info.os_name
+            except Exception:
+                pass
+            server.extra_data = _extra
+            await session.flush()
+            await session.commit()
+            username = _extra.get("username") or "root"
+            await bot.send_message(
+                chat_id,
+                '<tg-emoji emoji-id="4987757216040747796">💎</tg-emoji> '
+                "<b>ریبیلد انجام شد.</b>\n\n"
+                f"یوزرنیم: <code>{username}</code>\n"
+                f"رمز root جدید: <code>{real_pass}</code>\n\n"
+                f"{WARN} این اطلاعات را در جای امنی ذخیره کنید.",
+                parse_mode="HTML",
+            )
+            try:
+                await LogService(bot, session).log_server_action(user, server, "rebuild")
+                await session.commit()
+            except Exception:
+                pass
+        except Exception as e:
+            _log.exception("background rebuild failed for server %s", server_db_id)
+            try:
+                await bot.send_message(
+                    chat_id,
+                    f"{WARN} ریبیلد انجام نشد: {_esc(_friendly_fail_reason(str(e)))}.",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+
+
 @router.callback_query(F.data.startswith("srv_rebuild_do:"))
 async def cb_server_rebuild_do(cb: CallbackQuery, user: User, session: AsyncSession):
     parts = cb.data.split(":")
@@ -450,6 +517,23 @@ async def cb_server_rebuild_do(cb: CallbackQuery, user: User, session: AsyncSess
         import string as _str
         _alpha = _str.ascii_letters + _str.digits + "!@#$%^&*"
         new_root_pass = "".join(_sec.choice(_alpha) for _ in range(16))
+        # providerهای با رمزِ دیرآماده (تایم‌وب: رمز فقط بعد از اتمام نصب می‌آید):
+        # اعلام فوری شروع + ادامه در پس‌زمینه و ارسال یوزرنیم/رمز در پایان.
+        # ویرچولایزور (رمز را خودمان تعیین می‌کنیم) و هتزنر (رمز آنی در پاسخ)
+        # مثل قبل همان لحظه رمز را می‌دهند.
+        if server.provider_type in (ProviderType.TIMEWEB,):
+            await cb.message.answer(
+                '<tg-emoji emoji-id="4987757216040747796">💎</tg-emoji> '
+                "<b>ریبیلد شروع شد.</b>\n\n"
+                "نصب سیستم‌عامل چند دقیقه طول می‌کشد — یوزرنیم و رمز جدید "
+                "بعد از اتمام برای شما ارسال می‌شود.",
+                parse_mode="HTML",
+                reply_markup=back_kb(f"server:{server_id}"),
+            )
+            import asyncio as _aio
+            _aio.create_task(_bg_rebuild_and_notify(
+                cb.bot, cb.message.chat.id, server.id, user.id, os_id, new_root_pass))
+            return
         svc = ServerService(session)
         ok = await svc.perform_action(server, "rebuild", os_id=os_id, new_password=new_root_pass)
         if ok:

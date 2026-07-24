@@ -393,8 +393,7 @@ async def cb_admin_finance(cb: CallbackQuery):
 
 # ── Exchange rates ────────────────────────────────────────────────────────────
 
-@router.callback_query(F.data == "admin:exrate")
-async def cb_admin_exrate(cb: CallbackQuery, session: AsyncSession):
+async def _render_exrate(msg, session: AsyncSession):
     usd = await _get_setting(session, "np_usd_to_irt_rate", "")
     eur = await _get_setting(session, "np_eur_to_irt_rate", "")
     rub = await _get_setting(session, "np_rub_to_irt_rate", "")
@@ -410,19 +409,51 @@ async def cb_admin_exrate(cb: CallbackQuery, session: AsyncSession):
         "<b>نرخ ارز</b>\n",
         f"دلار آمریکا: <b>{_fmt(usd)}</b>",
         f"یورو: <b>{_fmt(eur)}</b>",
-        # روبل (بیلینگ تایم‌وب) — خودکار از نوسان یا دستی از پنل تایم‌وب
+        # روبل (بیلینگ تایم‌وب) — خودکار از نوسان (کلید rub)
         f"روبل: <b>{_fmt(rub)}</b>",
     ]
     if updated:
         lines.append(f"\n<i>آخرین بروزرسانی: {updated}</i>")
     lines.append("\n<i>هر ۸ ساعت به‌صورت خودکار از API نوسان بروزرسانی می‌شود.</i>")
 
-    await cb.message.edit_text(
+    await msg.edit_text(
         "\n".join(lines),
         parse_mode="HTML",
-        reply_markup=back_to_admin_kb("admin:finance"),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="بروزرسانی همین حالا", callback_data="admin:exrate_now")],
+            [InlineKeyboardButton(text="بازگشت", callback_data="admin:finance")],
+        ]),
     )
+
+
+@router.callback_query(F.data == "admin:exrate")
+async def cb_admin_exrate(cb: CallbackQuery, session: AsyncSession):
+    await _render_exrate(cb.message, session)
     await cb.answer()
+
+
+@router.callback_query(F.data == "admin:exrate_now")
+async def cb_admin_exrate_now(cb: CallbackQuery, session: AsyncSession):
+    """بروزرسانی فوری نرخ‌ها از نوسان — گارد ۷ ساعته را دور می‌زند (force).
+    داخل پروسس ربات اجرا می‌شود (_dispose=False تا pool دیتابیس ربات ریست نشود)."""
+    await cb.answer("در حال دریافت نرخ‌ها از نوسان...")
+    import asyncio as _aio
+    from html import escape as _esc
+    from bot.tasks.exchange_rate import _do_update
+    try:
+        await _aio.wait_for(_do_update(force=True, _dispose=False), timeout=40)
+    except Exception as e:
+        await cb.message.answer(
+            f"{ERR} بروزرسانی ناموفق: <code>{_esc(str(e)[:200])}</code>",
+            parse_mode="HTML",
+        )
+        return
+    # نرخ‌های تازه با سشن خودِ تسک commit شده‌اند — صفحه را دوباره رندر کن.
+    # اگر نوسان چیزی نداد و متن عوض نشد، edit خطای «not modified» می‌دهد → پیام کوتاه
+    try:
+        await _render_exrate(cb.message, session)
+    except Exception:
+        await cb.message.answer("نرخ‌ها تغییری نکردند (پاسخ تازه‌ای از نوسان نیامد).")
 
 
 # ── Bulk credit ───────────────────────────────────────────────────────────────

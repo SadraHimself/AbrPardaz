@@ -106,15 +106,21 @@ def _diff_text(old: float | None, new: int) -> str:
     return f" ({sign}{d:,.0f})"
 
 
-async def _do_update(only_if_empty: bool = False) -> None:
+async def _do_update(only_if_empty: bool = False, force: bool = False,
+                     _dispose: bool = True) -> None:
+    """force=True: دورزدن گارد ۷ ساعته — فقط برای دکمه «بروزرسانی همین حالا»ی
+    پنل ادمین (سهمیه Navasan ماهی ۱۲۰ درخواست است؛ زمان‌بندی خودکار ~۹۰ تا).
+    _dispose=False وقتی داخل پروسس خود ربات صدا زده می‌شود (dispose مال fork
+    سلری است و نباید pool ربات را بازنشانی کند)."""
     from bot.database.session import AsyncSessionFactory, engine
     from bot.database.models import BotSettings
     from aiogram import Bot
 
-    try:
-        await engine.dispose(close=False)
-    except Exception:
-        pass
+    if _dispose:
+        try:
+            await engine.dispose(close=False)
+        except Exception:
+            pass
 
     async with AsyncSessionFactory() as session:
         rate_row = await session.get(BotSettings, "np_usd_to_irt_rate")
@@ -133,7 +139,8 @@ async def _do_update(only_if_empty: bool = False) -> None:
 
     # Hard min-interval guard: skip any run too soon after the last one. Legit
     # scheduled runs are 8h apart (> 7h) so they always pass; early re-fires don't.
-    if last_ts is not None:
+    # force=True (دکمه دستی ادمین) این گارد را دور می‌زند.
+    if not force and last_ts is not None:
         elapsed = time.time() - last_ts
         if elapsed < _MIN_INTERVAL_SECONDS:
             logger.info("exchange_rate: skip — only %.1fh since last update", elapsed / 3600)

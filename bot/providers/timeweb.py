@@ -403,15 +403,49 @@ class TimewebProvider(BaseProvider):
     async def rebuild_server(self, server_id: str, os_id: str, rootpass: str = "") -> bool:
         """نصب مجدد OS — PATCH با os_id (وضعیت reinstalling). رمز دلخواه
         پذیرفته نمی‌شود؛ رمز جدیدِ تولیدی تایم‌وب بعد از نصب از root_pass
-        خوانده و در last_root_password گذاشته می‌شود."""
+        خوانده و در last_root_password گذاشته می‌شود.
+
+        ⚠️ دام تایمینگ (E2E 2026-07-24): بلافاصله بعد از PATCH، سرور چند ثانیه
+        هنوز status=on با رمز قدیمی گزارش می‌دهد — اگر همان لحظه «on» را موفقیت
+        بگیریم، رمز کهنه تحویل کاربر می‌شود. سه‌فازی صبر می‌کنیم."""
+        sid = int(server_id)
         old = (await self._get_server_raw(server_id)).get("root_pass")
-        await self._request("PATCH", f"/api/v1/servers/{int(server_id)}",
-                            json={"os_id": int(os_id)}, timeout=60)
+        resp = await self._request("PATCH", f"/api/v1/servers/{sid}",
+                                   json={"os_id": int(os_id)}, timeout=60)
+        patched_pass = ((resp or {}).get("server") or {}).get("root_pass")
+
+        # فاز ۱: صبر تا واقعاً وارد فاز نصب شود (خروج از on) یا رمز عوض شود — تا ۳ دقیقه
+        entry_deadline = asyncio.get_event_loop().time() + 180
+        while asyncio.get_event_loop().time() < entry_deadline:
+            await asyncio.sleep(4)
+            try:
+                srv = await self._get_server_raw(server_id)
+            except RuntimeError:
+                continue
+            st = (srv.get("status") or "").lower()
+            if st != "on":
+                break   # وارد reinstalling/turning_off/... شد
+            np_ = srv.get("root_pass")
+            if np_ and np_ != old:
+                break   # رمز عوض شده = کار انجام شده
+
+        # فاز ۲: صبر تا پایان نصب و برگشتن به on
         fresh = await self._wait_status(server_id, {"on"},
                                         timeout_s=900, need_root_pass=True)
         new_pass = fresh.get("root_pass")
-        # اگر رمز همان قبلی ماند (اسپک ساکت است)، همان را تحویل می‌دهیم — معتبر است
-        self.last_root_password = new_pass or old
+
+        # فاز ۳: اگر رمز هنوز همان قدیمی است، مهلت کوتاه برای نشستن رمز تازه
+        grace = asyncio.get_event_loop().time() + 90
+        while new_pass == old and asyncio.get_event_loop().time() < grace:
+            await asyncio.sleep(5)
+            try:
+                srv = await self._get_server_raw(server_id)
+            except RuntimeError:
+                continue
+            if srv.get("root_pass"):
+                new_pass = srv["root_pass"]
+
+        self.last_root_password = new_pass or patched_pass or old
         return True
 
     async def suspend_server(self, server_id: str) -> bool:

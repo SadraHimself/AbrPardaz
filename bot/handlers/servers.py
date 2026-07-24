@@ -303,10 +303,13 @@ async def cb_server_action(cb: CallbackQuery, user: User, session: AsyncSession)
             await cb.answer()
             return
         builder = InlineKeyboardBuilder()
-        for os_item in os_list[:20]:
+        os_shown = os_list[:20]
+        for os_item in os_shown:
             builder.button(text=os_item["name"], callback_data=f"srv_rebuild:{server_id}:{os_item['id']}")
         builder.button(text="انصراف", callback_data=f"server:{server_id}", **{"icon_custom_emoji_id": "5240241223632954241"})
-        builder.adjust(2)
+        # OSها دوتا-دوتا؛ «انصراف» همیشه ردیف کاملِ آخر
+        _os_rows = [2] * (len(os_shown) // 2) + ([1] if len(os_shown) % 2 else [])
+        builder.adjust(*_os_rows, 1)
         await cb.message.edit_text(
             f"🔁 <b>ریبیلد — {server.name}</b>\n\nسیستم‌عامل جدید را انتخاب کنید:",
             parse_mode="HTML",
@@ -1334,6 +1337,17 @@ async def _gcore_os_pricing(session: AsyncSession, plan: ServerPlan,
     return sale_h, addon, disk_used, flavor_override
 
 
+def _friendly_fail_reason(err: str) -> str:
+    """دلیل قابل‌نمایش به کاربر برای شکست ساخت — خطاهای فنی/انگلیسی عمومی می‌شوند،
+    پیام‌های فارسیِ از قبل کاربرپسند (ظرفیت/موجودی/مهلت) همان‌طور می‌مانند."""
+    e = (err or "").strip()
+    if "مهلت انتظار" in e or "timeout" in e.lower():
+        return "ساخت سرویس بیش از حد معمول طول کشید"
+    if e.startswith(("Timeweb API", "Gcore API", "Hetzner API")) or "retry limit" in e:
+        return "بروز مشکل موقت در سرویس‌دهنده"
+    return e[:200] if e else "بروز مشکل موقت در سرویس‌دهنده"
+
+
 def _traffic_desc(plan: ServerPlan) -> str:
     """شرح ترافیک پلن: حجمی (GB) یا نامحدود؛ برای providerهای با سقف پهنای
     باند کانال (تایم‌وب) سرعت کانال هم ذکر می‌شود."""
@@ -1447,14 +1461,19 @@ async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: 
                 except Exception:
                     pass
             except Exception as e:
+                # لغو سایلنت: سرور نیمه‌ساخته را خود provider حذف کرده؛ اینجا فقط
+                # برگشت وجه + اعلام مودبانه با دلیل (بدون متن خطای خام فنی)
                 _log.exception("background build failed for %s", hostname)
                 await billing.credit(user.id, final_price,
                                      description=f"برگشت وجه — شکست ساخت {hostname}")
                 await session.commit()
                 await bot.send_message(
                     chat_id,
-                    f"{ERR} خطا در ساخت سرور: {_esc(e)}\n"
-                    "مبلغ به‌طور کامل به کیف پول برگشت داده شد.",
+                    f"{WARN} <b>سفارش سرور شما لغو شد.</b>\n\n"
+                    f"دلیل: {_esc(_friendly_fail_reason(str(e)))}.\n"
+                    f"مبلغ <b>{final_price:,.0f} تومان</b> به‌طور کامل به کیف پول شما "
+                    "برگشت داده شد — می‌توانید دوباره سفارش دهید.\n\n"
+                    '‎<tg-emoji emoji-id="5258093637450866522">🤖</tg-emoji> @abrmakerbot',
                     parse_mode="HTML")
         except Exception:
             _log.exception("background build/deliver fatal error")

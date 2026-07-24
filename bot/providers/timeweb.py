@@ -255,8 +255,10 @@ class TimewebProvider(BaseProvider):
         # نصب چند دقیقه طول می‌کشد؛ تحویل به IP و رمز (root_pass) نیاز دارد.
         # ساخت تراکنشی: شکست/مهلت → سرور نیمه‌ساخته حذف شود تا بیل نخورد.
         try:
+            # ۷۲۰s نصب + ≤۱۸۰s تضمین IP ≈ سقف ۱۵ دقیقه — هم‌راستا با قول
+            # «۱۰ تا ۱۵ دقیقه» به مشتری؛ بعدش لغو سایلنت + برگشت کامل وجه
             fresh = await self._wait_status(
-                str(server_id), {"on"}, timeout_s=900, need_root_pass=True,
+                str(server_id), {"on"}, timeout_s=720, need_root_pass=True,
                 fail_on={"no_paid", "blocked", "permanent_blocked"})
         except Exception:
             try:

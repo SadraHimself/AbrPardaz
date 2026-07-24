@@ -1499,7 +1499,8 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
         await cb.message.edit_text(
             '‏<tg-emoji emoji-id="5258503720928288433">🔔</tg-emoji> '
             "سرویس شما در حال ساخت است و بین ۱۰ تا ۱۵ دقیقه دیگر برای شما ارسال میشود.\n"
-            "مشخصات و رمز عبور بعد از اتمام پروسه ساخت ارسال میشود.",
+            "مشخصات و رمز عبور بعد از اتمام پروسه ساخت ارسال میشود.\n\n"
+            '‎<tg-emoji emoji-id="5258093637450866522">🤖</tg-emoji> @abrmakerbot',
             parse_mode="HTML",
         )
         import asyncio as _aio

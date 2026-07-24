@@ -1069,10 +1069,13 @@ async def cb_admin_usrv_rebuild(cb: CallbackQuery, session: AsyncSession):
         await cb.message.answer(f"خطا در دریافت لیست OS: {e}")
         return
     builder = InlineKeyboardBuilder()
-    for os_item in os_list[:20]:
+    os_shown = os_list[:20]
+    for os_item in os_shown:
         builder.button(text=os_item["name"], callback_data=f"admin:usrv_rbdo:{server.id}:{os_item['id']}")
     builder.button(text="انصراف", callback_data=f"admin:usrv:{server.id}")
-    builder.adjust(2)
+    # OSها دوتا-دوتا؛ «انصراف» همیشه ردیف کاملِ آخر
+    _os_rows = [2] * (len(os_shown) // 2) + ([1] if len(os_shown) % 2 else [])
+    builder.adjust(*_os_rows, 1)
     await cb.message.edit_text(
         f"<b>ریبیلد — {server.name}</b>\n\nسیستم‌عامل جدید را انتخاب کنید:\n"
         "<i>تمام اطلاعات دیسک پاک می‌شود!</i>",

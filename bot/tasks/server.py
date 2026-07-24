@@ -508,6 +508,7 @@ def sync_timeweb_catalog(self):
         from bot.config import settings
         from bot.database.models import ProviderAccount, ProviderType, ServerPlan
         from bot.providers.timeweb import TimewebProvider
+        from bot.services.timeweb_settings import full_costs as tw_full_costs
         from bot.services.timeweb_settings import get_margins
         from bot.services.log_service import LogService
         from sqlalchemy import select
@@ -552,12 +553,15 @@ def sync_timeweb_catalog(self):
                             await log.log_plan_unavailable(
                                 plan.display_name or plan.name, loc_label)
                         continue
+                    # قیمت خرید کامل = تعرفه تازه + IPv4 عمومی (سرویس جدای فاکتور)
+                    ch, cm = tw_full_costs(info.price_monthly or 0)
                     changed = False
-                    if extra.get("cost_hourly") != info.price_hourly:
-                        extra["cost_hourly"] = info.price_hourly
-                        changed = True
-                    if extra.get("cost_monthly") != info.price_monthly:
-                        extra["cost_monthly"] = info.price_monthly
+                    if extra.get("preset_rub") != info.price_monthly or \
+                       extra.get("cost_hourly") != ch or \
+                       extra.get("cost_monthly") != cm:
+                        extra["preset_rub"] = info.price_monthly
+                        extra["cost_hourly"] = ch
+                        extra["cost_monthly"] = cm
                         changed = True
                     if extra.get("unavailable"):
                         extra.pop("unavailable", None)

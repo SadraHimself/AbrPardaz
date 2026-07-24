@@ -603,12 +603,15 @@ async def cb_tw_info(cb: CallbackQuery, session: AsyncSession):
         raw = await asyncio.wait_for(_prov(account).preset_details(pid), timeout=20) or {}
     except Exception:
         raw = {}
+    from bot.services.timeweb_settings import IP_RUB_MONTH, full_costs
+    ch, cm = full_costs(info.price_monthly or 0)
     ram_g = info.ram // 1024 if info.ram >= 1024 else info.ram
     await cb.answer(
         f"preset {pid} — {info.cpu} vCPU ({raw.get('cpu_frequency', '?')}GHz) / "
         f"{ram_g}GB RAM / {info.disk}GB {str(raw.get('disk_type') or '').upper()}\n"
         f"کانال: {raw.get('bandwidth', '?')} Mbit (ترافیک نامحدود)\n"
-        f"خرید: ₽{info.price_monthly:g}/ماه · ₽{info.price_hourly:g}/ساعت\n"
+        f"تعرفه: ₽{info.price_monthly:g} + IP: ₽{IP_RUB_MONTH:g}\n"
+        f"خرید کامل: ₽{cm:g}/ماه · ₽{ch:g}/ساعت\n"
         f"{raw.get('description_short') or ''}",
         show_alert=True,
     )
@@ -616,6 +619,7 @@ async def cb_tw_info(cb: CallbackQuery, session: AsyncSession):
 
 async def _import_one(session: AsyncSession, account: ProviderAccount,
                       loc: str, info, group_name: str) -> ServerPlan:
+    from bot.services.timeweb_settings import full_costs
     disk_type = ""
     try:
         raw = await _prov(account).preset_details(info.provider_plan_id) or {}
@@ -624,6 +628,8 @@ async def _import_one(session: AsyncSession, account: ProviderAccount,
         cpu_freq = raw.get("cpu_frequency")
     except Exception:
         bandwidth_mbit = cpu_freq = None
+    # قیمت خرید کامل = تعرفه + IPv4 عمومی (سرویس جدا در فاکتور تایم‌وب)
+    ch, cm = full_costs(info.price_monthly or 0)
     plan = ServerPlan(
         provider_type=ProviderType.TIMEWEB,
         provider_account_id=account.id,
@@ -638,8 +644,9 @@ async def _import_one(session: AsyncSession, account: ProviderAccount,
         provider_plan_id=info.provider_plan_id,
         extra_data={
             "currency": "rub",
-            "cost_hourly": info.price_hourly,     # ₽/ساعت (= ماهانه÷۷۲۰)
-            "cost_monthly": info.price_monthly,   # ₽/ماه
+            "preset_rub": info.price_monthly,     # تعرفه‌ی خام (برای سینک/مقایسه)
+            "cost_hourly": ch,                    # خرید کامل ₽/ساعت (تعرفه+IP ÷۷۲۰)
+            "cost_monthly": cm,                   # خرید کامل ₽/ماه (تعرفه+IP)
             "region_name": LOC_LABELS.get(loc, loc),
             "disk_type": disk_type,
             "bandwidth_mbit": bandwidth_mbit,

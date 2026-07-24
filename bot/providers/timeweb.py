@@ -215,6 +215,18 @@ class TimewebProvider(BaseProvider):
         if not server_id:
             raise RuntimeError("تایم‌وب شناسه سرور ساخته‌شده را برنگرداند")
 
+        # IPv4 عمومی از همان ابتدای ساخت درخواست می‌شود — سرور API-ساخته گاهی
+        # بدون IPv4 بالا می‌آید (E2E) و IPv6 هم فقط ru-1 دارد؛ زودتر بزنیم که
+        # تا پایان نصب فرصت attach داشته باشد
+        try:
+            _early_v4, _ = await self._ips_endpoint(str(server_id))
+            if not _early_v4:
+                await self._request(
+                    "POST", f"/api/v1/servers/{int(server_id)}/ips",
+                    json={"type": "ipv4"})
+        except Exception as e:
+            logger.warning("timeweb early add-ip for %s: %s", server_id, e)
+
         # نصب چند دقیقه طول می‌کشد؛ تحویل به IP و رمز (root_pass) نیاز دارد.
         # ساخت تراکنشی: شکست/مهلت → سرور نیمه‌ساخته حذف شود تا بیل نخورد.
         try:
@@ -234,23 +246,46 @@ class TimewebProvider(BaseProvider):
             info = await self._ensure_public_ip(str(server_id), info)
         return info
 
+    async def _bound_floating_ip_ids(self, server_id: int) -> list:
+        """شناسه‌ی IPهای عمومیِ متصل به این سرور — Public IP سرویس جداست و
+        بعد از حذف سرور نباید یتیم بماند (۱۸۰₽/ماه بی‌سرور!)."""
+        ids: list = []
+        try:
+            data = await self._request("GET", "/api/v1/floating-ips")
+            for ip in (data.get("ips") or data.get("floating_ips") or []):
+                if not isinstance(ip, dict):
+                    continue
+                if (ip.get("resource_type") == "server"
+                        and str(ip.get("resource_id") or "") == str(server_id)
+                        and ip.get("id")):
+                    ids.append(ip["id"])
+        except Exception as e:
+            logger.warning("timeweb floating-ip list for %s: %s", server_id, e)
+        return ids
+
     async def delete_server(self, server_id: str) -> bool:
         sid = int(server_id)
+        # قبل از حذف، IPهای متصل را نگه می‌داریم تا بعدش پاک شوند
+        fip_ids = await self._bound_floating_ip_ids(sid)
         try:
             data = await self._request("DELETE", f"/api/v1/servers/{sid}", timeout=60)
         except RuntimeError as e:
             if "not_found" in str(e).lower() or " 404 " in f" {e} ":
+                await self._cleanup_floating_ips(fip_ids)
                 return True  # قبلاً حذف شده
             raise
         # اگر «تأیید حذف» روی اکانت روشن باشد، پاسخ hash می‌دهد و حذف واقعاً
         # انجام نمی‌شود (کد به تلگرام/SMS می‌رود) — با GET تأیید می‌کنیم.
         info = (data or {}).get("server_delete") or {}
+        deleted = False
         try:
             srv = await self._get_server_raw(str(sid))
+            st = (srv.get("status") or "").lower()
+            deleted = (not srv) or st in ("removing", "removed")
         except RuntimeError:
-            return True  # 404 = حذف شد
-        st = (srv.get("status") or "").lower()
-        if not srv or st in ("removing", "removed"):
+            deleted = True  # 404 = حذف شد
+        if deleted:
+            await self._cleanup_floating_ips(fip_ids)
             return True
         if info.get("hash"):
             raise RuntimeError(
@@ -258,6 +293,13 @@ class TimewebProvider(BaseProvider):
                 "آن را خاموش کنید"
             )
         return False
+
+    async def _cleanup_floating_ips(self, fip_ids: list) -> None:
+        for fid in fip_ids or []:
+            try:
+                await self._request("DELETE", f"/api/v1/floating-ips/{fid}")
+            except Exception as e:
+                logger.warning("timeweb orphan floating-ip %s cleanup: %s", fid, e)
 
     async def _ips_endpoint(self, server_id: str) -> tuple[Optional[str], Optional[str]]:
         """IPها از endpoint اختصاصی /ips — منبع قابل‌اتکاتر از networks آبجکت سرور
@@ -288,7 +330,7 @@ class TimewebProvider(BaseProvider):
                         json={"type": "ipv4"})
                 except RuntimeError as e:
                     logger.warning("timeweb add-ip failed for %s: %s", server_id, e)
-                deadline = asyncio.get_event_loop().time() + 90
+                deadline = asyncio.get_event_loop().time() + 180
                 while asyncio.get_event_loop().time() < deadline and not ipv4:
                     await asyncio.sleep(5)
                     ipv4, ipv6 = await self._ips_endpoint(server_id)

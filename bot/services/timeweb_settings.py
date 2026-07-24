@@ -24,6 +24,18 @@ _KEY_MM = "timeweb_margin_monthly"
 _KEY_GROUP = "timeweb_group"
 _DEFAULT_GROUP = "Timeweb"
 
+# هزینه‌ی IPv4 عمومی (₽/ماه) — تایم‌وب آن را سرویس جدا کنار سرور بیل می‌کند
+# (E2E 2026-07-24: فاکتور = سرور 611₽ + Public IP 180₽). قیمتش در API نمی‌آید.
+IP_RUB_MONTH = 180.0
+
+
+def full_costs(preset_monthly_rub: float) -> tuple[float, float]:
+    """قیمت خرید کاملِ یک سرور تایم‌وب = تعرفه + IPv4 عمومی.
+    خروجی: (ساعتی، ماهانه) به روبل — ساعتی = ماهانه ÷ ۷۲۰."""
+    cm = round(float(preset_monthly_rub or 0) + IP_RUB_MONTH, 2)
+    ch = round(cm / 720.0, 6)
+    return ch, cm
+
 
 async def _get(session: AsyncSession, key: str):
     row = await session.get(BotSettings, key)

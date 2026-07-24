@@ -114,12 +114,17 @@ class TimewebProvider(BaseProvider):
 
     async def _wait_status(self, server_id: str, targets: set[str],
                            timeout_s: int = 300, need_root_pass: bool = False,
-                           fail_on: set[str] | None = None) -> dict:
+                           fail_on: set[str] | None = None,
+                           no_paid_grace_s: int = 240) -> dict:
         """Poll وضعیت سرور تا رسیدن به یکی از حالت‌های هدف (بدون task-id).
         هر ۵ ثانیه — rate limit تایم‌وب ۲۰/ثانیه است، خیالمان راحت.
-        fail_on: وضعیت‌هایی که یعنی هرگز به هدف نمی‌رسیم → شکست فوری
-        (مثل no_paid = موجودی اکانت تایم‌وب کافی نیست)."""
+
+        fail_on: وضعیت‌های واقعاً پایان‌یافته (blocked/permanent_blocked) → شکست فوری.
+        no_paid: **مرگ آنی نیست** — حین provisioning تایم‌وب چند لحظه no_paid نشان
+        می‌دهد (در انتظار اولین کسر ساعتی) و بعد on می‌شود. فقط اگر بیش از
+        no_paid_grace_s در این وضعیت بماند = واقعاً بی‌پول → شکست."""
         deadline = asyncio.get_event_loop().time() + timeout_s
+        no_paid_since: float | None = None
         last: dict = {}
         while asyncio.get_event_loop().time() < deadline:
             try:
@@ -134,6 +139,17 @@ class TimewebProvider(BaseProvider):
                                server_id, st)
                 raise RuntimeError(
                     "ظرفیت سرویس‌دهنده موقتاً در دسترس نیست — لطفاً بعداً تلاش کنید")
+            now = asyncio.get_event_loop().time()
+            if st == "no_paid":
+                if no_paid_since is None:
+                    no_paid_since = now
+                elif now - no_paid_since >= no_paid_grace_s:
+                    logger.warning("timeweb server %s stuck no_paid > %ss — unpaid",
+                                   server_id, no_paid_grace_s)
+                    raise RuntimeError(
+                        "ظرفیت سرویس‌دهنده موقتاً در دسترس نیست — لطفاً بعداً تلاش کنید")
+            else:
+                no_paid_since = None
             await asyncio.sleep(5)
         raise RuntimeError("Timeweb: مهلت انتظار عملیات تمام شد")
 
@@ -262,12 +278,28 @@ class TimewebProvider(BaseProvider):
         try:
             # ۷۲۰s نصب + ≤۱۸۰s تضمین IP ≈ سقف ۱۵ دقیقه — هم‌راستا با قول
             # «۱۰ تا ۱۵ دقیقه» به مشتری؛ بعدش لغو سایلنت + برگشت کامل وجه.
-            # با برنامه مارکت‌پلیس نصب طولانی‌تر است → ۹۰۰s
+            # با برنامه مارکت‌پلیس نصب طولانی‌تر است → ۹۰۰s.
+            # no_paid فقط اگر پایدار بماند شکست است (grace داخل _wait_status).
             fresh = await self._wait_status(
                 str(server_id), {"on"},
                 timeout_s=(900 if software_id else 720), need_root_pass=True,
-                fail_on={"no_paid", "blocked", "permanent_blocked"})
+                fail_on={"blocked", "permanent_blocked"})
         except Exception:
+            # چک نهاییِ نجات: ممکن است سرور واقعاً بالا آمده باشد ولی poll وسط راه
+            # خطای گذرا/تایم‌اوت خورده باشد (E2E 2026-07-25: سرور در پنل کامل بود
+            # ولی ربات لغو کرد). اگر on + root_pass است، تحویلش بده نه حذف.
+            try:
+                chk = await self._get_server_raw(str(server_id))
+                if (chk.get("status") or "").lower() == "on" and chk.get("root_pass"):
+                    self.last_root_password = chk.get("root_pass")
+                    info = self._server_info(chk)
+                    if not info.ip_address:
+                        info = await self._ensure_public_ip(str(server_id), info)
+                    info.extra_data["username"] = "Administrator" \
+                        if (chk.get("os") or {}).get("name") == "windows" else "root"
+                    return info
+            except Exception:
+                pass
             try:
                 await self.delete_server(str(server_id))
             except Exception:
@@ -466,9 +498,24 @@ class TimewebProvider(BaseProvider):
         # ترافیک حجمی گزارش/محدود نمی‌شود (bandwidth = سرعت کانال) → همیشه صفر
         return 0.0
 
+    async def _account_discount(self) -> float:
+        """درصد تخفیف اکانت (finances.discount_percent). قیمتِ preset در API
+        «بدون تخفیف» است ولی بیلینگ واقعی با تخفیف حساب می‌شود — پس قیمت خرید
+        ما باید تخفیف را اعمال کند تا با فاکتور واقعی تایم‌وب یکی شود."""
+        try:
+            fin = (await self._request(
+                "GET", "/api/v1/account/finances")).get("finances") or {}
+            d = float(fin.get("discount_percent") or 0)
+            return d if 0 <= d < 100 else 0.0
+        except Exception:
+            return 0.0
+
     async def list_plans(self, location: Optional[str] = None) -> list[PlanInfo]:
-        """تعرفه‌ها (presets) با «قیمت خرید» به روبل — قیمت ماهانه؛ ساعتی = ÷۷۲۰."""
+        """تعرفه‌ها (presets) با «قیمت خرید» به روبل — قیمت ماهانه؛ ساعتی = ÷۷۲۰.
+        قیمت با تخفیفِ اکانت (اگر باشد) تعدیل می‌شود تا با فاکتور واقعی بخورد."""
         data = await self._request("GET", "/api/v1/presets/servers")
+        discount = await self._account_discount()
+        disc_mult = 1.0 - discount / 100.0
         plans: list[PlanInfo] = []
         for p in data.get("server_presets") or []:
             loc = p.get("location") or ""
@@ -476,7 +523,7 @@ class TimewebProvider(BaseProvider):
                 continue
             ram_mb = int(p.get("ram") or 0)
             disk_gb = int(p.get("disk") or 0) // 1024
-            monthly = float(p.get("price") or 0)
+            monthly = round(float(p.get("price") or 0) * disc_mult, 2)
             plans.append(PlanInfo(
                 provider_plan_id=str(p.get("id")),
                 name=f"tw-{p.get('id')} — {p.get('cpu')}c/"

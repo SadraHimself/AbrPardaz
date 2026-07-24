@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config import settings
 from bot.database.models import (
-    BotSettings, ProductGroup, ProviderAccount, ProviderType, Server, ServerPlan,
+    ProductGroup, ProviderAccount, ProviderType, Server, ServerPlan,
     ServerStatus, User,
 )
 from bot.keyboards.admin import back_to_admin_kb, cancel_admin_kb, group_pick_kb
@@ -54,7 +54,6 @@ class TimewebFSM(StatesGroup):
     edit_value = State()    # name | token
     edit_limit = State()
     edit_margin = State()
-    edit_rub = State()
 
 
 def _prov(account: ProviderAccount) -> TimewebProvider:
@@ -92,8 +91,6 @@ async def _render_tw_home(msg, session: AsyncSession):
     cfg = account.extra_config or {}
     vm_limit = int(cfg.get("vm_limit") or 0)
     token_masked = f"{(account.api_key or '')[:6]}…{(account.api_key or '')[-4:]}"
-    rub_row = await session.get(BotSettings, "np_rub_to_irt_rate")
-    rub_rate = (rub_row.value if rub_row and rub_row.value else None)
 
     plans_count = (await session.execute(
         select(func.count(ServerPlan.id)).where(
@@ -115,10 +112,7 @@ async def _render_tw_home(msg, session: AsyncSession):
                               callback_data="admin:twm:h"),
          InlineKeyboardButton(text=f"سود ماهانه: {mm if mm is not None else '—'}٪",
                               callback_data="admin:twm:m")],
-        [InlineKeyboardButton(
-            text=f"نرخ روبل: {float(rub_rate):,.0f} تومان" if rub_rate else "نرخ روبل: تنظیم نشده!",
-            callback_data="admin:tw_rub"),
-         InlineKeyboardButton(text=f"لیمیت VM: {vm_limit or 'تعیین نشده'}",
+        [InlineKeyboardButton(text=f"لیمیت VM: {vm_limit or 'تعیین نشده'}",
                               callback_data="admin:tw_limit")],
         [InlineKeyboardButton(text=f"گروه مقصد: {group}", callback_data="admin:twgrp")],
         [InlineKeyboardButton(
@@ -134,8 +128,8 @@ async def _render_tw_home(msg, session: AsyncSession):
         f"سرورهای فعال مشتری: {servers_count}"
         f"{f' / {vm_limit}' if vm_limit else ''}\n"
         f"محصولات ایمپورت‌شده: {plans_count}\n\n"
-        "قیمت‌ها به روبل است (نرخ روبل خودکار از Navasan + قابل‌تنظیم دستی). "
-        "فروش ساعتی و ماهانه — ساعتی = ماهانه ÷ ۷۲۰.\n"
+        "قیمت‌ها به روبل است — نرخ روبل هر ۸ ساعت خودکار از نوسان آپدیت می‌شود "
+        "(نمایش: بخش مالی ← نرخ ارز). فروش ساعتی و ماهانه — ساعتی = ماهانه ÷ ۷۲۰.\n"
         "محصول ایمپورت‌شده تا تعیین سود غیرفعال است.\n"
         "⚠️ «تأیید حذف سرویس‌ها» در پنل تایم‌وب باید خاموش باشد.",
         parse_mode="HTML",
@@ -320,39 +314,6 @@ async def tw_limit_value(message: Message, state: FSMContext, session: AsyncSess
     await session.flush()
     await message.answer(
         f"لیمیت VM روی {int(message.text) or 'بدون کنترل'} ثبت شد.",
-        reply_markup=back_to_admin_kb("admin:timeweb"),
-    )
-
-
-@router.callback_query(F.data == "admin:tw_rub")
-async def cb_tw_rub(cb: CallbackQuery, state: FSMContext):
-    await state.set_state(TimewebFSM.edit_rub)
-    await cb.message.edit_text(
-        "<b>نرخ روبل → تومان</b>\n\n"
-        "این نرخ هر ۸ ساعت خودکار از Navasan آپدیت می‌شود (اگر Navasan روبل "
-        "بدهد). اینجا می‌توانید دستی هم ست کنید — تا آپدیت خودکار بعدی مبنا "
-        "می‌ماند.\n\n"
-        "قیمت هر ۱ روبل به تومان را وارد کنید (مثال: 1100):",
-        parse_mode="HTML", reply_markup=cancel_admin_kb(),
-    )
-    await cb.answer()
-
-
-@router.message(TimewebFSM.edit_rub, F.text.regexp(r"^\d+(\.\d+)?$"))
-async def tw_rub_value(message: Message, state: FSMContext, session: AsyncSession):
-    await state.clear()
-    val = float(message.text)
-    if val <= 0:
-        await message.answer("عدد معتبر وارد کنید.")
-        return
-    row = await session.get(BotSettings, "np_rub_to_irt_rate")
-    if row:
-        row.value = str(val)
-    else:
-        session.add(BotSettings(key="np_rub_to_irt_rate", value=str(val)))
-    await session.flush()
-    await message.answer(
-        f"نرخ روبل روی {val:,.0f} تومان ثبت شد.",
         reply_markup=back_to_admin_kb("admin:timeweb"),
     )
 

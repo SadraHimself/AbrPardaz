@@ -556,19 +556,23 @@ def sync_timeweb_catalog(self):
                 for plan in all_plans:
                     extra = dict(plan.extra_data or {})
                     info = offered.get(plan.provider_plan_id)
-                    # بازسازی نام/شهر/نوع برای پلن‌های قدیمیِ بی‌متادیتا (یک‌بار)
+                    # بازسازی/تصحیح نام/شهر/نوع از تعرفه‌ی زنده (self-heal
+                    # برچسب‌های نادرستِ گذشته — فقط اگر تغییر کرده باشد می‌نویسد)
                     _rawp = raw_map.get(plan.provider_plan_id)
-                    if _rawp is not None and not extra.get("cpu_type"):
+                    if _rawp is not None:
                         _city = city_from_preset(_rawp, plan.location or "")
                         _tk, _tl = cpu_type_from_preset(_rawp)
-                        extra["region_name"] = _city
-                        extra["cpu_type"] = _tk
-                        extra["cpu_type_label"] = _tl
                         ram_g = plan.ram // 1024 if plan.ram >= 1024 else plan.ram
                         _dt = (extra.get("disk_type") or "").upper()
-                        plan.display_name = (
-                            f"{_tl} · {plan.cpu}c/{ram_g}G/{plan.disk}G {_dt} · {_city}".strip())
-                        plan.extra_data = extra
+                        _dn = f"{_tl} · {plan.cpu}c/{ram_g}G/{plan.disk}G {_dt} · {_city}".strip()
+                        if (extra.get("region_name") != _city
+                                or extra.get("cpu_type") != _tk
+                                or plan.display_name != _dn):
+                            extra["region_name"] = _city
+                            extra["cpu_type"] = _tk
+                            extra["cpu_type_label"] = _tl
+                            plan.display_name = _dn
+                            plan.extra_data = extra
                     loc_label = extra.get("region_name") or plan.location or "?"
                     if info is None or (plan.location and info.location != plan.location):
                         if not extra.get("unavailable"):

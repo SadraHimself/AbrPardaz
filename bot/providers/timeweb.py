@@ -45,24 +45,31 @@ _RUNNING = {"on", "rebooting", "hard_rebooting"}
 # لیبل شهرِ لوکیشن‌ها برای مرحله‌ی لوکیشن خرید (region_name در extra پلن).
 # شهر واقعی از description خودِ preset («Cloud MSK 50») هم استخراج می‌شود؛ این
 # نگاشت fallback و برای زمانی است که description شهر را نداشته باشد.
+# ⚠️ کد لوکیشن تایم‌وب (ru-1/us-4/...) قابل‌اتکا به شهر نیست (هر اکانت متفاوت) —
+# fallback آخر است؛ منبع اصلیِ شهر، description خودِ تعرفه است.
 LOC_LABELS = {
-    "ru-1": "Saint Petersburg", "ru-2": "Moscow", "ru-3": "Novosibirsk",
-    "pl-1": "Poland", "kz-1": "Almaty (Kazakhstan)", "nl-1": "Amsterdam",
+    "kz-1": "Almaty (Kazakhstan)", "nl-1": "Amsterdam", "pl-1": "Poland",
+    "de-1": "Germany", "us-4": "USA",
 }
-# کد شهر داخل description تعرفه («Cloud MSK 50») → نام کامل شهر
+# کد شهر داخل description تعرفه («Cloud MSK 50» / «Cloud NSK 50») → نام کامل.
+# تطبیق توکن‌محور است (نه substring) تا «de» در «dedicated» یا «us» در «cluster»
+# اشتباهی شهر نشوند.
 _CITY_CODE = {
     "spb": "Saint Petersburg", "msk": "Moscow", "nsk": "Novosibirsk",
     "ekb": "Yekaterinburg", "kzn": "Kazan", "ala": "Almaty",
     "ams": "Amsterdam", "fra": "Frankfurt", "gdn": "Gdansk", "waw": "Warsaw",
+    "nyc": "New York",
 }
+import re as _re
 
 
 def city_from_preset(preset: dict, location: str = "") -> str:
     """نام شهر یک تعرفه — اول از description («Cloud MSK 50»)، بعد از نگاشت
-    location. برای نمایش یکدست به کاربر و ادمین."""
-    desc = f"{preset.get('description') or ''} {preset.get('description_short') or ''}".lower()
+    location. تطبیق توکن‌محور (کلمه‌های جدا) تا false-match ندهد."""
+    desc = f"{preset.get('description') or ''} {preset.get('description_short') or ''}"
+    tokens = set(_re.findall(r"[a-z]+", desc.lower()))
     for code, city in _CITY_CODE.items():
-        if code in desc:
+        if code in tokens:
             return city
     return LOC_LABELS.get(location, location or "?")
 
@@ -672,13 +679,25 @@ class TimewebProvider(BaseProvider):
         raise RuntimeError("تایم‌وب رمز جدید را برنگرداند — کمی بعد دوباره تلاش کنید")
 
     async def list_locations(self) -> list[dict]:
-        """لوکیشن‌هایی که تعرفه دارند (از خود presets — v2/locations همه‌ی
-        محصولات را می‌دهد نه فقط سرور ابری)."""
+        """لوکیشن‌هایی که تعرفه دارند — لیبل شهر از description خودِ تعرفه‌ها
+        (منبع واحد با فلوی خرید تا ادمین و کاربر تناقض نداشته باشند).
+        اگر description شهر نداشت، LOC_LABELS، بعد کد خام."""
         data = await self._request("GET", "/api/v1/presets/servers")
-        locs = sorted({p.get("location") for p in data.get("server_presets") or []
-                       if p.get("location")})
-        return [{"id": l, "slug": l, "display_name": LOC_LABELS.get(l, l)}
-                for l in locs]
+        by_loc: dict[str, list] = {}
+        for p in data.get("server_presets") or []:
+            loc = p.get("location")
+            if loc:
+                by_loc.setdefault(loc, []).append(p)
+        out = []
+        for loc in sorted(by_loc):
+            # شهرِ نمایندهِ لوکیشن = پرتکرارترین شهرِ description تعرفه‌های آن
+            from collections import Counter
+            cities = Counter(city_from_preset(p, "") for p in by_loc[loc])
+            cities.pop("?", None)
+            city = cities.most_common(1)[0][0] if cities else LOC_LABELS.get(loc, loc)
+            out.append({"id": loc, "slug": loc, "display_name": city,
+                        "count": len(by_loc[loc])})
+        return out
 
     async def count_servers(self) -> int:
         data = await self._request("GET", "/api/v1/servers",

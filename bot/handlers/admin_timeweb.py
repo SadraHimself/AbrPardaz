@@ -557,13 +557,28 @@ async def _raw_presets(account: ProviderAccount) -> dict:
     return m
 
 
+_TW_TYPE_RANK = {"standard": 0, "premium": 1, "highcpu": 2, "dedicated": 3}
+
+
 async def _render_tw_plans(msg, session: AsyncSession, account: ProviderAccount, loc: str):
-    from bot.providers.timeweb import cpu_type_from_preset
+    from bot.providers.timeweb import cpu_type_from_preset, city_from_preset
     plans = await _location_plans(account, loc)
     imported = await _imported_map(session, loc)
     raw_map = await _raw_presets(account)
+    # مرتب‌سازی: اول نوع سرور (Standard→Premium→High CPU→Dedicated)، بعد رم، بعد دیسک
+    def _sort_key(pl):
+        tk, _ = cpu_type_from_preset(raw_map.get(pl.provider_plan_id) or {})
+        return (_TW_TYPE_RANK.get(tk, 9), pl.ram, pl.disk)
+    plans = sorted(plans, key=_sort_key)
+    # شهرِ لوکیشن از description تعرفه‌ها (منبع واحد با فلوی خرید)
+    from collections import Counter as _Counter
+    _cities = _Counter(city_from_preset(raw_map.get(p.provider_plan_id) or {}, loc)
+                       for p in plans)
+    _cities.pop("?", None)
+    city_label = _cities.most_common(1)[0][0] if _cities else LOC_LABELS.get(loc, loc)
     rows = []
     stock_note = ""
+    _cur_type = None
     for p in plans:
         db = imported.get(p.provider_plan_id)
         mark = _plan_status_mark(db)
@@ -607,9 +622,8 @@ async def _render_tw_plans(msg, session: AsyncSession, account: ProviderAccount,
         InlineKeyboardButton(text="حذف همه", callback_data=f"admin:twalloff:{loc}"),
     ])
     rows.append([InlineKeyboardButton(text="بازگشت", callback_data="admin:tw_import")])
-    _city = LOC_LABELS.get(loc, loc)
     await msg.edit_text(
-        f"<b>تعرفه‌های تایم‌وب — {_city}</b>\n\n"
+        f"<b>تعرفه‌های تایم‌وب — {city_label}</b>\n\n"
         "✅فعال · ☑️ایمپورت بی‌قیمت · 🚫ناموجود · ⬜ایمپورت‌نشده\n"
         "عدد = قیمت خرید ماهانه (₽) · تپ = افزودن/حذف · ℹ️ = جزئیات"
         f"{stock_note}",

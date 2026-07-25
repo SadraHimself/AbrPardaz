@@ -235,11 +235,14 @@ class TimewebProvider(BaseProvider):
         هر ۵ ثانیه — rate limit تایم‌وب ۲۰/ثانیه است، خیالمان راحت.
 
         fail_on: وضعیت‌های واقعاً پایان‌یافته (blocked/permanent_blocked) → شکست فوری.
-        no_paid: **مرگ آنی نیست** — حین provisioning تایم‌وب چند لحظه no_paid نشان
-        می‌دهد (در انتظار اولین کسر ساعتی) و بعد on می‌شود. فقط اگر بیش از
-        no_paid_grace_s در این وضعیت بماند = واقعاً بی‌پول → شکست."""
+        no_paid: **به‌تنهایی شکست نیست.** حین provisioning تایم‌وب چند لحظه/دقیقه
+        no_paid نشان می‌دهد (در انتظار تسویه‌ی اولین کسر ساعتی + سرویس IP) و بعد on
+        می‌شود؛ درست مثل ساخت از خودِ سایت. چون قبل از ساخت موجودیِ اکانت چک شده
+        که کفاف این سرور را می‌دهد، no_paid گذراست — پس دیگر کنسلِ زودهنگام نداریم؛
+        فقط تا سقفِ timeout_s صبر می‌کنیم. یک سرورِ دارای root_pass یعنی نصبِ OS
+        تمام شده = سرورِ واقعی؛ حتی اگر لحظه‌ای no_paid باشد تحویلش می‌دهیم (خودش
+        روشن می‌شود). no_paid_grace_s دیگر استفاده نمی‌شود (سازگاری امضا)."""
         deadline = asyncio.get_event_loop().time() + timeout_s
-        no_paid_since: float | None = None
         last: dict = {}
         while asyncio.get_event_loop().time() < deadline:
             try:
@@ -247,24 +250,18 @@ class TimewebProvider(BaseProvider):
             except RuntimeError:
                 last = {}
             st = (last.get("status") or "").lower()
-            if st in targets and (not need_root_pass or last.get("root_pass")):
+            rp = last.get("root_pass")
+            if st in targets and (not need_root_pass or rp):
+                return last
+            # سرورِ ساخته‌شده که فقط منتظرِ تسویه‌ی بیلینگ است (no_paid ولی رمز
+            # دارد) هم آماده‌ی تحویل است — no_paid گذراست و موجودی از قبل چک شده.
+            if need_root_pass and rp and st == "no_paid":
                 return last
             if fail_on and st in fail_on:
                 logger.warning("timeweb server %s entered %s — aborting wait",
                                server_id, st)
                 raise RuntimeError(
                     "ظرفیت سرویس‌دهنده موقتاً در دسترس نیست — لطفاً بعداً تلاش کنید")
-            now = asyncio.get_event_loop().time()
-            if st == "no_paid":
-                if no_paid_since is None:
-                    no_paid_since = now
-                elif now - no_paid_since >= no_paid_grace_s:
-                    logger.warning("timeweb server %s stuck no_paid > %ss — unpaid",
-                                   server_id, no_paid_grace_s)
-                    raise RuntimeError(
-                        "ظرفیت سرویس‌دهنده موقتاً در دسترس نیست — لطفاً بعداً تلاش کنید")
-            else:
-                no_paid_since = None
             await asyncio.sleep(5)
         raise RuntimeError("Timeweb: مهلت انتظار عملیات تمام شد")
 
@@ -391,21 +388,25 @@ class TimewebProvider(BaseProvider):
         # نصب چند دقیقه طول می‌کشد؛ تحویل به IP و رمز (root_pass) نیاز دارد.
         # ساخت تراکنشی: شکست/مهلت → سرور نیمه‌ساخته حذف شود تا بیل نخورد.
         try:
-            # ۷۲۰s نصب + ≤۱۸۰s تضمین IP ≈ سقف ۱۵ دقیقه — هم‌راستا با قول
-            # «۱۰ تا ۱۵ دقیقه» به مشتری؛ بعدش لغو سایلنت + برگشت کامل وجه.
-            # با برنامه مارکت‌پلیس نصب طولانی‌تر است → ۹۰۰s.
-            # no_paid فقط اگر پایدار بماند شکست است (grace داخل _wait_status).
+            # سقف انتظار: نصب + فازِ گذرای no_paid (تسویه‌ی بیلینگ) + تضمین IP.
+            # ۹۰۰s برای عادی و ۱۰۸۰s برای برنامه‌ی مارکت‌پلیس (نصب طولانی‌تر) تا
+            # سرورِ سالمی که فقط دیر روشن می‌شود زودهنگام کنسل نشود؛ بعدش لغو
+            # سایلنت + برگشت کامل وجه. no_paid دیگر به‌تنهایی شکست نیست
+            # (منطق در _wait_status).
             fresh = await self._wait_status(
                 str(server_id), {"on"},
-                timeout_s=(900 if software_id else 720), need_root_pass=True,
+                timeout_s=(1080 if software_id else 900), need_root_pass=True,
                 fail_on={"blocked", "permanent_blocked"})
         except Exception:
-            # چک نهاییِ نجات: ممکن است سرور واقعاً بالا آمده باشد ولی poll وسط راه
-            # خطای گذرا/تایم‌اوت خورده باشد (E2E 2026-07-25: سرور در پنل کامل بود
-            # ولی ربات لغو کرد). اگر on + root_pass است، تحویلش بده نه حذف.
+            # چک نهاییِ نجات: ممکن است سرور واقعاً ساخته شده باشد ولی poll وسط راه
+            # خطا/تایم‌اوت خورده باشد یا وضعیت لحظه‌ای no_paid مانده باشد (E2E
+            # 2026-07-25: سرور در پنل کامل بود ولی ربات لغو کرد). معیارِ «سرورِ
+            # واقعی» = داشتنِ root_pass (نصبِ OS تمام شده)؛ چنین سروری را هرگز
+            # حذف نمی‌کنیم — no_paid فقط تسویه‌ی بیلینگ است و چون موجودی چک شده
+            # خودش روشن می‌شود. تحویلش بده نه حذف.
             try:
                 chk = await self._get_server_raw(str(server_id))
-                if (chk.get("status") or "").lower() == "on" and chk.get("root_pass"):
+                if chk.get("root_pass"):
                     self.last_root_password = chk.get("root_pass")
                     info = self._server_info(chk)
                     if not info.ip_address:

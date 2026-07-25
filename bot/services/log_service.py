@@ -238,6 +238,16 @@ class LogService:
             "وضعیت قبلی محصول برگردانده شد.",
         )
 
+    async def log_low_balance(self, balance_rub: float, threshold_rub: float) -> None:
+        await self._send(
+            "server",
+            f"⚠️ <b>موجودی اکانت تایم‌وب کم است</b>\n\n"
+            f"موجودی فعلی: <b>{balance_rub:,.2f} ₽</b> (زیر {threshold_rub:g} ₽)\n\n"
+            "تا شارژ نشود، سرورهای جدید در وضعیت «Not paid» می‌مانند و بعد از "
+            "مهلت، سفارش لغو و وجه کاربر برگردانده می‌شود.\n"
+            "لطفاً هرچه زودتر حساب تایم‌وب را شارژ کنید.",
+        )
+
     async def log_provider_down(self, name: str, reason: str = "") -> None:
         await self._send(
             "server",

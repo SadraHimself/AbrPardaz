@@ -612,6 +612,31 @@ def sync_timeweb_catalog(self):
                             plan.price_monthly = round(
                                 float(extra["cost_monthly"]) * (1 + float(mm) / 100), 2)
                 await session.commit()
+
+                # هشدار موجودی کمِ اکانت تایم‌وب — یک‌بار وقتی زیر آستانه می‌رود
+                # (edge-triggered)؛ با شارژِ دوباره بالای آستانه ری‌آرم می‌شود که
+                # اسپم نشود و دفعه‌ی بعد هم هشدار بدهد.
+                try:
+                    from bot.database.models import BotSettings
+                    from bot.services.timeweb_settings import LOW_BALANCE_RUB
+                    bal = await prov.get_balance()
+                    if bal is not None:
+                        flag = await session.get(
+                            BotSettings, "timeweb_low_balance_alerted")
+                        alerted = bool(flag and flag.value == "1")
+                        if bal < LOW_BALANCE_RUB and not alerted:
+                            await log.log_low_balance(bal, LOW_BALANCE_RUB)
+                            if flag:
+                                flag.value = "1"
+                            else:
+                                session.add(BotSettings(
+                                    key="timeweb_low_balance_alerted", value="1"))
+                            await session.commit()
+                        elif bal >= LOW_BALANCE_RUB and alerted:
+                            flag.value = "0"
+                            await session.commit()
+                except Exception:
+                    pass
             finally:
                 await bot.session.close()
 

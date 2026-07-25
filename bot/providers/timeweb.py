@@ -783,6 +783,16 @@ class TimewebProvider(BaseProvider):
         await self._request("GET", "/api/v1/account/status")
         return True
 
+    async def get_balance(self) -> Optional[float]:
+        """موجودی فعلیِ اکانت تایم‌وب به روبل — برای هشدارِ موجودی کم.
+        در خطا None برمی‌گرداند تا هشدار الکی زده نشود."""
+        try:
+            fin = (await self._request(
+                "GET", "/api/v1/account/finances")).get("finances") or {}
+            return float(fin.get("balance") or 0)
+        except Exception:
+            return None
+
     async def verify(self) -> dict:
         """تست زنده هنگام افزودن اکانت: توکن + وضعیت اکانت + موجودی + تعرفه‌ها."""
         st = (await self._request("GET", "/api/v1/account/status")).get("status") or {}

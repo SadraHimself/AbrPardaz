@@ -267,6 +267,18 @@ class LogService:
             "برای جزئیات، خطِ <code>TW_CREATE_DIAG</code> را در لاگِ سرور ببین.",
         )
 
+    async def log_timeweb_funds(self, hostname: str) -> None:
+        await self._send(
+            "server",
+            f"⛔ <b>ساخت سرور تایم‌وب رد شد — موجودی برای سرورِ جدید کافی نیست</b>\n\n"
+            f"سرور <code>{hostname}</code> ساخته نشد و وجه کاربر کامل برگشت.\n\n"
+            "تایم‌وب برای <b>هر سرور</b> تقریباً هزینه‌ی یک‌ماهش را از بالانس رزرو "
+            "می‌کند. موجودیِ فعلی فقط کفافِ سرورهای فعلی را می‌دهد و برای سرورِ جدید "
+            "جا نیست (وگرنه no_paid می‌شد).\n"
+            "برای فروشِ سرورِ بیشتر، حساب تایم‌وب را شارژ کن — تقریباً به‌ازای هر "
+            "سرورِ هم‌زمان، یک‌ماه هزینه.",
+        )
+
     async def log_provider_down(self, name: str, reason: str = "") -> None:
         await self._send(
             "server",

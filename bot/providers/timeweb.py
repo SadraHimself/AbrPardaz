@@ -356,22 +356,29 @@ class TimewebProvider(BaseProvider):
         if not params.os_id:
             raise RuntimeError("سیستم‌عامل انتخاب نشده است")
 
-        # پیش‌چک موجودی اکانت تایم‌وب: اگر موجودی از هزینه‌ی ماهانه سرور کمتر
-        # باشد، سرور با وضعیت «Not paid» ساخته می‌شود و هرگز روشن نمی‌شود (E2E)
-        # → قبل از ساخت جلویش را بگیریم که پول مشتری الکی گیر نکند
+        # پیش‌چکِ موجودی — ریشه‌ی no_paid (کشفِ کاربر 2026-07-26): تایم‌وب برای
+        # *هر* سرور تقریباً هزینه‌ی یک‌ماهش را از بالانس رزرو می‌کند. سرور جدید
+        # فقط وقتی ساخته می‌شود که بالانس، «تعهدِ ماهانه‌ی فعلی (monthly_cost) +
+        # این سرور» را پوشش دهد؛ وگرنه بی‌درنگ no_paid می‌شود (حتی اگر بالانس
+        # کفافِ یک سرور را تنها بدهد). پس مجموع‌آگاه چک می‌کنیم و سرورِ محکوم‌به‌
+        # no_paid را اصلاً نمی‌سازیم (به‌جای ۸ دقیقه معطلی و برگشت وجه).
         need_rub = float(params.extra.get("cost_monthly") or 0)
         if need_rub:
             try:
                 fin = (await self._request(
                     "GET", "/api/v1/account/finances")).get("finances") or {}
                 bal = float(fin.get("balance") or 0)
+                committed = float(fin.get("monthly_cost") or 0)
             except Exception:
-                bal = None
-            if bal is not None and bal < need_rub:
-                logger.warning("timeweb balance %.2f RUB < needed %.2f RUB — refusing create",
-                               bal, need_rub)
+                bal, committed = None, 0.0
+            if bal is not None and bal < committed + need_rub:
+                logger.warning(
+                    "timeweb balance %.2f < committed %.2f + new %.2f RUB → would "
+                    "go no_paid; refusing create", bal, committed, need_rub)
+                # مارکرِ __TW_FUNDS__ تا هندلر به ادمین هشدارِ «حساب را شارژ کن» بدهد
                 raise RuntimeError(
-                    "ظرفیت سرویس‌دهنده موقتاً در دسترس نیست — لطفاً بعداً تلاش کنید")
+                    "__TW_FUNDS__ موجودی اکانت تایم‌وب برای سرور جدید کافی نیست "
+                    "(رزرو ماهانه) — لطفاً بعداً تلاش کنید")
         body: dict = {
             "name": params.name,
             "preset_id": int(params.plan_id),

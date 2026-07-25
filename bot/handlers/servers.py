@@ -1799,6 +1799,9 @@ def _friendly_fail_reason(err: str) -> str:
     """دلیل قابل‌نمایش به کاربر برای شکست ساخت — خطاهای فنی/انگلیسی عمومی می‌شوند،
     پیام‌های فارسیِ از قبل کاربرپسند (ظرفیت/موجودی/سازگاری) همان‌طور می‌مانند."""
     e = (err or "").strip()
+    # موجودیِ اکانتِ ما (داخلی) کافی نیست — به مشتری فقط «ظرفیت موقتاً پر است»
+    if "__TW_FUNDS__" in e:
+        return "ظرفیت ساخت سرور موقتاً تکمیل است — لطفاً کمی بعد دوباره تلاش کنید"
     # no_paid = حالتِ پرداختِ اکانتِ ما (داخلی) — به مشتری فقط پیام عمومی
     if "no_paid" in e.lower() or "پرداخت‌نشده" in e:
         return "آماده‌سازی سرویس موقتاً ممکن نشد و سفارش لغو شد"
@@ -1975,8 +1978,15 @@ async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: 
                 # هشدارِ دقیقِ ادمین وقتی سرور «پرداخت‌نشده» ماند با وجودِ موجودیِ
                 # سالم — این باگِ کد نیست، حالتِ پرداختِ اکانتِ تایم‌وب است و تا
                 # درست نشود همه‌ی ساخت‌ها شکست می‌خورند.
-                if plan.provider_type == ProviderType.TIMEWEB \
-                        and "no_paid" in str(e).lower():
+                _emsg = str(e)
+                if plan.provider_type == ProviderType.TIMEWEB and "__TW_FUNDS__" in _emsg:
+                    # موجودیِ اکانت کفافِ یک سرورِ هم‌زمانِ بیشتر را نمی‌دهد
+                    try:
+                        await LogService(bot, session).log_timeweb_funds(hostname)
+                    except Exception:
+                        pass
+                elif plan.provider_type == ProviderType.TIMEWEB \
+                        and "no_paid" in _emsg.lower():
                     try:
                         _specs = plan.display_name or plan.name or ""
                         await LogService(bot, session).log_timeweb_unpaid(

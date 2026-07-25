@@ -356,25 +356,27 @@ class TimewebProvider(BaseProvider):
         if not params.os_id:
             raise RuntimeError("سیستم‌عامل انتخاب نشده است")
 
-        # پیش‌چکِ سلامتِ اکانت (مدلِ ساعتیِ داکس): فقط اگر بالانس ≤۰ یا برای کلِ
-        # سرورهای فعلی کمتر از ۲۴ ساعت شارژ مانده باشد، جلوی ساخت را می‌گیریم تا
-        # سرورِ no_paid ساخته نشود. «رزروِ ماهانه‌ی هر سرور» در داکس نیست (فرضِ
-        # اشتباهِ قبلی حذف شد) — پس دیگر سرور دوم را الکی بلاک نمی‌کنیم.
+        # پیش‌چکِ موجودی — لاگِ زنده (2026-07-26) ثابت کرد: تایم‌وب سرور را با
+        # create_status=no_paid رد می‌کند وقتی بالانس کفافِ «تعهدِ ماهانه‌ی فعلیِ
+        # همه‌ی سرورها (monthly_cost) + این سرور» را نمی‌دهد (رزرو واقعی است،
+        # هرچند داکس مستندش نکرده). پس مجموع‌آگاه چک می‌کنیم و سرورِ محکوم‌به‌
+        # no_paid را اصلاً نمی‌سازیم.
+        need_rub = float(params.extra.get("cost_monthly") or 0)
         try:
             fin = (await self._request(
                 "GET", "/api/v1/account/finances")).get("finances") or {}
             bal = float(fin.get("balance") or 0)
-            hl = fin.get("hours_left")
-            hl = float(hl) if hl is not None else None
+            committed = float(fin.get("monthly_cost") or 0)
         except Exception:
-            bal, hl = None, None
-        if bal is not None and (bal <= 0 or (hl is not None and hl < 24)):
+            bal, committed = None, None
+        if bal is not None and (bal <= 0 or bal < committed + need_rub):
             logger.warning(
-                "timeweb account low (balance=%.2f hours_left=%s) — refusing create",
-                bal, hl)
+                "timeweb balance %.2f < committed %.2f + new %.2f → would no_paid; "
+                "refusing create", bal, committed, need_rub)
             # مارکرِ __TW_FUNDS__ تا هندلر به ادمین هشدارِ «حساب را شارژ کن» بدهد
             raise RuntimeError(
-                "__TW_FUNDS__ موجودی اکانت تایم‌وب کافی نیست — لطفاً بعداً تلاش کنید")
+                "__TW_FUNDS__ موجودی اکانت تایم‌وب برای سرور جدید کافی نیست "
+                "(رزرو ماهانه) — لطفاً بعداً تلاش کنید")
         body: dict = {
             "name": params.name,
             "preset_id": int(params.plan_id),
@@ -544,23 +546,26 @@ class TimewebProvider(BaseProvider):
                 return info
 
             async def _add_ip() -> Optional[str]:
-                """IPv4 اضافه کن و آدرسش را از پاسخِ POST برگردان (یا None)."""
+                """IPv4 اضافه کن و آدرسش را از پاسخِ POST برگردان (یا None).
+                هم موفقیت هم خطا با تگِ TW_IP_ADD لاگ می‌شود تا در گرپ دیده شود."""
                 try:
                     resp = await self._request(
                         "POST", f"/api/v1/servers/{int(server_id)}/ips",
                         json={"type": "ipv4"})
                     _ip = ((resp or {}).get("server_ip") or {}).get("ip")
-                    logger.warning("TW_IP_ADD server=%s resp_ip=%s", server_id, _ip or "-")
+                    logger.warning("TW_IP_ADD server=%s ok resp_ip=%s", server_id, _ip or "-")
                     return _ip
                 except RuntimeError as e:
-                    logger.warning("timeweb add-ip for %s: %s", server_id, e)
+                    logger.warning("TW_IP_ADD server=%s ERROR %s", server_id, str(e)[:140])
                     return None
 
+            # مکثِ کوتاه: درست بعد از on گاهی سرور هنوز آماده‌ی گرفتنِ IP نیست
+            await asyncio.sleep(5)
             for _ in range(3):
                 ipv4 = await _add_ip()
                 if ipv4:
                     break
-                await asyncio.sleep(3)
+                await asyncio.sleep(5)
             # اگر پاسخِ POST آدرس نداد (nullable)، از endpoint اختصاصی poll کن
             deadline = asyncio.get_event_loop().time() + 180
             while asyncio.get_event_loop().time() < deadline and not ipv4:
@@ -569,11 +574,12 @@ class TimewebProvider(BaseProvider):
             if ipv4:
                 info.ip_address = ipv4
             else:
-                logger.warning("timeweb ensure_public_ip(%s): no ipv4", server_id)
+                logger.warning("TW_IP_ADD server=%s NONE no ipv4 after retries+poll",
+                               server_id)
             if ipv6 and not info.ipv6_address:
                 info.ipv6_address = ipv6
         except Exception as e:
-            logger.warning("timeweb ensure_public_ip(%s): %s", server_id, e)
+            logger.warning("TW_IP_ADD server=%s FATAL %s", server_id, str(e)[:140])
         return info
 
     async def get_server(self, server_id: str) -> ServerInfo:
@@ -845,20 +851,18 @@ class TimewebProvider(BaseProvider):
             return None
 
     async def capacity_ok(self, need_monthly: float = 0.0) -> bool:
-        """آیا اکانت برای ساختِ سرورِ جدید سالم است؟ مدلِ تایم‌وب طبقِ داکس
-        **ساعتی** است (hourly_cost/hours_left) — «رزروِ ماهانه‌ی هر سرور» در
-        داکس نیست (فرضِ اشتباهِ قبلی، حذف شد). فقط اگر بالانس ≤۰ یا برای کلِ
-        سرورهای فعلی کمتر از ۲۴ ساعت شارژ مانده باشد، ناسالم است. در خطا True."""
+        """آیا بالانس «تعهدِ ماهانه‌ی فعلیِ همه‌ی سرورها (monthly_cost) + این
+        سرور» را پوشش می‌دهد؟ لاگِ زنده (2026-07-26) ثابت کرد تایم‌وب سرورِ
+        بعدی را با no_paid رد می‌کند وقتی بالانس کفافِ مجموع را ندهد (رزرو واقعی،
+        مستندنشده). چکِ زودهنگام در فلوی خرید. در خطا True (create backstop است)."""
         try:
             fin = (await self._request(
                 "GET", "/api/v1/account/finances")).get("finances") or {}
             bal = float(fin.get("balance") or 0)
-            hl = fin.get("hours_left")
+            committed = float(fin.get("monthly_cost") or 0)
             if bal <= 0:
                 return False
-            if hl is not None and float(hl) < 24:
-                return False
-            return True
+            return bal >= committed + float(need_monthly or 0)
         except Exception:
             return True
 

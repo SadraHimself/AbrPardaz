@@ -87,6 +87,26 @@ async def on_startup(bot: Bot) -> None:
     except Exception as e:
         logger.warning("hetzner display-name cleanup skipped: %s", e)
 
+    # تصحیح فوری اسم پلن‌های تایم‌وب از تعرفه‌ی زنده هنگام استارت (بدون منتظرِ
+    # سینک ۳۰دقیقه‌ای worker) — تا بعد از هر دیپلوی، نام‌ها بلافاصله درست باشند
+    try:
+        from bot.database.models import ProviderAccount, ProviderType
+        from bot.database.session import AsyncSessionFactory
+        from bot.providers.timeweb import TimewebProvider
+        from bot.services.timeweb_settings import resync_plan_labels
+        from sqlalchemy import select as _sel
+        async with AsyncSessionFactory() as s:
+            acc = (await s.execute(_sel(ProviderAccount).where(
+                ProviderAccount.provider_type == ProviderType.TIMEWEB
+            ).order_by(ProviderAccount.id))).scalars().first()
+            if acc:
+                fixed = await resync_plan_labels(s, TimewebProvider(api_token=acc.api_key or ""))
+                if fixed:
+                    await s.commit()
+                    logger.info("timeweb: %s plan names resynced on startup", fixed)
+    except Exception as e:
+        logger.warning("timeweb startup name-resync skipped: %s", e)
+
     logger.info("Database tables ready.")
 
 

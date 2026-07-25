@@ -140,6 +140,14 @@ async def _render_tw_home(msg, session: AsyncSession):
 @router.callback_query(F.data == "admin:timeweb")
 async def cb_timeweb(cb: CallbackQuery, session: AsyncSession):
     await cb.answer()
+    # فرصت خوب برای تصحیح فوری اسم پلن‌ها از تعرفه‌ی زنده (بدون منتظرِ سینک)
+    account = await _tw_account(session)
+    if account:
+        try:
+            from bot.services.timeweb_settings import resync_plan_labels
+            await asyncio.wait_for(resync_plan_labels(session, _prov(account)), timeout=25)
+        except Exception:
+            pass
     await _render_tw_home(cb.message, session)
 
 

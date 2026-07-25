@@ -189,6 +189,43 @@ async def restore_cooldown_passed(session: AsyncSession) -> int:
     return n
 
 
+async def resync_plan_labels(session: AsyncSession, provider) -> int:
+    """اسم کوتاه/شهر/نوعِ همه‌ی پلن‌های تایم‌وب را از تعرفه‌ی زنده تصحیح می‌کند
+    (بدون منتظرماندنِ سینک ۳۰دقیقه‌ای). موقع باز کردن پنل و استارت ربات صدا
+    زده می‌شود. خروجی: تعداد پلن‌های اصلاح‌شده."""
+    from bot.providers.timeweb import tw_build_labels
+    try:
+        raw = await provider._request("GET", "/api/v1/presets/servers")
+        by_id = {str(p.get("id")): p for p in raw.get("server_presets") or []}
+        labels = tw_build_labels(list(by_id.values()))
+    except Exception as e:
+        logger.warning("timeweb resync_plan_labels: fetch failed: %s", e)
+        return 0
+    plans = (await session.execute(
+        select(ServerPlan).where(ServerPlan.provider_type == ProviderType.TIMEWEB)
+    )).scalars().all()
+    n = 0
+    for plan in plans:
+        lbl = labels.get(plan.provider_plan_id)
+        if not lbl:
+            continue
+        extra = dict(plan.extra_data or {})
+        dn = lbl["display_name"]
+        if (plan.display_name != dn
+                or extra.get("region_name") != lbl["city"]
+                or extra.get("cpu_type") != lbl["cpu_type"]
+                or extra.get("city_code") != lbl["city_code"]):
+            plan.display_name = dn
+            extra["region_name"] = lbl["city"]
+            extra["city_code"] = lbl["city_code"]
+            extra["cpu_type"] = lbl["cpu_type"]
+            extra["cpu_type_label"] = lbl["cpu_label"]
+            plan.extra_data = extra
+            n += 1
+    await session.flush()
+    return n
+
+
 async def get_account(session: AsyncSession) -> ProviderAccount | None:
     """تنها اکانت تایم‌وب (فعال یا نه) — برای پنل ادمین."""
     return (await session.execute(

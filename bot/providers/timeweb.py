@@ -388,6 +388,14 @@ class TimewebProvider(BaseProvider):
         server_id = srv.get("id")
         if not server_id:
             raise RuntimeError("تایم‌وب شناسه سرور ساخته‌شده را برنگرداند")
+        # لاگِ تشخیصی: وضعیتِ *لحظه‌ی ساخت*. اگر همین‌جا no_paid باشد، یعنی خودِ
+        # سفارش پرداخت‌نشده ثبت شده (نه مشکلِ IP/صبر) — به‌احتمالِ زیاد تعرفه‌ی
+        # legacy دیگر خودکار پرداخت نمی‌شود. preset را هم ثبت می‌کنیم تا معلوم شود.
+        self.last_create_status = (srv.get("status") or "").lower()
+        logger.warning(
+            "TW_CREATE_DIAG preset=%s os=%s sw=%s → id=%s create_status=%s",
+            body.get("preset_id"), body.get("os_id"), body.get("software_id"),
+            server_id, self.last_create_status or "?")
 
         # IPv4 عمومی از همان ابتدای ساخت درخواست می‌شود — سرور API-ساخته گاهی
         # بدون IPv4 بالا می‌آید (E2E) و IPv6 هم فقط ru-1 دارد؛ زودتر بزنیم که

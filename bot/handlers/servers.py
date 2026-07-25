@@ -1978,7 +1978,10 @@ async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: 
                 if plan.provider_type == ProviderType.TIMEWEB \
                         and "no_paid" in str(e).lower():
                     try:
-                        await LogService(bot, session).log_timeweb_unpaid(hostname)
+                        _specs = plan.display_name or plan.name or ""
+                        await LogService(bot, session).log_timeweb_unpaid(
+                            hostname, preset_id=str(plan.provider_plan_id or ""),
+                            specs=_specs)
                     except Exception:
                         pass
                 await bot.send_message(

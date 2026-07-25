@@ -535,23 +535,40 @@ class TimewebProvider(BaseProvider):
         return ipv4, ipv6
 
     async def _ensure_public_ip(self, server_id: str, info: ServerInfo) -> ServerInfo:
-        """اگر سرور بعد از ساخت IPv4 عمومی نداشت: اول endpoint اختصاصی IPها،
-        و اگر واقعاً IP نبود، یک IPv4 اضافه کن و تا ظاهرشدنش poll کن."""
+        """سرور بعد از on عمومی IPv4 ندارد → یکی اضافه کن و تا ظاهرشدنش poll کن.
+        مقاوم: افزودن اگر بار اول خطای گذرا داد، دوباره تلاش می‌شود؛ تخصیصِ IP
+        معمولاً چند ثانیه است، پس در عمل تحویل معطل نمی‌ماند."""
         try:
             ipv4, ipv6 = await self._ips_endpoint(server_id)
-            if not ipv4:
+            if ipv4:
+                info.ip_address = ipv4
+                if ipv6 and not info.ipv6_address:
+                    info.ipv6_address = ipv6
+                return info
+
+            async def _add_ip() -> bool:
                 try:
                     await self._request(
                         "POST", f"/api/v1/servers/{int(server_id)}/ips",
                         json={"type": "ipv4"})
+                    return True
                 except RuntimeError as e:
-                    logger.warning("timeweb add-ip failed for %s: %s", server_id, e)
-                deadline = asyncio.get_event_loop().time() + 180
-                while asyncio.get_event_loop().time() < deadline and not ipv4:
-                    await asyncio.sleep(5)
-                    ipv4, ipv6 = await self._ips_endpoint(server_id)
+                    logger.warning("timeweb add-ip for %s: %s", server_id, e)
+                    return False
+
+            added = await _add_ip()
+            deadline = asyncio.get_event_loop().time() + 240
+            while asyncio.get_event_loop().time() < deadline and not ipv4:
+                await asyncio.sleep(4)
+                ipv4, ipv6 = await self._ips_endpoint(server_id)
+                # اگر درخواستِ افزودن اصلاً نگرفت، تا وقتی IP نیامده دوباره بزن
+                if not added and not ipv4:
+                    added = await _add_ip()
             if ipv4:
                 info.ip_address = ipv4
+            else:
+                logger.warning("timeweb ensure_public_ip(%s): no ipv4 after 240s",
+                               server_id)
             if ipv6 and not info.ipv6_address:
                 info.ipv6_address = ipv6
         except Exception as e:

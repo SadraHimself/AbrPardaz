@@ -843,6 +843,22 @@ class TimewebProvider(BaseProvider):
         except Exception:
             return None
 
+    async def capacity_ok(self, need_monthly: float) -> bool:
+        """آیا بالانسِ اکانت «تعهدِ ماهانه‌ی فعلی + این سرور» را پوشش می‌دهد؟
+        (تایم‌وب برای هر سرور ~یک‌ماه رزرو می‌کند؛ وگرنه no_paid). برای چکِ
+        زودهنگام در فلوی خرید تا کاربر پیامِ الکیِ «در حال ساخت» نبیند. در خطا
+        True برمی‌گرداند (fail-open — precheckِ داخلِ create backstop است)."""
+        if not need_monthly:
+            return True
+        try:
+            fin = (await self._request(
+                "GET", "/api/v1/account/finances")).get("finances") or {}
+            bal = float(fin.get("balance") or 0)
+            committed = float(fin.get("monthly_cost") or 0)
+            return bal >= committed + float(need_monthly)
+        except Exception:
+            return True
+
     async def verify(self) -> dict:
         """تست زنده هنگام افزودن اکانت: توکن + وضعیت اکانت + موجودی + تعرفه‌ها."""
         st = (await self._request("GET", "/api/v1/account/status")).get("status") or {}

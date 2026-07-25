@@ -2076,6 +2076,31 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
     _alpha = _string.ascii_letters + _string.digits + "!@#$%^&*"
     root_password = "".join(_secrets.choice(_alpha) for _ in range(16))
 
+    # تایم‌وب: چکِ زودهنگامِ ظرفیتِ بالانس قبل از هر کاری — تایم‌وب برای هر سرور
+    # ~یک‌ماه از بالانس رزرو می‌کند؛ اگر جا نباشد سرورِ جدید no_paid می‌شود. با
+    # چکِ اینجا، کاربر مستقیم «ظرفیت تکمیل» می‌بیند (نه «در حال ساخت» بعد لغو) و
+    # اصلاً کسر/برگشتِ الکی نمی‌خورد. (precheckِ داخلِ create هم backstop می‌ماند.)
+    if plan.provider_type == ProviderType.TIMEWEB:
+        try:
+            from bot.providers.timeweb import TimewebProvider
+            from bot.services.timeweb_settings import get_account as _tw_get_account
+            _acc = await _tw_get_account(session)
+            _need = float((plan.extra_data or {}).get("cost_monthly") or 0)
+            if _acc and _need and not await TimewebProvider(
+                    api_token=_acc.api_key or "").capacity_ok(_need):
+                await cb.message.edit_text(
+                    f"{WARN} <b>ظرفیت ساخت سرور موقتاً تکمیل است.</b>\n\n"
+                    "لطفاً کمی بعد دوباره تلاش کنید. مبلغی از حساب شما کسر نشده است.\n\n"
+                    '‎<tg-emoji emoji-id="5258093637450866522">🤖</tg-emoji> @abrmakerbot',
+                    parse_mode="HTML")
+                try:
+                    await LogService(cb.bot, session).log_timeweb_funds(hostname)
+                except Exception:
+                    pass
+                return
+        except Exception:
+            pass  # fail-open → مسیرِ عادی (precheckِ create backstop است)
+
     # سرویس‌دهنده‌های با ساخت طولانی (جیکور/تایم‌وب): پیام «در حال ساخت» فوری، و
     # ادامه‌ی ساخت/کسر/تحویل در پس‌زمینه با سشن مستقل (سشن هندلر بسته می‌شود)
     if plan.provider_type in (ProviderType.GCORE, ProviderType.TIMEWEB):

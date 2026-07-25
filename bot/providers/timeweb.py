@@ -235,14 +235,14 @@ class TimewebProvider(BaseProvider):
         هر ۵ ثانیه — rate limit تایم‌وب ۲۰/ثانیه است، خیالمان راحت.
 
         fail_on: وضعیت‌های واقعاً پایان‌یافته (blocked/permanent_blocked) → شکست فوری.
-        no_paid: **به‌تنهایی شکست نیست.** حین provisioning تایم‌وب چند لحظه/دقیقه
-        no_paid نشان می‌دهد (در انتظار تسویه‌ی اولین کسر ساعتی + سرویس IP) و بعد on
-        می‌شود؛ درست مثل ساخت از خودِ سایت. چون قبل از ساخت موجودیِ اکانت چک شده
-        که کفاف این سرور را می‌دهد، no_paid گذراست — پس دیگر کنسلِ زودهنگام نداریم؛
-        فقط تا سقفِ timeout_s صبر می‌کنیم. یک سرورِ دارای root_pass یعنی نصبِ OS
-        تمام شده = سرورِ واقعی؛ حتی اگر لحظه‌ای no_paid باشد تحویلش می‌دهیم (خودش
-        روشن می‌شود). no_paid_grace_s دیگر استفاده نمی‌شود (سازگاری امضا)."""
+        no_paid: دو حالت دارد — (الف) سرورِ ساخته‌شده که رمز دارد ولی لحظه‌ای
+        no_paid است (تسویه‌ی بیلینگ) → تحویلش می‌دهیم (خودش روشن می‌شود). (ب)
+        no_paidِ *بدونِ رمز* که پایدار می‌ماند → خودش حل نمی‌شود؛ این یعنی حالتِ
+        پرداختِ اکانتِ تایم‌وب فاکتوری/دستی است (نه کمبودِ بالانس)، پس بعد از
+        no_paid_grace_s سریع شکست می‌دهیم تا پولِ مشتری زود برگردد، نه اینکه تا
+        سقفِ timeout_s معطل بماند."""
         deadline = asyncio.get_event_loop().time() + timeout_s
+        no_paid_since: float | None = None
         last: dict = {}
         while asyncio.get_event_loop().time() < deadline:
             try:
@@ -253,8 +253,8 @@ class TimewebProvider(BaseProvider):
             rp = last.get("root_pass")
             if st in targets and (not need_root_pass or rp):
                 return last
-            # سرورِ ساخته‌شده که فقط منتظرِ تسویه‌ی بیلینگ است (no_paid ولی رمز
-            # دارد) هم آماده‌ی تحویل است — no_paid گذراست و موجودی از قبل چک شده.
+            # (الف) سرورِ ساخته‌شده که فقط منتظرِ تسویه‌ی بیلینگ است (رمز دارد ولی
+            # لحظه‌ای no_paid) → آماده‌ی تحویل.
             if need_root_pass and rp and st == "no_paid":
                 return last
             if fail_on and st in fail_on:
@@ -262,6 +262,22 @@ class TimewebProvider(BaseProvider):
                                server_id, st)
                 raise RuntimeError(
                     "ظرفیت سرویس‌دهنده موقتاً در دسترس نیست — لطفاً بعداً تلاش کنید")
+            # (ب) no_paidِ پایدارِ بدونِ رمز = حالتِ پرداختِ اکانت (فاکتوری) →
+            # خودش حل نمی‌شود؛ زود شکست بده که برگشتِ وجه ۲۰ دقیقه طول نکشد.
+            now = asyncio.get_event_loop().time()
+            if st == "no_paid":
+                if no_paid_since is None:
+                    no_paid_since = now
+                elif now - no_paid_since >= no_paid_grace_s:
+                    logger.warning(
+                        "timeweb server %s stuck no_paid > %ss (balance is fine → "
+                        "account is in invoice/manual payment mode)",
+                        server_id, no_paid_grace_s)
+                    raise RuntimeError(
+                        "سرور در وضعیت «پرداخت‌نشده» (no_paid) ماند — حالتِ پرداختِ "
+                        "اکانتِ تایم‌وب باید روی «از بالانس» تنظیم شود")
+            else:
+                no_paid_since = None
             await asyncio.sleep(5)
         raise RuntimeError("Timeweb: مهلت انتظار عملیات تمام شد")
 

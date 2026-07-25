@@ -205,8 +205,9 @@ async def _render_server_detail(cb: CallbackQuery, user: User, session: AsyncSes
     if _lp_id:
         _lp = await session.get(ServerPlan, _lp_id)
         _mbit = (_lp.extra_data or {}).get("bandwidth_mbit") if _lp else None
-        if _mbit:
-            bw_line = f"• پهنای باند: {_mbit} مگابیت\n"
+        _sp = _fmt_mbit(_mbit)
+        if _sp:
+            bw_line = f"• سرعت پورت: {_sp}\n"
 
     _extra_ips = (server.extra_data or {}).get("extra_ips") or []
     extra_ip_line = "".join(f"آیپی اضافه: <code>{ip}</code>\n" for ip in _extra_ips)
@@ -826,9 +827,9 @@ async def _render_plan_list(cb: CallbackQuery, state: FSMContext, session: Async
         ram_gb = plan.ram // 1024 if plan.ram >= 1024 else plan.ram
         _mbit = (plan.extra_data or {}).get("bandwidth_mbit")
         if not plan.bandwidth:
-            # ترافیک نامحدود: اگر provider سقفِ «پهنای باند کانال» دارد (تایم‌وب)
-            # همان را نشان بده — گویاتر از «نامحدود» خالی است
-            traffic = f"{_mbit}مگابیت" if _mbit else "نامحدود"
+            # ترافیک نامحدود: سرعت کانال (تایم‌وب) را تمیز نشان بده
+            # (۱۰۰۰مگابیت → ۱گیگابیت) — گویاتر از «نامحدود» خالی است
+            traffic = _fmt_mbit(_mbit) or "نامحدود"
         elif plan.bandwidth >= 1000:
             # نمای کاربر: رند به نزدیک‌ترین ترابایت (20.48 → 20)؛ مقدار دقیق در پنل ادمین
             traffic = f"{round(plan.bandwidth / 1000)}ترابایت"
@@ -1802,14 +1803,29 @@ def _friendly_fail_reason(err: str) -> str:
     return e[:200] if e else "بروز مشکل موقت در سرویس‌دهنده"
 
 
+def _fmt_mbit(mbit) -> str:
+    """سرعت کانال را تمیز نشان می‌دهد: ۱۰۰۰ مگابیت → «۱ گیگابیت»، وگرنه مگابیت."""
+    try:
+        m = int(mbit)
+    except (TypeError, ValueError):
+        return ""
+    if m <= 0:
+        return ""
+    if m >= 1000 and m % 1000 == 0:
+        return f"{m // 1000}گیگابیت"
+    if m >= 1000:
+        return f"{m / 1000:g}گیگابیت"
+    return f"{m}مگابیت"
+
+
 def _traffic_desc(plan: ServerPlan) -> str:
-    """شرح ترافیک پلن: حجمی (GB) یا نامحدود؛ برای providerهای با سقف پهنای
-    باند کانال (تایم‌وب) سرعت کانال هم ذکر می‌شود."""
+    """شرح ترافیک پلن: حجمی (GB) یا نامحدود؛ برای providerهای با سرعت کانال
+    (تایم‌وب) سرعت به‌صورت گیگابیت/مگابیت تمیز ذکر می‌شود."""
     if plan.bandwidth:
         return f"{plan.bandwidth} GB"
-    _mbit = (plan.extra_data or {}).get("bandwidth_mbit")
-    if _mbit:
-        return f"نامحدود — پهنای باند {_mbit} مگابیت"
+    speed = _fmt_mbit((plan.extra_data or {}).get("bandwidth_mbit"))
+    if speed:
+        return f"نامحدود — سرعت {speed}"
     return "نامحدود"
 
 

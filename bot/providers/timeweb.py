@@ -397,17 +397,11 @@ class TimewebProvider(BaseProvider):
             body.get("preset_id"), body.get("os_id"), body.get("software_id"),
             server_id, self.last_create_status or "?")
 
-        # IPv4 عمومی از همان ابتدای ساخت درخواست می‌شود — سرور API-ساخته گاهی
-        # بدون IPv4 بالا می‌آید (E2E) و IPv6 هم فقط ru-1 دارد؛ زودتر بزنیم که
-        # تا پایان نصب فرصت attach داشته باشد
-        try:
-            _early_v4, _ = await self._ips_endpoint(str(server_id))
-            if not _early_v4:
-                await self._request(
-                    "POST", f"/api/v1/servers/{int(server_id)}/ips",
-                    json={"type": "ipv4"})
-        except Exception as e:
-            logger.warning("timeweb early add-ip for %s: %s", server_id, e)
+        # ⚠️ IPv4 عمومی را اینجا (بلافاصله بعد از ساخت) اضافه *نمی‌کنیم*. افزودنِ
+        # یک سرویسِ پولیِ جدا (IPv4) وسطِ تسویه‌ی سفارش، سرور را به no_paid می‌زند
+        # (ریسِ متناوب — گاهی سالم، گاهی no_paid؛ همان باگی که سرورها را بی‌IP و
+        # پرداخت‌نشده می‌کرد). درست مثل ساختِ دستی، IPv4 را *بعد از* بالاآمدنِ سرور
+        # (on + root_pass) با _ensure_public_ip اضافه می‌کنیم — پایین‌تر.
 
         # نصب چند دقیقه طول می‌کشد؛ تحویل به IP و رمز (root_pass) نیاز دارد.
         # ساخت تراکنشی: شکست/مهلت → سرور نیمه‌ساخته حذف شود تا بیل نخورد.

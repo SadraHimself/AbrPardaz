@@ -763,9 +763,10 @@ class TimewebProvider(BaseProvider):
                 by_loc.setdefault(loc, []).append(p)
         out = []
         for loc in sorted(by_loc):
-            # شهرِ نمایندهِ لوکیشن = پرتکرارترین شهرِ description تعرفه‌های آن
+            # شهرِ نمایندهِ لوکیشن — کد لوکیشن هم پاس داده می‌شود تا نگاشت
+            # _LOC_CITY برای لوکیشن‌های بدون شهرِ description (ru-1→SPB) فعال شود
             from collections import Counter
-            cities = Counter(city_from_preset(p, "") for p in by_loc[loc])
+            cities = Counter(city_from_preset(p, loc) for p in by_loc[loc])
             cities.pop("?", None)
             city = cities.most_common(1)[0][0] if cities else LOC_LABELS.get(loc, loc)
             out.append({"id": loc, "slug": loc, "display_name": city,

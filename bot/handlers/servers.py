@@ -836,8 +836,12 @@ async def _render_plan_list(cb: CallbackQuery, state: FSMContext, session: Async
         else:
             traffic = f"{plan.bandwidth}گیگ"
         specs = f"{plan.cpu}هسته | {ram_gb}رم | {traffic}".translate(_FA_DIGITS)
-        # کد پلن اول، بعد مشخصات فارسی (فرمت «MSK-1 | ۲هسته | ۴رم | ...»)
-        label = f"{plan.display_name or plan.name} | {specs}"
+        # راست‌چین‌سازی: کد لاتین (MSK-1) اگر اول رشته بیاید جهت کل متن را
+        # چپ‌به‌راست می‌کند و اعداد فارسی جابه‌جا می‌افتند. ‏ (RLM) جهت پایه
+        # را راست‌به‌چپ می‌کند و ⁦…⁩ (LTR isolate) کد لاتین را جدا نگه
+        # می‌دارد تا با متن فارسی تداخل نکند.
+        _code = plan.display_name or plan.name
+        label = f"‏⁦{_code}⁩ | {specs}"
         # اموجی پریمیوم اختصاصی محصول؛ وگرنه پرچمِ لوکیشن (هتزنر)
         _pe = (plan.extra_data or {}).get("emoji_id") \
             or _HZ_LOC_META.get(plan.location or "", (None,))[0]

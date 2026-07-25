@@ -244,13 +244,22 @@ class TimewebProvider(BaseProvider):
         deadline = asyncio.get_event_loop().time() + timeout_s
         no_paid_since: float | None = None
         last: dict = {}
+        _polls = 0
         while asyncio.get_event_loop().time() < deadline:
+            _poll_err = None
             try:
                 last = await self._get_server_raw(server_id)
-            except RuntimeError:
+            except RuntimeError as _e:
                 last = {}
+                _poll_err = str(_e)[:100]
             st = (last.get("status") or "").lower()
             rp = last.get("root_pass")
+            # لاگِ تشخیصیِ لحظه‌به‌لحظه — دقیقاً می‌بینیم سرور در چه وضعیتی گیر
+            # کرده و کِی رمز می‌گیرد (برای فهمیدنِ ریشه‌ی no_paid، بدون حدس).
+            _polls += 1
+            logger.warning(
+                "TW_POLL server=%s #%d status=%s rootpass=%s err=%s",
+                server_id, _polls, st or "?", bool(rp), _poll_err or "-")
             if st in targets and (not need_root_pass or rp):
                 return last
             # (الف) سرورِ ساخته‌شده که فقط منتظرِ تسویه‌ی بیلینگ است (رمز دارد ولی
@@ -406,14 +415,13 @@ class TimewebProvider(BaseProvider):
         # نصب چند دقیقه طول می‌کشد؛ تحویل به IP و رمز (root_pass) نیاز دارد.
         # ساخت تراکنشی: شکست/مهلت → سرور نیمه‌ساخته حذف شود تا بیل نخورد.
         try:
-            # سقف انتظار: نصب + فازِ گذرای no_paid (تسویه‌ی بیلینگ) + تضمین IP.
-            # ۹۰۰s برای عادی و ۱۰۸۰s برای برنامه‌ی مارکت‌پلیس (نصب طولانی‌تر) تا
-            # سرورِ سالمی که فقط دیر روشن می‌شود زودهنگام کنسل نشود؛ بعدش لغو
-            # سایلنت + برگشت کامل وجه. no_paid دیگر به‌تنهایی شکست نیست
-            # (منطق در _wait_status).
+            # سقف انتظار کوتاه‌تر شد تا برگشتِ وجهِ سرورِ ناموفق ۲۰ دقیقه طول
+            # نکشد: ۴۸۰s عادی، ۹۰۰s با برنامه‌ی مارکت‌پلیس (نصب طولانی‌تر). سرورِ
+            # سالم معمولاً در ۲ تا ۵ دقیقه on می‌شود؛ اگر تا این سقف on نشد لغوِ
+            # سایلنت + برگشت کامل وجه. no_paidِ پایدار هم زودتر (۲۴۰s) شکست می‌دهد.
             fresh = await self._wait_status(
                 str(server_id), {"on"},
-                timeout_s=(1080 if software_id else 900), need_root_pass=True,
+                timeout_s=(900 if software_id else 480), need_root_pass=True,
                 fail_on={"blocked", "permanent_blocked"})
         except Exception:
             # چک نهاییِ نجات: ممکن است سرور واقعاً ساخته شده باشد ولی poll وسط راه

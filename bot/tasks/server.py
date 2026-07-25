@@ -548,7 +548,8 @@ def sync_timeweb_catalog(self):
                 await session.commit()   # restore_cooldown_passed را از دست نده
                 return  # خطای گذرا — دور بعدی جبران می‌کند
 
-            from bot.providers.timeweb import city_from_preset, cpu_type_from_preset
+            from bot.providers.timeweb import tw_build_labels
+            _labels = tw_build_labels(list(raw_map.values()))
 
             bot = Bot(token=settings.BOT_TOKEN)
             log = LogService(bot, session)
@@ -556,21 +557,21 @@ def sync_timeweb_catalog(self):
                 for plan in all_plans:
                     extra = dict(plan.extra_data or {})
                     info = offered.get(plan.provider_plan_id)
-                    # بازسازی/تصحیح نام/شهر/نوع از تعرفه‌ی زنده (self-heal
+                    # بازسازی/تصحیح نام کوتاه/شهر/نوع از تعرفه‌ی زنده (self-heal
                     # برچسب‌های نادرستِ گذشته — فقط اگر تغییر کرده باشد می‌نویسد)
-                    _rawp = raw_map.get(plan.provider_plan_id)
-                    if _rawp is not None:
-                        _city = city_from_preset(_rawp, plan.location or "")
-                        _tk, _tl = cpu_type_from_preset(_rawp)
-                        ram_g = plan.ram // 1024 if plan.ram >= 1024 else plan.ram
-                        _dt = (extra.get("disk_type") or "").upper()
-                        _dn = f"{_tl} · {plan.cpu}c/{ram_g}G/{plan.disk}G {_dt} · {_city}".strip()
+                    _lbl = _labels.get(plan.provider_plan_id)
+                    if _lbl:
+                        _city = _lbl["city"]
+                        _tk = _lbl["cpu_type"]
+                        _dn = _lbl["display_name"]
                         if (extra.get("region_name") != _city
                                 or extra.get("cpu_type") != _tk
+                                or extra.get("city_code") != _lbl["city_code"]
                                 or plan.display_name != _dn):
                             extra["region_name"] = _city
+                            extra["city_code"] = _lbl["city_code"]
                             extra["cpu_type"] = _tk
-                            extra["cpu_type_label"] = _tl
+                            extra["cpu_type_label"] = _lbl["cpu_label"]
                             plan.display_name = _dn
                             plan.extra_data = extra
                     loc_label = extra.get("region_name") or plan.location or "?"

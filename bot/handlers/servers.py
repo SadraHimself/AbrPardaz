@@ -835,7 +835,8 @@ async def _render_plan_list(cb: CallbackQuery, state: FSMContext, session: Async
         else:
             traffic = f"{plan.bandwidth}گیگ"
         specs = f"{plan.cpu}هسته | {ram_gb}رم | {traffic}".translate(_FA_DIGITS)
-        label = f"{specs} | {plan.display_name or plan.name}"
+        # کد پلن اول، بعد مشخصات فارسی (فرمت «MSK-1 | ۲هسته | ۴رم | ...»)
+        label = f"{plan.display_name or plan.name} | {specs}"
         # اموجی پریمیوم اختصاصی محصول؛ وگرنه پرچمِ لوکیشن (هتزنر)
         _pe = (plan.extra_data or {}).get("emoji_id") \
             or _HZ_LOC_META.get(plan.location or "", (None,))[0]
@@ -1674,6 +1675,14 @@ async def _show_confirm(msg, state: FSMContext, session, from_message=False, use
     os_line = f"• سیستم‌عامل: {data.get('os_name', '')}\n" if data.get("os_name") else ""
     app_line = (f"• برنامه: {data['software_name']} (نصب خودکار)\n"
                 if data.get("software_name") else "")
+    # نوع/مدل پردازنده — فقط در تأیید نهایی نمایش داده می‌شود (نه در دکمه‌ها)
+    _pe = plan.extra_data or {}
+    cpu_line = ""
+    if _pe.get("cpu_type_label"):
+        _freq = f" @ {_pe['cpu_frequency']}GHz" if _pe.get("cpu_frequency") else ""
+        cpu_line = f"• نوع پردازنده: {_pe['cpu_type_label']}{_freq}\n"
+    # موقعیت: شهر واقعی (region_name) به‌جای کد خام لوکیشن
+    loc_show = _pe.get("region_name") or plan.location or "نامشخص"
     discount_line = f"• تخفیف: {discount_pct:.0f}% (قیمت اصلی: {base_price:,.0f} T)\n" if discount_pct else ""
     # خرید ساعتی: معادل یک ماه (۷۲۰ ساعت) هم نمایش داده می‌شود — بیلینگ
     # همچنان ساعتی است، این فقط برآورد ماهانه برای مقایسه است
@@ -1686,8 +1695,9 @@ async def _show_confirm(msg, state: FSMContext, session, from_message=False, use
         f"• پلن: {plan.display_name or plan.name}\n"
         f"• ارائه دهنده: {plan.category or ''}\n"
         f"• رم: {plan.ram} MB | پردازنده: {plan.cpu} | دیسک: {show_disk} GB\n"
+        f"{cpu_line}"
         f"• ترافیک: {_traffic_desc(plan)}\n"
-        f"• موقعیت: {plan.location or 'نامشخص'}\n"
+        f"• موقعیت: {loc_show}\n"
         f"{hostname_line}"
         f"{os_line}"
         f"{app_line}\n"
@@ -1933,15 +1943,18 @@ async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: 
                 # بعدی روی همان پلن به همین ارور نخورد (auto-retry بعد از کول‌داون)
                 try:
                     from bot.services.timeweb_settings import (
-                        is_capacity_error, mark_plan_out_of_stock,
+                        is_capacity_error, mark_group_out_of_stock,
                     )
                     if plan.provider_type == ProviderType.TIMEWEB \
                             and is_capacity_error(str(e)):
-                        await mark_plan_out_of_stock(session, plan)
+                        # کل بخش (لوکیشن + نوع سرور) ناموجود می‌شود — تایم‌وب ظرفیت
+                        # را per-location مدیریت می‌کند، نه per-plan
+                        await mark_group_out_of_stock(session, plan)
                         try:
+                            _lbl = (plan.extra_data or {}).get("cpu_type_label") or ""
+                            _loc = (plan.extra_data or {}).get("region_name") or plan.location or ""
                             await LogService(bot, session).log_plan_unavailable(
-                                plan.display_name or plan.name,
-                                (plan.extra_data or {}).get("region_name") or plan.location or "")
+                                f"{_lbl} (کل بخش)", _loc)
                         except Exception:
                             pass
                 except Exception:

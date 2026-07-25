@@ -560,33 +560,45 @@ async def _raw_presets(account: ProviderAccount) -> dict:
 _TW_TYPE_RANK = {"standard": 0, "premium": 1, "highcpu": 2, "dedicated": 3}
 
 
+async def _safe_edit(msg, text: str, reply_markup=None):
+    """edit_text امن — «message is not modified» را نادیده می‌گیرد (کلیک روی
+    همان لوکیشن/دکمه که محتوا را عوض نمی‌کند خطا نده)."""
+    from aiogram.exceptions import TelegramBadRequest
+    try:
+        await msg.edit_text(text, parse_mode="HTML", reply_markup=reply_markup)
+    except TelegramBadRequest as e:
+        if "not modified" not in str(e).lower():
+            raise
+
+
 async def _render_tw_plans(msg, session: AsyncSession, account: ProviderAccount, loc: str):
-    from bot.providers.timeweb import cpu_type_from_preset, city_from_preset
+    from bot.providers.timeweb import tw_build_labels
     plans = await _location_plans(account, loc)
     imported = await _imported_map(session, loc)
     raw_map = await _raw_presets(account)
+    labels = tw_build_labels(list(raw_map.values()))
     # مرتب‌سازی: اول نوع سرور (Standard→Premium→High CPU→Dedicated)، بعد رم، بعد دیسک
     def _sort_key(pl):
-        tk, _ = cpu_type_from_preset(raw_map.get(pl.provider_plan_id) or {})
-        return (_TW_TYPE_RANK.get(tk, 9), pl.ram, pl.disk)
+        lbl = labels.get(pl.provider_plan_id) or {}
+        return (_TW_TYPE_RANK.get(lbl.get("cpu_type", "standard"), 9), pl.ram, pl.disk)
     plans = sorted(plans, key=_sort_key)
     # شهرِ لوکیشن از description تعرفه‌ها (منبع واحد با فلوی خرید)
     from collections import Counter as _Counter
-    _cities = _Counter(city_from_preset(raw_map.get(p.provider_plan_id) or {}, loc)
+    _cities = _Counter((labels.get(p.provider_plan_id) or {}).get("city", "?")
                        for p in plans)
     _cities.pop("?", None)
     city_label = _cities.most_common(1)[0][0] if _cities else LOC_LABELS.get(loc, loc)
     rows = []
     stock_note = ""
-    _cur_type = None
     for p in plans:
         db = imported.get(p.provider_plan_id)
         mark = _plan_status_mark(db)
         ram_g = p.ram // 1024 if p.ram >= 1024 else p.ram
-        _tk, _tl = cpu_type_from_preset(raw_map.get(p.provider_plan_id) or {})
+        lbl = labels.get(p.provider_plan_id) or {}
+        code = lbl.get("display_name") or "?"
         rows.append([
             InlineKeyboardButton(
-                text=f"{mark} {_tl} · {p.cpu}c/{ram_g}G/{p.disk}G · ₽{p.price_monthly:g}",
+                text=f"{mark} {code} · {p.cpu}c/{ram_g}G/{p.disk}G · ₽{p.price_monthly:g}",
                 callback_data=f"admin:twpick:{loc}:{p.provider_plan_id}",
             ),
             InlineKeyboardButton(
@@ -622,12 +634,13 @@ async def _render_tw_plans(msg, session: AsyncSession, account: ProviderAccount,
         InlineKeyboardButton(text="حذف همه", callback_data=f"admin:twalloff:{loc}"),
     ])
     rows.append([InlineKeyboardButton(text="بازگشت", callback_data="admin:tw_import")])
-    await msg.edit_text(
+    await _safe_edit(
+        msg,
         f"<b>تعرفه‌های تایم‌وب — {city_label}</b>\n\n"
+        "کد پلن: Standard=MSK-1 · High CPU=MSK-11 · Dedicated=MSK-111\n"
         "✅فعال · ☑️ایمپورت بی‌قیمت · 🚫ناموجود · ⬜ایمپورت‌نشده\n"
         "عدد = قیمت خرید ماهانه (₽) · تپ = افزودن/حذف · ℹ️ = جزئیات"
         f"{stock_note}",
-        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
 
@@ -711,27 +724,25 @@ async def cb_tw_info(cb: CallbackQuery, session: AsyncSession):
 async def _import_one(session: AsyncSession, account: ProviderAccount,
                       loc: str, info, group_name: str) -> ServerPlan:
     from bot.services.timeweb_settings import full_costs
-    from bot.providers.timeweb import city_from_preset, cpu_type_from_preset
-    disk_type = ""
-    raw: dict = {}
-    try:
-        raw = await _prov(account).preset_details(info.provider_plan_id) or {}
-        disk_type = (raw.get("disk_type") or "").upper()
-        bandwidth_mbit = raw.get("bandwidth")
-        cpu_freq = raw.get("cpu_frequency")
-    except Exception:
-        bandwidth_mbit = cpu_freq = None
-    city = city_from_preset(raw, loc)
-    cpu_key, cpu_label = cpu_type_from_preset(raw)
-    ram_g = info.ram // 1024 if info.ram >= 1024 else info.ram
+    from bot.providers.timeweb import tw_build_labels
+    raw_map = await _raw_presets(account)
+    raw = raw_map.get(info.provider_plan_id) or {}
+    disk_type = (raw.get("disk_type") or "").upper()
+    bandwidth_mbit = raw.get("bandwidth")
+    cpu_freq = raw.get("cpu_frequency")
+    # نام کوتاه/مرتب (MSK-1 · MSK-22 · MSK-111) از کل تعرفه‌ها
+    lbl = tw_build_labels(list(raw_map.values())).get(info.provider_plan_id) or {}
+    city = lbl.get("city") or LOC_LABELS.get(loc, loc)
+    cpu_key = lbl.get("cpu_type") or "standard"
+    cpu_label = lbl.get("cpu_label") or "Standard"
+    display_name = lbl.get("display_name") or f"{lbl.get('city_code', 'TW')}"
     # قیمت خرید کامل = تعرفه + IPv4 عمومی (سرویس جدا در فاکتور تایم‌وب)
     ch, cm = full_costs(info.price_monthly or 0)
     plan = ServerPlan(
         provider_type=ProviderType.TIMEWEB,
         provider_account_id=account.id,
         name=f"tw{info.provider_plan_id}-{loc}",
-        # نمایش کامل: نوع · مشخصات · شهر (به‌جای «40G NVME» خالی)
-        display_name=f"{cpu_label} · {info.cpu}c/{ram_g}G/{info.disk}G {disk_type} · {city}".strip(),
+        display_name=display_name,                # کد کوتاه: MSK-1 / MSK-22 / ...
         ram=info.ram, cpu=info.cpu, disk=info.disk,
         bandwidth=0,                              # ترافیک نامحدود (کانال Mbit جدا)
         price_hourly=None, price_monthly=None,    # فروش با سود سراسری
@@ -745,6 +756,7 @@ async def _import_one(session: AsyncSession, account: ProviderAccount,
             "cost_hourly": ch,                    # خرید کامل ₽/ساعت (تعرفه+IP ÷۷۲۰)
             "cost_monthly": cm,                   # خرید کامل ₽/ماه (تعرفه+IP)
             "region_name": city,                  # شهر واقعی (نمای لوکیشن خرید)
+            "city_code": lbl.get("city_code"),
             "cpu_type": cpu_key,                  # نوع سرور (مرحله‌ی «نوع» خرید)
             "cpu_type_label": cpu_label,
             "disk_type": disk_type,

@@ -138,6 +138,26 @@ async def mark_plan_out_of_stock(session: AsyncSession, plan: ServerPlan) -> Non
     logger.info("timeweb plan %s marked out-of-stock (retry in 6h)", plan.provider_plan_id)
 
 
+async def mark_group_out_of_stock(session: AsyncSession, plan: ServerPlan) -> int:
+    """کل «بخش» (همان لوکیشن + همان نوع سرور) را ناموجود کن — تایم‌وب ظرفیت را
+    per (location, type) مدیریت می‌کند («no resources in this location»)، پس اگر
+    یک پلن پر شد، هم‌گروه‌هایش هم پرند. خروجی: تعداد پلن‌های علامت‌خورده."""
+    cpu_type = (plan.extra_data or {}).get("cpu_type") or "standard"
+    siblings = (await session.execute(
+        select(ServerPlan).where(
+            ServerPlan.provider_type == ProviderType.TIMEWEB,
+            ServerPlan.location == plan.location,
+        )
+    )).scalars().all()
+    n = 0
+    for p in siblings:
+        if ((p.extra_data or {}).get("cpu_type") or "standard") != cpu_type:
+            continue
+        await mark_plan_out_of_stock(session, p)
+        n += 1
+    return n
+
+
 async def mark_plan_in_stock(session: AsyncSession, plan: ServerPlan) -> None:
     """پلن دوباره موجود شد (ساخت موفق یا فعال‌سازی دستی ادمین) — کول‌داون پاک."""
     extra = dict(plan.extra_data or {})

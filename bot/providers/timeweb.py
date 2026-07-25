@@ -51,27 +51,81 @@ LOC_LABELS = {
     "kz-1": "Almaty (Kazakhstan)", "nl-1": "Amsterdam", "pl-1": "Poland",
     "de-1": "Germany", "us-4": "USA",
 }
-# کد شهر داخل description تعرفه («Cloud MSK 50» / «Cloud NSK 50») → نام کامل.
-# تطبیق توکن‌محور است (نه substring) تا «de» در «dedicated» یا «us» در «cluster»
-# اشتباهی شهر نشوند.
+# کد شهر داخل description تعرفه («Cloud MSK 50» / «Cloud NSK 50») → (کد, نام کامل).
+# کدها همان‌هایی‌اند که در zoneهای سایت دیده می‌شوند (SPB-3، MSK-1، ...).
+# تطبیق توکن‌محور است (نه substring) تا «de» در «dedicated» شهر نشود.
 _CITY_CODE = {
     "spb": "Saint Petersburg", "msk": "Moscow", "nsk": "Novosibirsk",
     "ekb": "Yekaterinburg", "kzn": "Kazan", "ala": "Almaty",
     "ams": "Amsterdam", "fra": "Frankfurt", "gdn": "Gdansk", "waw": "Warsaw",
-    "nyc": "New York",
+    "nyc": "New York", "buf": "New York",
 }
 import re as _re
 
 
-def city_from_preset(preset: dict, location: str = "") -> str:
-    """نام شهر یک تعرفه — اول از description («Cloud MSK 50»)، بعد از نگاشت
-    location. تطبیق توکن‌محور (کلمه‌های جدا) تا false-match ندهد."""
+def _preset_city_token(preset: dict) -> Optional[str]:
     desc = f"{preset.get('description') or ''} {preset.get('description_short') or ''}"
     tokens = set(_re.findall(r"[a-z]+", desc.lower()))
-    for code, city in _CITY_CODE.items():
+    for code in _CITY_CODE:
         if code in tokens:
-            return city
+            return code
+    return None
+
+
+def city_from_preset(preset: dict, location: str = "") -> str:
+    """نام کامل شهر یک تعرفه — از description، بعد نگاشت location."""
+    tok = _preset_city_token(preset)
+    if tok:
+        return _CITY_CODE[tok]
     return LOC_LABELS.get(location, location or "?")
+
+
+def city_code_from_preset(preset: dict, location: str = "") -> str:
+    """کد کوتاه شهر (SPB/MSK/NSK/...) برای نامِ پلن — از description، بعد
+    fallback از کد لوکیشن (بخش حرفیِ ru-1 → RU)."""
+    tok = _preset_city_token(preset)
+    if tok:
+        return tok.upper()
+    letters = "".join(ch for ch in (location or "") if ch.isalpha())
+    return (letters.upper() or "TW")
+
+
+def tw_build_labels(raw_presets: list) -> dict:
+    """map از preset_id به {city, city_code, cpu_type, cpu_label, display_name}.
+
+    نام کوتاه و مرتب per (شهر, نوع): Standard=۱٬۲٬۳ · High CPU=۱۱٬۲۲٬۳۳ ·
+    Dedicated=۱۱۱٬۲۲۲ (به ترتیب رم سپس دیسک). مثال: MSK-1، MSK-22، MSK-111.
+    منبع واحدِ نام برای ادمین، خرید و سینک."""
+    meta: dict = {}
+    groups: dict = {}
+    for p in raw_presets or []:
+        pid = str(p.get("id"))
+        loc = p.get("location") or ""
+        ccode = city_code_from_preset(p, loc)
+        tk, tl = cpu_type_from_preset(p)
+        meta[pid] = {
+            "city": city_from_preset(p, loc), "city_code": ccode,
+            "cpu_type": tk, "cpu_label": tl,
+            "ram": int(p.get("ram") or 0), "disk": int(p.get("disk") or 0),
+        }
+        groups.setdefault((ccode, tk), []).append(pid)
+    _pref = {"standard": "", "premium": "P", "highcpu": "H", "dedicated": "D"}
+    for (ccode, tk), pids in groups.items():
+        pids.sort(key=lambda x: (meta[x]["ram"], meta[x]["disk"]))
+        for i, pid in enumerate(pids, start=1):
+            if i < 10:
+                if tk == "highcpu":
+                    code = str(i) * 2          # 11، 22، 33
+                elif tk == "dedicated":
+                    code = str(i) * 3          # 111، 222
+                elif tk == "premium":
+                    code = f"P{i}"
+                else:
+                    code = str(i)              # Standard: 1، 2، 3
+            else:
+                code = f"{_pref.get(tk, '')}{i}"   # >۹ عضو: پیشوند حرفی امن
+            meta[pid]["display_name"] = f"{ccode}-{code}"
+    return meta
 
 
 def cpu_type_from_preset(preset: dict) -> tuple[str, str]:

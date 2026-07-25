@@ -513,8 +513,9 @@ async def cb_tw_import(cb: CallbackQuery, session: AsyncSession):
         )
         return
     group_name = await get_group_name(session)
+    # نام شهر (بدون کد خام لوکیشن) + تعداد تعرفه
     rows = [[InlineKeyboardButton(
-        text=f"{l['display_name']} ({l['slug']})",
+        text=f"{l['display_name']} · {l.get('count', 0)} تعرفه",
         callback_data=f"admin:twloc:{l['slug']}",
     )] for l in locs]
     rows.append([InlineKeyboardButton(text="بازگشت", callback_data="admin:timeweb")])
@@ -637,8 +638,12 @@ async def _render_tw_plans(msg, session: AsyncSession, account: ProviderAccount,
     await _safe_edit(
         msg,
         f"<b>تعرفه‌های تایم‌وب — {city_label}</b>\n\n"
-        "کد پلن: Standard=MSK-1 · High CPU=MSK-11 · Dedicated=MSK-111\n"
-        "✅فعال · ☑️ایمپورت بی‌قیمت · 🚫ناموجود · ⬜ایمپورت‌نشده\n"
+        "<b>راهنمای وضعیت:</b>\n"
+        "✅ فعال (در فروش)\n"
+        "☑️ ایمپورت‌شده بی‌قیمت\n"
+        "🚫 ناموجود (مخفی از فروش)\n"
+        "⬜ ایمپورت‌نشده\n\n"
+        "<b>کد پلن:</b> Standard = ‪1,2,3‬ · High CPU = ‪11,22,33‬ · Dedicated = ‪111,222‬\n"
         "عدد = قیمت خرید ماهانه (₽) · تپ = افزودن/حذف · ℹ️ = جزئیات"
         f"{stock_note}",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),

@@ -62,6 +62,21 @@ _CITY_CODE = {
 }
 import re as _re
 
+# override بر اساس کد لوکیشنِ همین اکانت (تأییدشده توسط ادمین 2026-07-25) —
+# برای لوکیشن‌هایی که description شهر ندارند (مثل ru-1). code → (کد کوتاه, شهر).
+# اولویت: توکنِ description → این نگاشت → کد خام. اگر اکانت عوض شد این آپدیت شود.
+_LOC_CITY = {
+    "ru-1": ("SPB", "Saint Petersburg"),
+    "ru-2": ("NSK", "Novosibirsk"),
+    "ru-3": ("MSK", "Moscow"),
+    "ru-4": ("EKB", "Yekaterinburg"),
+    "ru-5": ("KZN", "Kazan"),
+    "kz-1": ("ALA", "Almaty"),
+    "nl-1": ("AMS", "Amsterdam"),
+    "de-1": ("FRA", "Frankfurt"),
+    "us-4": ("BUF", "New York"),
+}
+
 
 def _preset_city_token(preset: dict) -> Optional[str]:
     desc = f"{preset.get('description') or ''} {preset.get('description_short') or ''}"
@@ -72,22 +87,26 @@ def _preset_city_token(preset: dict) -> Optional[str]:
     return None
 
 
-def city_from_preset(preset: dict, location: str = "") -> str:
-    """نام کامل شهر یک تعرفه — از description، بعد نگاشت location."""
+def _resolve_city(preset: dict, location: str = "") -> tuple[str, str]:
+    """(کد کوتاه, نام کامل) شهر — اولویت: توکنِ description، بعد نگاشت لوکیشنِ
+    اکانت (_LOC_CITY)، بعد کد خام. منبع واحد برای همه‌ی برچسب‌ها."""
     tok = _preset_city_token(preset)
     if tok:
-        return _CITY_CODE[tok]
-    return LOC_LABELS.get(location, location or "?")
+        return tok.upper(), _CITY_CODE[tok]
+    if location in _LOC_CITY:
+        return _LOC_CITY[location]
+    letters = "".join(ch for ch in (location or "") if ch.isalpha())
+    return (letters.upper() or "TW"), LOC_LABELS.get(location, location or "?")
+
+
+def city_from_preset(preset: dict, location: str = "") -> str:
+    """نام کامل شهر یک تعرفه."""
+    return _resolve_city(preset, location)[1]
 
 
 def city_code_from_preset(preset: dict, location: str = "") -> str:
-    """کد کوتاه شهر (SPB/MSK/NSK/...) برای نامِ پلن — از description، بعد
-    fallback از کد لوکیشن (بخش حرفیِ ru-1 → RU)."""
-    tok = _preset_city_token(preset)
-    if tok:
-        return tok.upper()
-    letters = "".join(ch for ch in (location or "") if ch.isalpha())
-    return (letters.upper() or "TW")
+    """کد کوتاه شهر (SPB/MSK/NSK/...) برای نامِ پلن."""
+    return _resolve_city(preset, location)[0]
 
 
 def tw_build_labels(raw_presets: list) -> dict:
@@ -101,10 +120,10 @@ def tw_build_labels(raw_presets: list) -> dict:
     for p in raw_presets or []:
         pid = str(p.get("id"))
         loc = p.get("location") or ""
-        ccode = city_code_from_preset(p, loc)
+        ccode, cfull = _resolve_city(p, loc)
         tk, tl = cpu_type_from_preset(p)
         meta[pid] = {
-            "city": city_from_preset(p, loc), "city_code": ccode,
+            "city": cfull, "city_code": ccode,
             "cpu_type": tk, "cpu_label": tl,
             "ram": int(p.get("ram") or 0), "disk": int(p.get("disk") or 0),
         }

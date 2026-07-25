@@ -173,6 +173,21 @@ async def mark_plan_in_stock(session: AsyncSession, plan: ServerPlan) -> None:
     await session.flush()
 
 
+async def clear_all_out_of_stock(session: AsyncSession) -> int:
+    """همه‌ی پلن‌های «ناموجود» تایم‌وب را آزاد و به فروش برمی‌گرداند — بازیابی
+    از علامت‌گذاری‌های اشتباهِ خودکار (API تایم‌وب سیگنال ظرفیت نمی‌دهد و
+    تایم‌اوتِ setup اشتباهی ناموجود می‌زد). موقع استارت ربات صدا زده می‌شود."""
+    plans = (await session.execute(
+        select(ServerPlan).where(ServerPlan.provider_type == ProviderType.TIMEWEB)
+    )).scalars().all()
+    n = 0
+    for p in plans:
+        if (p.extra_data or {}).get("out_of_stock"):
+            await mark_plan_in_stock(session, p)
+            n += 1
+    return n
+
+
 async def restore_cooldown_passed(session: AsyncSession) -> int:
     """پلن‌هایی که کول‌داونِ ناموجودی‌شان تمام شده را دوباره برای فروش باز کن
     (auto-retry). در سینک دوره‌ای صدا زده می‌شود."""

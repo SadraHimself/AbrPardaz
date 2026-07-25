@@ -1959,26 +1959,11 @@ async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: 
                 _log.exception("background build failed for %s", hostname)
                 await billing.credit(user.id, final_price,
                                      description=f"برگشت وجه — شکست ساخت {hostname}")
-                # تایم‌وب: شکست به‌خاطر نبود ظرفیت/صف → پلن را ناموجود کن تا مشتری
-                # بعدی روی همان پلن به همین ارور نخورد (auto-retry بعد از کول‌داون)
-                try:
-                    from bot.services.timeweb_settings import (
-                        is_capacity_error, mark_group_out_of_stock,
-                    )
-                    if plan.provider_type == ProviderType.TIMEWEB \
-                            and is_capacity_error(str(e)):
-                        # کل بخش (لوکیشن + نوع سرور) ناموجود می‌شود — تایم‌وب ظرفیت
-                        # را per-location مدیریت می‌کند، نه per-plan
-                        await mark_group_out_of_stock(session, plan)
-                        try:
-                            _lbl = (plan.extra_data or {}).get("cpu_type_label") or ""
-                            _loc = (plan.extra_data or {}).get("region_name") or plan.location or ""
-                            await LogService(bot, session).log_plan_unavailable(
-                                f"{_lbl} (کل بخش)", _loc)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
+                # نکته: پلن را خودکار «ناموجود» نمی‌کنیم. API تایم‌وب سیگنالِ ظرفیت
+                # ندارد و تنها چیزی که می‌گیریم تایم‌اوت است — تایم‌اوت برای شکستِ
+                # setup (که سرور و حتی IP هم ساخته می‌شود) هم رخ می‌دهد، پس علامتِ
+                # خودکار false-positive می‌داد و اشتباهی کل بخش را مخفی می‌کرد.
+                # موجود/ناموجود کردن حالا فقط دستی از پنل ادمین است.
                 await session.commit()
                 await bot.send_message(
                     chat_id,

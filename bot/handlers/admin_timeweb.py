@@ -859,9 +859,27 @@ async def cb_tw_pick(cb: CallbackQuery, session: AsyncSession):
     )).scalar_one_or_none()
 
     if existing:
-        deleted, note = await _remove_plan(session, existing)
-        await session.flush()
-        await cb.answer(f"{pid}: {note}", show_alert=not deleted)
+        if not existing.is_active:
+            # پلنِ ایمپورت‌شده ولی غیرفعال (مثلاً بعد از شکست ساخت یا خاموش‌کردن
+            # دستی) → کلیک دوباره باید «فعالش» کند، نه اینکه باز «غیرفعال شد» بزند.
+            from bot.services.timeweb_settings import mark_plan_in_stock
+            if (existing.extra_data or {}).get("out_of_stock"):
+                await mark_plan_in_stock(session, existing)
+            mh, mm = await get_margins(session)
+            if mh is not None or mm is not None:
+                await apply_margins_to_catalog(session)
+            if not existing.is_active and (existing.price_hourly or existing.price_monthly):
+                existing.is_active = True
+            await session.flush()
+            if existing.is_active:
+                await cb.answer(f"✅ {pid}: دوباره فعال و موجود شد.")
+            else:
+                await cb.answer(f"{pid}: اول سود تایم‌وب را تنظیم کنید تا قیمت بگیرد.",
+                                show_alert=True)
+        else:
+            deleted, note = await _remove_plan(session, existing)
+            await session.flush()
+            await cb.answer(f"{pid}: {note}", show_alert=not deleted)
     else:
         plans = await _location_plans(account, loc)
         info = next((p for p in plans if p.provider_plan_id == pid), None)

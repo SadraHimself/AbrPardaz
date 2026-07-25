@@ -107,6 +107,20 @@ async def on_startup(bot: Bot) -> None:
     except Exception as e:
         logger.warning("timeweb startup name-resync skipped: %s", e)
 
+    # آزادسازیِ پلن‌های تایم‌وب که به‌خاطر باگِ علامت‌گذاریِ خودکارِ ناموجودی
+    # (که حالا حذف شده) اشتباهی مخفی مانده‌اند — همه دوباره به فروش برمی‌گردند.
+    # موجود/ناموجود کردن از این پس فقط دستی از پنل ادمین است.
+    try:
+        from bot.database.session import AsyncSessionFactory
+        from bot.services.timeweb_settings import clear_all_out_of_stock
+        async with AsyncSessionFactory() as s:
+            freed = await clear_all_out_of_stock(s)
+            if freed:
+                await s.commit()
+                logger.info("timeweb: %s plans freed from stale out-of-stock", freed)
+    except Exception as e:
+        logger.warning("timeweb clear-out-of-stock skipped: %s", e)
+
     logger.info("Database tables ready.")
 
 

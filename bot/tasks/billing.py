@@ -34,12 +34,14 @@ def run_hourly_billing(self):
             servers = await billing.get_active_servers_for_billing()
 
             users_empty_balance: set[int] = set()
+            users_charged_ok: set[int] = set()
 
             from bot.services.currency import obj_currency, to_toman
 
             for server in servers:
                 success = await billing.charge_hourly(server)
                 if success:
+                    users_charged_ok.add(server.user_id)
                     user_obj = await session.get(User, server.user_id)
                     # مبلغ نوتیف همیشه ریالی است (پلن ارزی با نرخ روز تبدیل می‌شود)
                     cur = obj_currency(server)
@@ -54,6 +56,18 @@ def run_hourly_billing(self):
                     )
                 else:
                     users_empty_balance.add(server.user_id)
+
+            # کاربری که همه‌ی کسرهایش دوباره موفق شد → grace کهنه پاک شود، وگرنه
+            # timestamp قدیمی در شکستِ بعدی باعث حذف فوریِ بدون اخطار می‌شود
+            recovered = users_charged_ok - users_empty_balance
+            if recovered:
+                res = await session.execute(select(User).where(User.id.in_(recovered)))
+                for u in res.scalars():
+                    ex = dict(u.extra_data or {})
+                    if "balance_empty_at" in ex or "balance_warn_level" in ex:
+                        ex.pop("balance_empty_at", None)
+                        ex.pop("balance_warn_level", None)
+                        u.extra_data = ex
 
             await session.commit()
 
@@ -178,13 +192,53 @@ def handle_balance_empty(user_id: int):
             if not user:
                 return
 
-            # کاربر موجودی شارژ کرده — grace period پاک کن
-            if user.balance > 0:
-                extra = dict(user.extra_data or {})
-                if "balance_empty_at" in extra or "balance_warn_level" in extra:
-                    extra.pop("balance_empty_at", None)
-                    extra.pop("balance_warn_level", None)
-                    user.extra_data = extra
+            # ── شرط ریکاوری ──
+            # ⚠️ باگ قبلی: «balance > 0» — موجودیِ مثبتِ ولی ناکافی (مثلاً ۳هزار
+            # تومان) grace را هر دقیقه پاک می‌کرد و چون کسر ساعتی هم شکست می‌خورد،
+            # سرورها برای همیشه رایگان و روشن می‌ماندند. ریکاوری واقعی یعنی موجودی،
+            # هزینه‌ی یک ساعتِ «همه‌ی» سرورهای ساعتیِ فعال کاربر را پوشش دهد.
+            from bot.database.models import BillingType
+            from bot.services.currency import server_live_price, to_toman
+
+            def _clear_grace() -> bool:
+                ex = dict(user.extra_data or {})
+                if "balance_empty_at" in ex or "balance_warn_level" in ex:
+                    ex.pop("balance_empty_at", None)
+                    ex.pop("balance_warn_level", None)
+                    user.extra_data = ex
+                    return True
+                return False
+
+            srv_rows = await session.execute(
+                select(Server).where(
+                    Server.user_id == user.id,
+                    Server.status == ServerStatus.ACTIVE,
+                    Server.billing_type == BillingType.HOURLY,
+                )
+            )
+            hourly_servers = list(srv_rows.scalars().all())
+            if not hourly_servers:
+                # سرور ساعتی فعالی نمانده — grace بی‌موضوع است
+                if _clear_grace():
+                    await session.commit()
+                return
+
+            total_hourly_toman = 0.0
+            for s in hourly_servers:
+                try:
+                    amount, cur = await server_live_price(session, s, hourly=True)
+                    amount = float(amount or 0)
+                    if amount <= 0:
+                        continue
+                    total_hourly_toman += (
+                        amount if cur == "irt" else await to_toman(session, amount, cur)
+                    )
+                except Exception:
+                    pass
+
+            if total_hourly_toman > 0 and user.balance >= total_hourly_toman:
+                # موجودی دوباره کافی شده (شارژ کرده) — grace پاک شود
+                if _clear_grace():
                     await session.commit()
                 return
 

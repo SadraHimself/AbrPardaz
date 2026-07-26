@@ -70,7 +70,7 @@ class NotificationService:
         await self._send(
             telegram_id,
             f"{WARN} موجودی کم!\n\n"
-            f"💰 موجودی فعلی: {balance:,.0f} تومان\n"
+            f"موجودی فعلی: {balance:,.0f} تومان\n"
             f"در صورت عدم شارژ، سرور‌های شما ساسپند می‌شوند.",
         )
 

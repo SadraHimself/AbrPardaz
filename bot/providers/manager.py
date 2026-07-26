@@ -5,6 +5,7 @@ from bot.database.models import ProviderAccount, ProviderType
 from .base import BaseProvider
 from .gcore import GcoreProvider
 from .hetzner import HetznerProvider
+from .rootvds import RootVDSProvider
 from .timeweb import TimewebProvider
 from .virtualizor import VirtualizorProvider
 
@@ -25,4 +26,6 @@ def get_provider(account: ProviderAccount) -> BaseProvider:
         )
     if account.provider_type == ProviderType.TIMEWEB:
         return TimewebProvider(api_token=account.api_key or "")
+    if account.provider_type == ProviderType.ROOTVDS:
+        return RootVDSProvider(api_token=account.api_key or "")
     raise ValueError(f"Unsupported provider type: {account.provider_type}")

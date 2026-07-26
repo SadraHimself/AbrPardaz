@@ -54,6 +54,13 @@ async def on_startup(bot: Bot) -> None:
             ))
     except Exception as e:
         logger.warning("enum migration (TIMEWEB) skipped: %s", e)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(_sql_text(
+                "ALTER TYPE providertype ADD VALUE IF NOT EXISTS 'ROOTVDS'"
+            ))
+    except Exception as e:
+        logger.warning("enum migration (ROOTVDS) skipped: %s", e)
 
     # drift ستون: servers.provider_account_id در دیتابیس‌های قدیمی NOT NULL است
     # ولی مدل Optional است (لازم برای حذف اکانت provider). با lock_timeout تا
@@ -120,6 +127,27 @@ async def on_startup(bot: Bot) -> None:
                 logger.info("timeweb: %s plans freed from stale out-of-stock", freed)
     except Exception as e:
         logger.warning("timeweb clear-out-of-stock skipped: %s", e)
+
+    # تایم‌وب فقط-ماهانه (تصمیم 2026-07-26 — سقفِ روزانه‌ی IP تایم‌وب برای فروش
+    # ساعتی مناسب نیست؛ فروش ساعتی به RootVDS منتقل شد): price_hourly همه‌ی
+    # پلن‌های تایم‌وب پاک می‌شود تا گزینه‌ی ساعتی در خرید ظاهر نشود.
+    try:
+        from bot.database.models import ProviderType as _PT2, ServerPlan as _SP2
+        from bot.database.session import AsyncSessionFactory
+        from sqlalchemy import select as _sel2
+        async with AsyncSessionFactory() as s:
+            rows = (await s.execute(_sel2(_SP2).where(
+                _SP2.provider_type == _PT2.TIMEWEB,
+                _SP2.price_hourly.isnot(None),
+            ))).scalars().all()
+            for p in rows:
+                p.price_hourly = None
+            if rows:
+                await s.commit()
+                logger.info("timeweb: hourly price cleared on %s plans (monthly-only)",
+                            len(rows))
+    except Exception as e:
+        logger.warning("timeweb monthly-only cleanup skipped: %s", e)
 
     logger.info("Database tables ready.")
 

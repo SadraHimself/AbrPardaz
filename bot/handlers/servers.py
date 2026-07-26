@@ -520,11 +520,11 @@ async def cb_server_rebuild_do(cb: CallbackQuery, user: User, session: AsyncSess
         import string as _str
         _alpha = _str.ascii_letters + _str.digits + "!@#$%^&*"
         new_root_pass = "".join(_sec.choice(_alpha) for _ in range(16))
-        # providerهای با رمزِ دیرآماده (تایم‌وب: رمز فقط بعد از اتمام نصب می‌آید):
-        # اعلام فوری شروع + ادامه در پس‌زمینه و ارسال یوزرنیم/رمز در پایان.
-        # ویرچولایزور (رمز را خودمان تعیین می‌کنیم) و هتزنر (رمز آنی در پاسخ)
-        # مثل قبل همان لحظه رمز را می‌دهند.
-        if server.provider_type in (ProviderType.TIMEWEB,):
+        # providerهای با رمزِ دیرآماده (تایم‌وب/روت: رمز فقط بعد از اتمام نصب
+        # می‌آید): اعلام فوری شروع + ادامه در پس‌زمینه و ارسال یوزرنیم/رمز در
+        # پایان. ویرچولایزور (رمز را خودمان تعیین می‌کنیم) و هتزنر (رمز آنی در
+        # پاسخ) مثل قبل همان لحظه رمز را می‌دهند.
+        if server.provider_type in (ProviderType.TIMEWEB, ProviderType.ROOTVDS):
             await cb.message.answer(
                 '<tg-emoji emoji-id="4987757216040747796">💎</tg-emoji> '
                 "<b>ریبیلد شروع شد.</b>\n\n"
@@ -820,8 +820,9 @@ async def _select_category(cb: CallbackQuery, user: User, state: FSMContext,
         except Exception:
             pass  # fail-open → precheckِ ساخت backstop است
 
-    # گروه‌های چند-لوکیشنه (هتزنر/جیکور/تایم‌وب): اول لوکیشن، بعد محصولات همان لوکیشن
-    _MULTI_LOC = (ProviderType.HETZNER, ProviderType.GCORE, ProviderType.TIMEWEB)
+    # گروه‌های چند-لوکیشنه (هتزنر/جیکور/تایم‌وب/روت): اول لوکیشن، بعد محصولات همان لوکیشن
+    _MULTI_LOC = (ProviderType.HETZNER, ProviderType.GCORE, ProviderType.TIMEWEB,
+                  ProviderType.ROOTVDS)
     if any(p.provider_type in _MULTI_LOC for p in plans):
         gid = _grp.id if _grp else 0
         locs = sorted({p.location for p in plans if p.location})
@@ -1835,7 +1836,7 @@ def _friendly_fail_reason(err: str) -> str:
     پیام‌های فارسیِ از قبل کاربرپسند (ظرفیت/موجودی/سازگاری) همان‌طور می‌مانند."""
     e = (err or "").strip()
     # موجودیِ اکانتِ ما (داخلی) کافی نیست — به مشتری فقط «ظرفیت موقتاً پر است»
-    if "__TW_FUNDS__" in e:
+    if "__TW_FUNDS__" in e or "__RV_FUNDS__" in e:
         return "ظرفیت ساخت سرور موقتاً تکمیل است — لطفاً کمی بعد دوباره تلاش کنید"
     # سهمیه‌ی روزانه‌ی IP سرویس‌دهنده (داخلی) — پیامِ عمومی
     if "__TW_IP_LIMIT__" in e:
@@ -2043,6 +2044,12 @@ async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: 
                         await LogService(bot, session).log_timeweb_funds(hostname)
                     except Exception:
                         pass
+                elif plan.provider_type == ProviderType.ROOTVDS and "__RV_FUNDS__" in _emsg:
+                    # موجودیِ اکانتِ RootVDS ته کشیده — ادمین شارژ کند
+                    try:
+                        await LogService(bot, session).log_rootvds_funds(hostname)
+                    except Exception:
+                        pass
                 elif plan.provider_type == ProviderType.TIMEWEB \
                         and "no_paid" in _emsg.lower():
                     try:
@@ -2159,9 +2166,10 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
         except Exception:
             pass  # fail-open → مسیرِ عادی (precheckِ create backstop است)
 
-    # سرویس‌دهنده‌های با ساخت طولانی (جیکور/تایم‌وب): پیام «در حال ساخت» فوری، و
-    # ادامه‌ی ساخت/کسر/تحویل در پس‌زمینه با سشن مستقل (سشن هندلر بسته می‌شود)
-    if plan.provider_type in (ProviderType.GCORE, ProviderType.TIMEWEB):
+    # سرویس‌دهنده‌های با ساخت طولانی (جیکور/تایم‌وب/روت): پیام «در حال ساخت» فوری،
+    # و ادامه‌ی ساخت/کسر/تحویل در پس‌زمینه با سشن مستقل (سشن هندلر بسته می‌شود)
+    if plan.provider_type in (ProviderType.GCORE, ProviderType.TIMEWEB,
+                              ProviderType.ROOTVDS):
         await cb.message.edit_text(
             '‏<tg-emoji emoji-id="5258503720928288433">🔔</tg-emoji> '
             "سرویس شما در حال ساخت است و بین ۱۰ تا ۱۵ دقیقه دیگر برای شما ارسال میشود.\n"

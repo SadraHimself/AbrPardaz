@@ -41,6 +41,7 @@ class ProviderType(str, enum.Enum):
     HETZNER = "hetzner"
     GCORE = "gcore"
     TIMEWEB = "timeweb"
+    ROOTVDS = "rootvds"
 
 
 class TransactionType(str, enum.Enum):

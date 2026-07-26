@@ -98,9 +98,13 @@ async def set_group_name(session: AsyncSession, name: str) -> None:
 
 
 async def apply_margins_to_catalog(session: AsyncSession) -> int:
-    """قیمت فروش پلن‌های تایم‌وب = قیمت خرید × (۱+سود٪) — ساعتی و ماهانه + فعال‌سازی."""
+    """قیمت فروش پلن‌های تایم‌وب = قیمت خرید × (۱+سود ماهانه٪) + فعال‌سازی.
+
+    ⚠️ تایم‌وب **فقط ماهانه** فروخته می‌شود (تصمیم 2026-07-26: سقفِ روزانه‌ی IP
+    تایم‌وب برای گردشِ فروش ساعتی مناسب نیست؛ فروش ساعتی به RootVDS منتقل شد).
+    price_hourly همیشه None می‌شود تا گزینه‌ی ساعتی در خرید ظاهر نشود."""
     mh, mm = await get_margins(session)
-    if mh is None and mm is None:
+    if mm is None:
         return 0
     plans = (await session.execute(
         select(ServerPlan).where(ServerPlan.provider_type == ProviderType.TIMEWEB)
@@ -108,12 +112,12 @@ async def apply_margins_to_catalog(session: AsyncSession) -> int:
     count = 0
     for p in plans:
         extra = p.extra_data or {}
-        ch, cm = extra.get("cost_hourly"), extra.get("cost_monthly")
+        cm = extra.get("cost_monthly")
         changed = False
-        if mh is not None and ch:
-            p.price_hourly = round(float(ch) * (1 + mh / 100), 4)
+        if p.price_hourly is not None:      # فقط-ماهانه: ساعتی همیشه پاک
+            p.price_hourly = None
             changed = True
-        if mm is not None and cm:
+        if cm:
             p.price_monthly = round(float(cm) * (1 + mm / 100), 2)
             changed = True
         if changed:

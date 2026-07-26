@@ -108,9 +108,7 @@ async def _render_tw_home(msg, session: AsyncSession):
          InlineKeyboardButton(text="ایمپورت محصولات", callback_data="admin:tw_import")],
         [InlineKeyboardButton(text="ویرایش نام", callback_data="admin:tw_edit:name"),
          InlineKeyboardButton(text="ویرایش توکن", callback_data="admin:tw_edit:token")],
-        [InlineKeyboardButton(text=f"سود ساعتی: {mh if mh is not None else '—'}٪",
-                              callback_data="admin:twm:h"),
-         InlineKeyboardButton(text=f"سود ماهانه: {mm if mm is not None else '—'}٪",
+        [InlineKeyboardButton(text=f"سود ماهانه: {mm if mm is not None else '—'}٪",
                               callback_data="admin:twm:m")],
         [InlineKeyboardButton(text=f"لیمیت VM: {vm_limit or 'تعیین نشده'}",
                               callback_data="admin:tw_limit")],
@@ -129,7 +127,8 @@ async def _render_tw_home(msg, session: AsyncSession):
         f"{f' / {vm_limit}' if vm_limit else ''}\n"
         f"محصولات ایمپورت‌شده: {plans_count}\n\n"
         "قیمت‌ها به روبل است — نرخ روبل هر ۸ ساعت خودکار از نوسان آپدیت می‌شود "
-        "(نمایش: بخش مالی ← نرخ ارز). فروش ساعتی و ماهانه — ساعتی = ماهانه ÷ ۷۲۰.\n"
+        "(نمایش: بخش مالی ← نرخ ارز).\n"
+        "🔒 تایم‌وب <b>فقط ماهانه</b> فروخته می‌شود (فروش ساعتی → RootVDS).\n"
         "محصول ایمپورت‌شده تا تعیین سود غیرفعال است.\n"
         "⚠️ «تأیید حذف سرویس‌ها» در پنل تایم‌وب باید خاموش باشد.",
         parse_mode="HTML",

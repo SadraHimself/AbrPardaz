@@ -292,6 +292,15 @@ class LogService:
             "تا ۱ ساعت، دسته‌ی تایم‌وب برای کاربران «ظرفیت تکمیل» نشان داده می‌شود.",
         )
 
+    async def log_rootvds_funds(self, hostname: str) -> None:
+        await self._send(
+            "server",
+            f"⛔ <b>ساخت سرور RootVDS رد شد — موجودی اکانت کافی نیست</b>\n\n"
+            f"سرور <code>{hostname}</code> ساخته نشد و وجه کاربر کامل برگشت.\n"
+            "RootVDS از بالانس اکانت دقیقه‌ای کسر می‌کند («No money»). "
+            "برای ادامه‌ی فروش، حساب rootvds.ru را شارژ کن.",
+        )
+
     async def log_provider_down(self, name: str, reason: str = "") -> None:
         await self._send(
             "server",

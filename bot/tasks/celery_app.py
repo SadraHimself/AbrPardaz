@@ -86,6 +86,12 @@ app.conf.update(
             "task": "bot.tasks.server.sync_timeweb_catalog",
             "schedule": crontab(minute="5,35"),
         },
+        # هر ۳۰ دقیقه قیمت خرید/بودن-نبودن کاتالوگ RootVDS sync می‌شود
+        # (آفست از بقیه: هتزنر ۱۰,۴۰ · جیکور ۲۰,۵۰ · تایم‌وب ۵,۳۵)
+        "rootvds-catalog-sync": {
+            "task": "bot.tasks.server.sync_rootvds_catalog",
+            "schedule": crontab(minute="15,45"),
+        },
         # هر ساعت تراکنش‌های قدیمی‌تر از ۷۲ ساعت پاک می‌شوند
         # (قبلاً فقط ۳ روزِ هفته اجرا می‌شد و commit هم نداشت → هیچ‌وقت پاک نمی‌شد)
         "cleanup-transactions": {

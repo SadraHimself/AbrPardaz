@@ -77,19 +77,6 @@ _LOC_CITY = {
     "us-4": ("BUF", "New York"),
 }
 
-# نگاشتِ لوکیشن → availability_zone برای floating IP (زون‌های مجازِ API:
-# spb-1..4, msk-1, nsk-1, ams-1, ala-1, fra-1). لوکیشن‌هایی که زون ندارند
-# (ru-4/ekb, ru-5/kzn, us-4) → floating IP نمی‌سازیم و به افزودنِ بعدِ on برمی‌گردیم.
-_LOC_ZONE = {
-    "ru-1": "spb-1",
-    "ru-2": "nsk-1",
-    "ru-3": "msk-1",
-    "kz-1": "ala-1",
-    "nl-1": "ams-1",
-    "de-1": "fra-1",
-}
-
-
 def _preset_city_token(preset: dict) -> Optional[str]:
     desc = f"{preset.get('description') or ''} {preset.get('description_short') or ''}"
     tokens = set(_re.findall(r"[a-z]+", desc.lower()))
@@ -409,28 +396,10 @@ class TimewebProvider(BaseProvider):
         labels = params.extra.get("labels") or {}
         if labels.get("tg_user_id"):
             body["comment"] = f"abrpardaz tg:{labels['tg_user_id']}"
-        # IPv4 عمومی حین ساخت (روشِ پنل): floating IP در زونِ لوکیشن بساز و در
-        # بدنه‌ی ساخت پاس بده تا سرور از همان اول با IP بالا بیاید (طبقِ داکس،
-        # network.floating_ip = «Публичный IP»). اگر زون نبود یا نشد، بعد از on
-        # با bind/افزودن جبران می‌کنیم. _fip_id برای bind/پاک‌سازی نگه می‌ماند.
-        _fip_id: Optional[str] = None
-        _zone = _LOC_ZONE.get((params.location or "").lower())
-        if _zone:
-            _fip_id, _fip_addr = await self._create_floating_ip(_zone)
-            if _fip_addr:
-                body["availability_zone"] = _zone
-                body["network"] = {"floating_ip": _fip_addr}
-        try:
-            data = await self._request("POST", "/api/v1/servers", json=body, timeout=60)
-        except Exception:
-            if _fip_id:  # ساختِ سرور شکست خورد → floating IP یتیم را پاک کن
-                await self._delete_floating_ip_by_id(_fip_id)
-            raise
+        data = await self._request("POST", "/api/v1/servers", json=body, timeout=60)
         srv = data.get("server") or {}
         server_id = srv.get("id")
         if not server_id:
-            if _fip_id:
-                await self._delete_floating_ip_by_id(_fip_id)
             raise RuntimeError("تایم‌وب شناسه سرور ساخته‌شده را برنگرداند")
         # لاگِ تشخیصی: وضعیتِ *لحظه‌ی ساخت*. اگر همین‌جا no_paid باشد، یعنی خودِ
         # سفارش پرداخت‌نشده ثبت شده (نه مشکلِ IP/صبر) — به‌احتمالِ زیاد تعرفه‌ی
@@ -441,11 +410,22 @@ class TimewebProvider(BaseProvider):
             body.get("preset_id"), body.get("os_id"), body.get("software_id"),
             server_id, self.last_create_status or "?")
 
-        # ⚠️ IPv4 عمومی را اینجا (بلافاصله بعد از ساخت) اضافه *نمی‌کنیم*. افزودنِ
-        # یک سرویسِ پولیِ جدا (IPv4) وسطِ تسویه‌ی سفارش، سرور را به no_paid می‌زند
-        # (ریسِ متناوب — گاهی سالم، گاهی no_paid؛ همان باگی که سرورها را بی‌IP و
-        # پرداخت‌نشده می‌کرد). درست مثل ساختِ دستی، IPv4 را *بعد از* بالاآمدنِ سرور
-        # (on + root_pass) با _ensure_public_ip اضافه می‌کنیم — پایین‌تر.
+        # IPv4 عمومی بلافاصله بعد از ساخت اضافه می‌شود — روشِ اثبات‌شده‌ی قبلی:
+        # حین install درخواست می‌شود و تا پایان نصب attach شده است (E2E: سرور
+        # وسطِ ساخت هم IP را در پنل نشان می‌داد). حذفِ این مرحله اشتباه بود؛
+        # no_paid ربطی به IP نداشت (علت: رزروِ موجودی — حالا precheck دارد).
+        try:
+            _early_v4, _ = await self._ips_endpoint(str(server_id))
+            if not _early_v4:
+                _resp = await self._request(
+                    "POST", f"/api/v1/servers/{int(server_id)}/ips",
+                    json={"type": "ipv4"})
+                logger.warning(
+                    "TW_IP_ADD early server=%s ok resp_ip=%s", server_id,
+                    ((_resp or {}).get("server_ip") or {}).get("ip") or "-")
+        except Exception as e:
+            logger.warning("TW_IP_ADD early server=%s ERROR %s",
+                           server_id, str(e)[:140])
 
         # نصب چند دقیقه طول می‌کشد؛ تحویل به IP و رمز (root_pass) نیاز دارد.
         # ساخت تراکنشی: شکست/مهلت → سرور نیمه‌ساخته حذف شود تا بیل نخورد.
@@ -471,7 +451,7 @@ class TimewebProvider(BaseProvider):
                     self.last_root_password = chk.get("root_pass")
                     info = self._server_info(chk)
                     if not info.ip_address:
-                        info = await self._attach_public_ip(str(server_id), info, _fip_id)
+                        info = await self._ensure_public_ip(str(server_id), info)
                     info.extra_data["username"] = "Administrator" \
                         if (chk.get("os") or {}).get("name") == "windows" else "root"
                     return info
@@ -481,16 +461,12 @@ class TimewebProvider(BaseProvider):
                 await self.delete_server(str(server_id))
             except Exception:
                 pass
-            if _fip_id:  # floating IP بی‌سرور نماند
-                await self._delete_floating_ip_by_id(_fip_id)
             raise
         self.last_root_password = fresh.get("root_pass")
         info = self._server_info(fresh)
-        # اگر سرور با floating IP حین ساخت بالا آمد، info.ip_address پر است و کاری
-        # نمی‌ماند؛ وگرنه floating IP را bind می‌کنیم (یا IPv4 معمولی اضافه) — تحویل
-        # بدون IP بی‌معناست.
+        # IP از افزودنِ اولِ ساخت باید حاضر باشد؛ اگر نبود، fallback
         if not info.ip_address:
-            info = await self._attach_public_ip(str(server_id), info, _fip_id)
+            info = await self._ensure_public_ip(str(server_id), info)
         return info
 
     async def _bound_floating_ip_ids(self, server_id: int) -> list:
@@ -614,71 +590,6 @@ class TimewebProvider(BaseProvider):
         except Exception as e:
             logger.warning("TW_IP_ADD server=%s FATAL %s", server_id, str(e)[:140])
         return info
-
-    async def _attach_public_ip(self, server_id: str, info: ServerInfo,
-                                fip_id: Optional[str]) -> ServerInfo:
-        """سرور بعد از on هنوز IP ندارد → اگر floating IP از پیش ساختیم آن را
-        bind کن و منتظرِ ظاهرشدنش بمان؛ اگر نشد یا floating نداشتیم، یک IPv4
-        معمولی اضافه کن (fallback)."""
-        if fip_id:
-            await self._bind_floating_ip(fip_id, server_id)
-            deadline = asyncio.get_event_loop().time() + 120
-            while asyncio.get_event_loop().time() < deadline and not info.ip_address:
-                await asyncio.sleep(4)
-                try:
-                    v4, v6 = await self._ips_endpoint(server_id)
-                except Exception:
-                    v4 = v6 = None
-                if v4:
-                    info.ip_address = v4
-                if v6 and not info.ipv6_address:
-                    info.ipv6_address = v6
-            if info.ip_address:
-                return info
-        return await self._ensure_public_ip(server_id, info)
-
-    async def _create_floating_ip(self, zone: str) -> tuple[Optional[str], Optional[str]]:
-        """یک IPv4 عمومیِ شناور در زون بساز (برای دادنِ IP حین ساخت). خروجی:
-        (id, address). آدرس ممکن است لحظه‌ی ساخت null باشد → کوتاه poll می‌کنیم."""
-        try:
-            resp = await self._request(
-                "POST", "/api/v1/floating-ips",
-                json={"is_ddos_guard": False, "availability_zone": zone})
-            fip = (resp or {}).get("ip") or {}
-            fid, addr = fip.get("id"), fip.get("ip")
-            if fid and not addr:
-                for _ in range(8):
-                    await asyncio.sleep(2)
-                    one = (await self._request(
-                        "GET", f"/api/v1/floating-ips/{fid}")).get("ip") or {}
-                    addr = one.get("ip")
-                    if addr:
-                        break
-            logger.warning("TW_IP_CREATE floating id=%s addr=%s zone=%s",
-                           fid, addr or "-", zone)
-            return fid, addr
-        except Exception as e:
-            logger.warning("TW_IP_CREATE floating FAILED zone=%s err=%s",
-                           zone, str(e)[:140])
-            return None, None
-
-    async def _bind_floating_ip(self, fip_id: str, server_id: str) -> None:
-        """floating IP را به سرور وصل کن (اگر حین ساخت خودکار نچسبید)."""
-        try:
-            await self._request(
-                "POST", f"/api/v1/floating-ips/{fip_id}/bind",
-                json={"resource_type": "server", "resource_id": int(server_id)})
-            logger.warning("TW_IP_BIND fip=%s server=%s ok", fip_id, server_id)
-        except Exception as e:
-            logger.warning("TW_IP_BIND fip=%s server=%s ERROR %s",
-                           fip_id, server_id, str(e)[:140])
-
-    async def _delete_floating_ip_by_id(self, fip_id: str) -> None:
-        """floating IP یتیم را حذف کن (وقتی ساختِ سرور شکست خورد)."""
-        try:
-            await self._request("DELETE", f"/api/v1/floating-ips/{fip_id}")
-        except Exception:
-            pass
 
     async def get_server(self, server_id: str) -> ServerInfo:
         info = self._server_info(await self._get_server_raw(server_id))

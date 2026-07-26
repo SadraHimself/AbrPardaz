@@ -261,10 +261,10 @@ class TimewebProvider(BaseProvider):
                 server_id, _polls, st or "?", bool(rp), _poll_err or "-")
             if st in targets and (not need_root_pass or rp):
                 return last
-            # (الف) سرورِ ساخته‌شده که فقط منتظرِ تسویه‌ی بیلینگ است (رمز دارد ولی
-            # لحظه‌ای no_paid) → آماده‌ی تحویل.
-            if need_root_pass and rp and st == "no_paid":
-                return last
+            # ⚠️ no_paid حتی با root_pass «آماده‌ی تحویل» نیست — اثبات‌شده (E2E
+            # 2026-07-26): no_paid = کمبودِ رزروِ موجودی و خودش حل نمی‌شود؛ تحویلِ
+            # چنین سروری = دادنِ مشخصاتِ سرورِ خاموش به مشتری. پس فقط گریسِ (ب)
+            # پایین تعیین‌تکلیفش می‌کند (لغو + برگشت وجه).
             if fail_on and st in fail_on:
                 logger.warning("timeweb server %s entered %s — aborting wait",
                                server_id, st)
@@ -278,12 +278,12 @@ class TimewebProvider(BaseProvider):
                     no_paid_since = now
                 elif now - no_paid_since >= no_paid_grace_s:
                     logger.warning(
-                        "timeweb server %s stuck no_paid > %ss (balance is fine → "
-                        "account is in invoice/manual payment mode)",
-                        server_id, no_paid_grace_s)
+                        "timeweb server %s stuck no_paid > %ss (balance reserve "
+                        "insufficient at create — precheck raced, or account in "
+                        "invoice mode)", server_id, no_paid_grace_s)
                     raise RuntimeError(
-                        "سرور در وضعیت «پرداخت‌نشده» (no_paid) ماند — حالتِ پرداختِ "
-                        "اکانتِ تایم‌وب باید روی «از بالانس» تنظیم شود")
+                        "سرور در وضعیت «پرداخت‌نشده» (no_paid) ماند — موجودی اکانت "
+                        "تایم‌وب کفافِ رزروِ سرورِ جدید را نداد")
             else:
                 no_paid_since = None
             await asyncio.sleep(5)
@@ -401,9 +401,9 @@ class TimewebProvider(BaseProvider):
         server_id = srv.get("id")
         if not server_id:
             raise RuntimeError("تایم‌وب شناسه سرور ساخته‌شده را برنگرداند")
-        # لاگِ تشخیصی: وضعیتِ *لحظه‌ی ساخت*. اگر همین‌جا no_paid باشد، یعنی خودِ
-        # سفارش پرداخت‌نشده ثبت شده (نه مشکلِ IP/صبر) — به‌احتمالِ زیاد تعرفه‌ی
-        # legacy دیگر خودکار پرداخت نمی‌شود. preset را هم ثبت می‌کنیم تا معلوم شود.
+        # لاگِ تشخیصی: وضعیتِ *لحظه‌ی ساخت*. اگر همین‌جا no_paid باشد یعنی موجودی
+        # کفافِ رزروِ سرورِ جدید را نداده (پیش‌چک race خورده — موجودی وسطِ کار
+        # تغییر کرده). سرور تحویل نمی‌شود؛ گریسِ no_paid لغو+برگشت وجه می‌کند.
         self.last_create_status = (srv.get("status") or "").lower()
         logger.warning(
             "TW_CREATE_DIAG preset=%s os=%s sw=%s → id=%s create_status=%s",
@@ -442,15 +442,14 @@ class TimewebProvider(BaseProvider):
                 timeout_s=(900 if software_id else 480), need_root_pass=True,
                 fail_on={"blocked", "permanent_blocked"})
         except Exception:
-            # چک نهاییِ نجات: ممکن است سرور واقعاً ساخته شده باشد ولی poll وسط راه
-            # خطا/تایم‌اوت خورده باشد یا وضعیت لحظه‌ای no_paid مانده باشد (E2E
-            # 2026-07-25: سرور در پنل کامل بود ولی ربات لغو کرد). معیارِ «سرورِ
-            # واقعی» = داشتنِ root_pass (نصبِ OS تمام شده)؛ چنین سروری را هرگز
-            # حذف نمی‌کنیم — no_paid فقط تسویه‌ی بیلینگ است و چون موجودی چک شده
-            # خودش روشن می‌شود. تحویلش بده نه حذف.
+            # چک نهاییِ نجات: ممکن است سرور واقعاً سالم بالا آمده باشد ولی poll
+            # وسط راه خطای گذرا خورده باشد (E2E 2026-07-25: سرور در پنل کامل بود
+            # ولی ربات لغو کرد). معیارِ نجات = **on** + root_pass + IPv4 — سرورِ
+            # no_paid نجات داده نمی‌شود (کمبودِ رزرو؛ خودش حل نمی‌شود — تحویلش
+            # یعنی مشخصاتِ سرورِ خاموش به مشتری).
             try:
                 chk = await self._get_server_raw(str(server_id))
-                if chk.get("root_pass"):
+                if (chk.get("status") or "").lower() == "on" and chk.get("root_pass"):
                     self.last_root_password = chk.get("root_pass")
                     info = self._server_info(chk)
                     if not info.ip_address:
@@ -463,8 +462,11 @@ class TimewebProvider(BaseProvider):
                 pass
             try:
                 await self.delete_server(str(server_id))
-            except Exception:
-                pass
+            except Exception as _de:
+                # حذفِ پاک‌سازی نگرفت (قرنطینه/قفل/تأیید حذف) — جاروکشِ یتیم‌های
+                # سینکِ ۳۰دقیقه‌ای بعداً حذفش می‌کند؛ ولی بی‌صدا نماند.
+                logger.warning("TW_CLEANUP_FAILED server=%s err=%s",
+                               server_id, str(_de)[:140])
             raise
         self.last_root_password = fresh.get("root_pass")
         info = self._server_info(fresh)

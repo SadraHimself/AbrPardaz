@@ -637,6 +637,61 @@ def sync_timeweb_catalog(self):
                             await session.commit()
                 except Exception:
                     pass
+
+                # جاروکشِ یتیم‌ها (تضمین «به هر دلیلی نرسید → کامل پاک شود»):
+                # سرورِ تایم‌وبیِ ساختِ ربات (کامنت abrpardaz) که در DB نیست و
+                # بیش از ۴۵ دقیقه عمر دارد = بازمانده‌ی کرش/برق وسط ساخت یا
+                # حذفِ ناموفق → در provider حذف می‌شود که بی‌سروصدا بیل نخورد؛
+                # ادمین هم خبردار می‌شود (پولِ مشتری از Transactions قابل پیگیری است).
+                try:
+                    from datetime import datetime as _dt, timezone as _tz
+                    from bot.database.models import Server as _Srv, ServerStatus as _SSt
+                    known = {
+                        str(x) for x in (await session.execute(
+                            select(_Srv.provider_server_id).where(
+                                _Srv.provider_type == ProviderType.TIMEWEB,
+                                _Srv.status != _SSt.DELETED,
+                            )
+                        )).scalars().all() if x
+                    }
+                    raw_srv = await prov._request(
+                        "GET", "/api/v1/servers",
+                        params={"limit": "100", "offset": "0"})
+                    now_utc = _dt.now(_tz.utc)
+                    for s in (raw_srv.get("servers") or []):
+                        if not isinstance(s, dict):
+                            continue
+                        sid = str(s.get("id") or "")
+                        comment = str(s.get("comment") or "")
+                        status = (s.get("status") or "").lower()
+                        if not sid or sid in known:
+                            continue
+                        if not comment.startswith("abrpardaz tg:"):
+                            continue   # سرور دستی ادمین در پنل — دست نمی‌زنیم
+                        if status in ("removing", "removed"):
+                            continue
+                        # سنِ سرور — created_at ناخوانا = دست نزن (شاید وسط ساخت باشد)
+                        try:
+                            created = _dt.fromisoformat(
+                                str(s.get("created_at") or "").replace(" ", "T")
+                                .replace("Z", "+00:00"))
+                            if created.tzinfo is None:
+                                created = created.replace(tzinfo=_tz.utc)
+                        except Exception:
+                            continue
+                        if (now_utc - created).total_seconds() < 45 * 60:
+                            continue
+                        try:
+                            await TimewebProvider(
+                                api_token=account.api_key or "").delete_server(sid)
+                            await log.log_timeweb_orphan_deleted(
+                                s.get("name") or sid, comment)
+                        except Exception as _e:
+                            import logging as _lg
+                            _lg.getLogger(__name__).warning(
+                                "timeweb orphan %s delete failed: %s", sid, _e)
+                except Exception:
+                    pass
             finally:
                 await bot.session.close()
 

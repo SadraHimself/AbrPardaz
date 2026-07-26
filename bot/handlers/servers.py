@@ -339,7 +339,13 @@ async def cb_server_action(cb: CallbackQuery, user: User, session: AsyncSession)
         if reason == SuspendReason.EXPIRED:
             # فعال‌سازی = تمدید ماهانه با قیمت روز؛ بدون پرداخت خبری از روشن‌شدن نیست
             billing = BillingService(session)
-            if not await billing.charge_monthly(server):
+            _renewed = await billing.charge_monthly(server)
+            if _renewed is None:
+                # قیمت/نرخ ارز در دسترس نیست — بدون کسر، تمدید هم نمی‌کنیم
+                await cb.answer("نرخ ارز موقتاً در دسترس نیست — کمی بعد دوباره تلاش کنید.",
+                                show_alert=True)
+                return
+            if not _renewed:
                 await cb.answer("موجودی برای تمدید ماهانه کافی نیست. کیف پول را شارژ کنید.", show_alert=True)
                 return
             server.expires_at = datetime.now(timezone.utc) + timedelta(days=30)

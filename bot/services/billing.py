@@ -128,12 +128,19 @@ class BillingService:
 
     # ── Monthly billing ───────────────────────────────────────────────────────
 
-    async def charge_monthly(self, server: Server) -> bool:
+    async def charge_monthly(self, server: Server) -> Optional[bool]:
+        """تمدید ماهانه با قیمت روزِ پلن.
+        خروجی: True = کسر شد | False = موجودی ناکافی (تعلیق) |
+        None = به‌تعویق (قیمت/نرخ ارز در دسترس نیست — تمدید نکن، تعلیق هم نکن؛
+        دور بعدی دوباره تلاش می‌شود). ⚠️ قبلاً این حالت True برمی‌گرداند و caller
+        تاریخ انقضا را ۳۰ روز جلو می‌برد = یک ماه مجانی برای مشتری!"""
         # قیمت لحظه‌ای از خودِ پلن (مثل ساعتی) — تمدید همیشه با قیمت روز
         from bot.services.currency import server_live_price
         amount, currency = await server_live_price(self.session, server, hourly=False)
         if amount <= 0:
-            return True
+            logger.warning("charge_monthly: no monthly price for server %s — postponing",
+                           server.id)
+            return None
         self._sync_price_copy(server, amount, currency, hourly=False)
         if currency == "irt":
             amount_toman = amount
@@ -142,7 +149,7 @@ class BillingService:
             if amount_toman <= 0:
                 logger.warning("charge_monthly: no %s rate — postponing billing for server %s",
                                currency, server.id)
-                return True
+                return None
 
         # هزینه IPهای اضافه (تومانی، از تنظیمات پروایدر) در هر تمدید ماهانه هم اعمال می‌شود
         extra_ips = (server.extra_data or {}).get("extra_ips") or []

@@ -303,6 +303,11 @@ def run_monthly_expiry_check(self):
 
             for server in servers:
                 success = await billing.charge_monthly(server)
+                if success is None:
+                    # قیمت/نرخ ارز در دسترس نیست — نه تمدید، نه تعلیق؛ اجرای
+                    # بعدی (بعد از آپدیت نرخ) جبران می‌کند. ⚠️ قبلاً این حالت
+                    # «موفق» حساب می‌شد و ماهِ مجانی می‌داد.
+                    continue
                 if success:
                     from datetime import timedelta
                     server.expires_at = now + timedelta(days=30)

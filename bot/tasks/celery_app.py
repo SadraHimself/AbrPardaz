@@ -28,6 +28,11 @@ app.conf.update(
             "task": "bot.tasks.billing.run_monthly_expiry_check",
             "schedule": crontab(hour=0, minute=5),
         },
+        # هر ۱۰ دقیقه: ماهانه‌ی ساسپندِ منقضی — بعد از شارژ کیف پول، تمدید خودکار
+        "monthly-renewal-retry": {
+            "task": "bot.tasks.billing.retry_expired_renewals",
+            "schedule": crontab(minute="*/10"),
+        },
         # هر دقیقه چک می‌کند کدام اسنپ‌شات‌ها به ۱ ساعت رسیده‌اند
         "snapshot-billing": {
             "task": "bot.tasks.billing.run_snapshot_billing",

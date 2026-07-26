@@ -167,6 +167,8 @@ class BillingService:
         )
         if success:
             server.last_billed_at = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+            # مبلغ کسرشده برای پیام «رسید تمدید» به کاربر (تومان)
+            self.last_monthly_charge_toman = amount_toman
         return success
 
     # ── Suspension ────────────────────────────────────────────────────────────

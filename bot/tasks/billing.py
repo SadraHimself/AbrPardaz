@@ -325,18 +325,83 @@ def handle_balance_empty(user_id: int):
     _run(_do())
 
 
+# ── پیام‌های چرخه‌ی تمدید ماهانه ─────────────────────────────────────────────
+_SIGN = '\n\n‎<tg-emoji emoji-id="5258093637450866522">🤖</tg-emoji> @abrmakerbot'
+
+
+def _renew_reminder_text(name: str, ip: str, days: int) -> str:
+    return (
+        '‏<tg-emoji emoji-id="5258503720928288433">🔔</tg-emoji> کاربر گرامی\n\n'
+        f"موعد تمدید ماهیانه سرویس {name} با ایپی {ip} نیز {days} روز دیگر می باشد، "
+        "برای تمدید سرویس کیف پول خود را به مقدار قیمت سرویس شارژ کنید." + _SIGN
+    )
+
+
+def _renew_suspend_text(name: str, ip: str) -> str:
+    return (
+        '‏<tg-emoji emoji-id="6008233706039284019">⚠️</tg-emoji> کاربر گرامی\n\n'
+        f"سرویس {name} با آدرس آیپی {ip} به علت عدم تمدید تا 24 ساعت دیگر ساسپند شده است. "
+        "برای تمدید سرویس کیف پول خود را به مقدار مورد نیاز شارژ کنید" + _SIGN
+    )
+
+
+def _renewed_text(amount: float, name: str, ip: str) -> str:
+    return (
+        f"کاربر گرامی مبلغ {amount:,.0f} تومان برای تمدید سرویس {name} با آدرس آیپی {ip} "
+        "از کیف پول شما کاسته شد و سرویس تمدید شد." + _SIGN
+    )
+
+
+async def _renew_and_unsuspend(session, billing, server, bot) -> bool:
+    """تلاش تمدید یک سرور ساسپندِ منقضی؛ موفق → آن‌ساسپند + ۳۰ روز + رسید. """
+    from bot.database.models import ProviderAccount, User
+    from bot.providers import get_provider
+
+    success = await billing.charge_monthly(server)
+    if not success:  # False یا None
+        return False
+    await billing.unsuspend_server_db(server)
+    try:
+        if server.provider_account_id and server.provider_server_id:
+            account = await session.get(ProviderAccount, server.provider_account_id)
+            if account:
+                await get_provider(account).unsuspend_server(server.provider_server_id)
+    except Exception:
+        pass
+    server.expires_at = datetime.now(timezone.utc) + timedelta(days=30)
+    extra = dict(server.extra_data or {})
+    extra.pop("renew_notice_sent", None)
+    server.extra_data = extra
+    user = await session.get(User, server.user_id)
+    if user:
+        try:
+            await bot.send_message(
+                user.telegram_id,
+                _renewed_text(billing.last_monthly_charge_toman, server.name,
+                              server.ip_address or "—"),
+                parse_mode="HTML")
+        except Exception:
+            pass
+    return True
+
+
 @app.task(name="bot.tasks.billing.run_monthly_expiry_check", bind=True, max_retries=3)
 def run_monthly_expiry_check(self):
     """
-    هر شب چک می‌کند آیا سرور ماهیانه منقضی شده.
-    اگر شده → شارژ ماهیانه را کسر می‌کند یا ساسپند می‌شود.
+    هر شب — چرخه‌ی کامل تمدید ماهانه:
+      ۱) یادآوری ۳ روز آخر (روزی یک‌بار: ۳، ۲، ۱ روز مانده)
+      ۲) سررسید: موجودی کافی → تمدید خودکار + رسید | ناکافی → ساسپند ۲۴ساعته + اخطار
+      ۳) ساسپندِ بیش از ۲۴ ساعت: یک تلاش آخر برای تمدید، وگرنه حذف کامل
     """
     async def _do():
         from bot.database.session import engine, AsyncSessionFactory
-        from bot.database.models import Server, ServerStatus, BillingType, SuspendReason
+        from bot.database.models import (Server, ServerStatus, BillingType,
+                                         SuspendReason, ProviderAccount, User)
         from bot.services.billing import BillingService
         from bot.providers import get_provider
         from sqlalchemy import select
+        from aiogram import Bot
+        from bot.config import settings
         try:
             await engine.dispose(close=False)
         except Exception:
@@ -346,41 +411,142 @@ def run_monthly_expiry_check(self):
 
         async with AsyncSessionFactory() as session:
             billing = BillingService(session)
-            result = await session.execute(
-                select(Server).where(
-                    Server.billing_type == BillingType.MONTHLY,
-                    Server.status == ServerStatus.ACTIVE,
-                    Server.expires_at <= now,
-                )
-            )
-            servers = list(result.scalars().all())
+            bot = Bot(token=settings.BOT_TOKEN)
 
-            for server in servers:
-                success = await billing.charge_monthly(server)
-                if success is None:
-                    # قیمت/نرخ ارز در دسترس نیست — نه تمدید، نه تعلیق؛ اجرای
-                    # بعدی (بعد از آپدیت نرخ) جبران می‌کند. ⚠️ قبلاً این حالت
-                    # «موفق» حساب می‌شد و ماهِ مجانی می‌داد.
-                    continue
-                if success:
-                    from datetime import timedelta
-                    server.expires_at = now + timedelta(days=30)
-                else:
-                    await billing.suspend_server_db(server, SuspendReason.EXPIRED)
+            async def _tell(user_id: int, text: str) -> None:
+                u = await session.get(User, user_id)
+                if not u:
+                    return
+                try:
+                    await bot.send_message(u.telegram_id, text, parse_mode="HTML")
+                except Exception:
+                    pass
+
+            try:
+                # ── ۱) یادآوری ۳ روز آخر (هر روز یک‌بار — dedup با renew_notice_sent)
+                res = await session.execute(
+                    select(Server).where(
+                        Server.billing_type == BillingType.MONTHLY,
+                        Server.status == ServerStatus.ACTIVE,
+                        Server.expires_at > now,
+                        Server.expires_at <= now + timedelta(days=3),
+                    )
+                )
+                for server in res.scalars().all():
+                    exp = server.expires_at
+                    if exp.tzinfo is None:
+                        exp = exp.replace(tzinfo=timezone.utc)
+                    days_left = max(1, -(-int((exp - now).total_seconds()) // 86400))
+                    extra = dict(server.extra_data or {})
+                    if extra.get("renew_notice_sent") == days_left:
+                        continue
+                    extra["renew_notice_sent"] = days_left
+                    server.extra_data = extra
+                    await _tell(server.user_id, _renew_reminder_text(
+                        server.name, server.ip_address or "—", days_left))
+
+                # ── ۲) سررسید: تمدید خودکار یا ساسپند ۲۴ساعته
+                result = await session.execute(
+                    select(Server).where(
+                        Server.billing_type == BillingType.MONTHLY,
+                        Server.status == ServerStatus.ACTIVE,
+                        Server.expires_at <= now,
+                    )
+                )
+                for server in result.scalars().all():
+                    success = await billing.charge_monthly(server)
+                    if success is None:
+                        # قیمت/نرخ ارز در دسترس نیست — نه تمدید، نه تعلیق؛ اجرای
+                        # بعدی (بعد از آپدیت نرخ) جبران می‌کند.
+                        continue
+                    if success:
+                        server.expires_at = now + timedelta(days=30)
+                        extra = dict(server.extra_data or {})
+                        extra.pop("renew_notice_sent", None)
+                        server.extra_data = extra
+                        await _tell(server.user_id, _renewed_text(
+                            billing.last_monthly_charge_toman, server.name,
+                            server.ip_address or "—"))
+                    else:
+                        await billing.suspend_server_db(server, SuspendReason.EXPIRED)
+                        try:
+                            account = await session.get(ProviderAccount, server.provider_account_id)
+                            if account:
+                                await get_provider(account).suspend_server(server.provider_server_id)
+                        except Exception:
+                            pass
+                        await _tell(server.user_id, _renew_suspend_text(
+                            server.name, server.ip_address or "—"))
+
+                # ── ۳) ساسپندِ منقضیِ بیش از ۲۴ ساعت: تلاش آخر، وگرنه حذف
+                res = await session.execute(
+                    select(Server).where(
+                        Server.billing_type == BillingType.MONTHLY,
+                        Server.status == ServerStatus.SUSPENDED,
+                        Server.suspend_reason == SuspendReason.EXPIRED,
+                        Server.suspended_at <= now - timedelta(hours=24),
+                    )
+                )
+                for server in res.scalars().all():
+                    if await _renew_and_unsuspend(session, billing, server, bot):
+                        continue
                     try:
-                        account = await session.get(
-                            __import__("bot.database.models", fromlist=["ProviderAccount"]).ProviderAccount,
-                            server.provider_account_id,
-                        )
-                        if account:
-                            provider = get_provider(account)
-                            await provider.suspend_server(server.provider_server_id)
+                        if server.provider_account_id and server.provider_server_id:
+                            account = await session.get(ProviderAccount, server.provider_account_id)
+                            if account:
+                                await get_provider(account).delete_server(server.provider_server_id)
                     except Exception:
                         pass
-                    from bot.tasks.server import notify_user_suspend
-                    notify_user_suspend.delay(server.user_id, server.id)
+                    server.status = ServerStatus.DELETED
+                    await _tell(server.user_id,
+                                f"کاربر گرامی سرویس {server.name} به علت عدم تمدید حذف شد." + _SIGN)
 
-            await session.commit()
+                await session.commit()
+            finally:
+                await bot.session.close()
+
+    try:
+        _run(_do())
+    except Exception as exc:
+        raise self.retry(exc=exc, countdown=120)
+
+
+@app.task(name="bot.tasks.billing.retry_expired_renewals", bind=True, max_retries=1)
+def retry_expired_renewals(self):
+    """هر ۱۰ دقیقه: سرورهای ماهانه‌ی ساسپند‌شده به دلیل انقضا — اگر کاربر کیف پول
+    را شارژ کرده باشد، مبلغ خودکار کسر و سرویس تمدید/آن‌ساسپند می‌شود (بدون
+    انتظار تا اجرای شبانه)."""
+    async def _do():
+        from bot.database.session import engine, AsyncSessionFactory
+        from bot.database.models import Server, ServerStatus, BillingType, SuspendReason
+        from bot.services.billing import BillingService
+        from sqlalchemy import select
+        from aiogram import Bot
+        from bot.config import settings
+        try:
+            await engine.dispose(close=False)
+        except Exception:
+            pass
+
+        async with AsyncSessionFactory() as session:
+            billing = BillingService(session)
+            res = await session.execute(
+                select(Server).where(
+                    Server.billing_type == BillingType.MONTHLY,
+                    Server.status == ServerStatus.SUSPENDED,
+                    Server.suspend_reason == SuspendReason.EXPIRED,
+                )
+            )
+            servers = list(res.scalars().all())
+            if not servers:
+                return
+            bot = Bot(token=settings.BOT_TOKEN)
+            try:
+                for server in servers:
+                    await _renew_and_unsuspend(session, billing, server, bot)
+                await session.commit()
+            finally:
+                await bot.session.close()
 
     try:
         _run(_do())

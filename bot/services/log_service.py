@@ -279,6 +279,19 @@ class LogService:
             "سرورِ هم‌زمان، یک‌ماه هزینه.",
         )
 
+    async def log_timeweb_ip_limit(self, hostname: str) -> None:
+        await self._send(
+            "server",
+            f"⛔ <b>سهمیه‌ی روزانه‌ی IP تایم‌وب تمام شد</b>\n\n"
+            f"سرور <code>{hostname}</code> ساخته شد ولی تایم‌وب IPv4 نداد "
+            "(<code>403 daily_limit_exceeded</code>) — سرور حذف و وجه کاربر کامل "
+            "برگشت.\n\n"
+            "این محدودیتِ ضدسوءاستفاده‌ی خودِ تایم‌وب است (ساخت/حذف‌های زیادِ "
+            "امروز). معمولاً روز بعد ریست می‌شود؛ برای برداشتنِ سقف به پشتیبانی "
+            "تیکت بده.\n"
+            "تا ۱ ساعت، دسته‌ی تایم‌وب برای کاربران «ظرفیت تکمیل» نشان داده می‌شود.",
+        )
+
     async def log_provider_down(self, name: str, reason: str = "") -> None:
         await self._send(
             "server",

@@ -416,7 +416,10 @@ class TimewebProvider(BaseProvider):
         # no_paid ربطی به IP نداشت (علت: رزروِ موجودی — حالا precheck دارد).
         try:
             _early_v4, _ = await self._ips_endpoint(str(server_id))
-            if not _early_v4:
+            if _early_v4:
+                logger.warning("TW_IP_ADD early server=%s skip existing=%s",
+                               server_id, _early_v4)
+            else:
                 _resp = await self._request(
                     "POST", f"/api/v1/servers/{int(server_id)}/ips",
                     json={"type": "ipv4"})
@@ -452,9 +455,10 @@ class TimewebProvider(BaseProvider):
                     info = self._server_info(chk)
                     if not info.ip_address:
                         info = await self._ensure_public_ip(str(server_id), info)
-                    info.extra_data["username"] = "Administrator" \
-                        if (chk.get("os") or {}).get("name") == "windows" else "root"
-                    return info
+                    if info.ip_address:   # بدونِ IPv4 تحویل بی‌معناست → حذف+شکست
+                        info.extra_data["username"] = "Administrator" \
+                            if (chk.get("os") or {}).get("name") == "windows" else "root"
+                        return info
             except Exception:
                 pass
             try:
@@ -467,6 +471,16 @@ class TimewebProvider(BaseProvider):
         # IP از افزودنِ اولِ ساخت باید حاضر باشد؛ اگر نبود، fallback
         if not info.ip_address:
             info = await self._ensure_public_ip(str(server_id), info)
+        if not info.ip_address:
+            # سرورِ بدونِ IPv4 برای مشتری بی‌استفاده است (علتِ رایج: سهمیه‌ی
+            # روزانه‌ی IP تایم‌وب — 403 daily_limit_exceeded). به‌جای تحویلِ
+            # سرورِ در دسترس‌ناپذیر: حذف + شکست تا وجه کامل برگردد.
+            try:
+                await self.delete_server(str(server_id))
+            except Exception:
+                pass
+            raise RuntimeError(
+                "__TW_IP_LIMIT__ سرویس‌دهنده به سرور IPv4 اختصاص نداد — سفارش لغو شد")
         return info
 
     async def _bound_floating_ip_ids(self, server_id: int) -> list:

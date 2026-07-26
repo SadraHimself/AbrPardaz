@@ -790,6 +790,19 @@ async def _select_category(cb: CallbackQuery, user: User, state: FSMContext,
     # وارد فلوی خرید نشو.
     _tw_plans = [p for p in plans if p.provider_type == ProviderType.TIMEWEB]
     if _tw_plans:
+        # سهمیه‌ی روزانه‌ی IP تایم‌وب اخیراً تمام شده؟ (فلگ از شکستِ __TW_IP_LIMIT__)
+        # → تا ۱ ساعت پاپ‌آپ «ظرفیت پر» بده که ساخت‌های محکوم‌به‌شکست تکرار نشوند
+        try:
+            import time as _time
+            from bot.database.models import BotSettings
+            _iprow = await session.get(BotSettings, "timeweb_ip_limited_at")
+            if _iprow and _time.time() - float(_iprow.value or 0) < 3600:
+                await cb.answer(
+                    "⚠️ ظرفیت سرویس‌دهنده پر شده است — لطفاً کمی بعد دوباره تلاش کنید.",
+                    show_alert=True)
+                return
+        except Exception:
+            pass
         try:
             from bot.providers.timeweb import TimewebProvider
             from bot.services.timeweb_settings import get_account as _tw_get_account
@@ -1824,6 +1837,9 @@ def _friendly_fail_reason(err: str) -> str:
     # موجودیِ اکانتِ ما (داخلی) کافی نیست — به مشتری فقط «ظرفیت موقتاً پر است»
     if "__TW_FUNDS__" in e:
         return "ظرفیت ساخت سرور موقتاً تکمیل است — لطفاً کمی بعد دوباره تلاش کنید"
+    # سهمیه‌ی روزانه‌ی IP سرویس‌دهنده (داخلی) — پیامِ عمومی
+    if "__TW_IP_LIMIT__" in e:
+        return "ظرفیت ساخت سرور موقتاً تکمیل است — لطفاً کمی بعد دوباره تلاش کنید"
     # no_paid = حالتِ پرداختِ اکانتِ ما (داخلی) — به مشتری فقط پیام عمومی
     if "no_paid" in e.lower() or "پرداخت‌نشده" in e:
         return "آماده‌سازی سرویس موقتاً ممکن نشد و سفارش لغو شد"
@@ -2001,7 +2017,27 @@ async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: 
                 # سالم — این باگِ کد نیست، حالتِ پرداختِ اکانتِ تایم‌وب است و تا
                 # درست نشود همه‌ی ساخت‌ها شکست می‌خورند.
                 _emsg = str(e)
-                if plan.provider_type == ProviderType.TIMEWEB and "__TW_FUNDS__" in _emsg:
+                if plan.provider_type == ProviderType.TIMEWEB and "__TW_IP_LIMIT__" in _emsg:
+                    # سهمیه‌ی روزانه‌ی IP تایم‌وب تمام شده — سرور بی‌IP حذف و
+                    # refund شد؛ تا ۱ ساعت دسته برای کاربران «ظرفیت تکمیل» شود
+                    try:
+                        await LogService(bot, session).log_timeweb_ip_limit(hostname)
+                    except Exception:
+                        pass
+                    try:
+                        import time as _time
+                        from bot.database.models import BotSettings
+                        _row = await session.get(BotSettings, "timeweb_ip_limited_at")
+                        if _row:
+                            _row.value = str(int(_time.time()))
+                        else:
+                            session.add(BotSettings(
+                                key="timeweb_ip_limited_at",
+                                value=str(int(_time.time()))))
+                        await session.commit()
+                    except Exception:
+                        pass
+                elif plan.provider_type == ProviderType.TIMEWEB and "__TW_FUNDS__" in _emsg:
                     # موجودیِ اکانت کفافِ یک سرورِ هم‌زمانِ بیشتر را نمی‌دهد
                     try:
                         await LogService(bot, session).log_timeweb_funds(hostname)

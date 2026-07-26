@@ -332,7 +332,7 @@ _SIGN = '\n\n‎<tg-emoji emoji-id="5258093637450866522">🤖</tg-emoji> @abrmak
 def _renew_reminder_text(name: str, ip: str, days: int) -> str:
     return (
         '‏<tg-emoji emoji-id="5258503720928288433">🔔</tg-emoji> کاربر گرامی\n\n'
-        f"موعد تمدید ماهیانه سرویس {name} با ایپی {ip} نیز {days} روز دیگر می باشد، "
+        f"موعد تمدید ماهیانه سرویس {name} با ایپی {ip} تا {days} روز دیگر می باشد، "
         "برای تمدید سرویس کیف پول خود را به مقدار قیمت سرویس شارژ کنید." + _SIGN
     )
 

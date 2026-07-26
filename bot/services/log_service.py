@@ -125,6 +125,21 @@ class LogService:
             f"{await self._origin_line(server)}",
         )
 
+    async def log_renewal(self, user: User, server: Server, plan_name: str,
+                          amount: float) -> None:
+        """تمدید دستی ماهانه — هم‌قالبِ لاگ خرید."""
+        await self._send(
+            "purchase",
+            f"🔄 <b>تمدید سرور</b>\n\n"
+            f"{self._user_line(user)}\n"
+            f"📦 پلن: {plan_name}\n"
+            f"🖥 سرور: {server.name}\n"
+            f"🌐 آیپی: <code>{server.ip_address or '—'}</code>\n"
+            f"💳 نوع: ماهانه\n"
+            f"💵 مبلغ: {amount:,.0f} تومان"
+            f"{await self._origin_line(server)}",
+        )
+
     async def log_ip_change(self, user: User, server: Server,
                             old_ip: str, new_ip: str, fee: float = 0) -> None:
         fee_line = f"\n💵 هزینه: <b>{fee:,.0f} تومان</b>" if fee > 0 else "\n💵 هزینه: رایگان"

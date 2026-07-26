@@ -102,6 +102,9 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
             ])
         if is_hourly:
             rows.append([_btn("حذف سرور", f"srv_action:{sid}:delete_confirm", "danger", "5258130763148172425")])
+        else:
+            # ماهانه: تمدید دستی — یک‌بار در هر دوره (گارد در هندلر)
+            rows.append([_btn("تمدید", f"srv_renew:{sid}", "success", "5902206159095339799")])
 
     elif server.status == ServerStatus.SUSPENDED:
         rows.append([

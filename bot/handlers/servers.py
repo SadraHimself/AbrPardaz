@@ -89,6 +89,10 @@ class EditServerStates(StatesGroup):
     waiting_disk = State()
 
 
+class RenewStates(StatesGroup):
+    entering_discount = State()
+
+
 # ── List servers ──────────────────────────────────────────────────────────────
 
 async def _show_server_list(target_msg, user: User, session: AsyncSession):
@@ -622,6 +626,228 @@ async def cb_do_add_traffic(cb: CallbackQuery, user: User, session: AsyncSession
     except Exception as e:
         await billing.credit(user.id, total, description=f"برگشت وجه ترافیک {gb}GB")
         await cb.answer(f"❌ خطا: {e}", show_alert=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  RENEW (monthly) — تمدید دستی سرویس ماهانه: یک‌بار در هر دوره + کد تخفیف
+# ══════════════════════════════════════════════════════════════════════════════
+
+_RENEW_SIGN = '\n\n‎<tg-emoji emoji-id="5258093637450866522">🤖</tg-emoji> @abrmakerbot'
+
+
+def _renew_back_kb(server_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="بازگشت", callback_data=f"server:{server_id}",
+                             **{"icon_custom_emoji_id": "5258236805890710909"}),
+    ]])
+
+
+def _renew_blocked_until(server: Server):
+    """اگر در ۳۰ روز اخیر تمدید دستی شده باشد، datetime پایان محدودیت؛ وگرنه None."""
+    from datetime import timedelta
+    raw = (server.extra_data or {}).get("manual_renewed_at")
+    if not raw:
+        return None
+    try:
+        last = datetime.fromisoformat(raw)
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        until = last + timedelta(days=30)
+        return until if datetime.now(timezone.utc) < until else None
+    except (ValueError, TypeError):
+        return None
+
+
+async def _renew_amount_toman(session: AsyncSession, server: Server) -> float:
+    """مبلغ تمدید (تومان): قیمت زنده‌ی ماهانه‌ی پلن + هزینه IPهای اضافه — مثل charge_monthly."""
+    from bot.services.currency import server_live_price, to_toman
+    amount, currency = await server_live_price(session, server, hourly=False)
+    amount = float(amount or 0)
+    if amount <= 0:
+        return 0.0
+    amount_toman = amount if currency == "irt" else await to_toman(session, amount, currency)
+    if amount_toman <= 0:
+        return 0.0
+    extra_ips = (server.extra_data or {}).get("extra_ips") or []
+    if extra_ips and server.provider_account_id:
+        acc = await session.get(ProviderAccount, server.provider_account_id)
+        ip_fee = float(((acc.extra_config or {}) if acc else {}).get("extra_ip_fee", 0) or 0)
+        if ip_fee > 0:
+            amount_toman += ip_fee * len(extra_ips)
+    return amount_toman
+
+
+async def _perform_renewal(bot, session: AsyncSession, user: User,
+                           state: FSMContext) -> tuple[bool, str, int]:
+    """اجرای تمدید با قفل ردیف سرور (ضد دابل-کلیک). خروجی: (موفق، متن، server_id)."""
+    from datetime import timedelta
+    data = await state.get_data()
+    server_id = int(data.get("renew_server_id") or 0)
+    code = None
+    if data.get("renew_discount_id"):
+        code = await session.get(DiscountCode, data["renew_discount_id"])
+    await state.clear()
+
+    server = (await session.execute(
+        select(Server).where(Server.id == server_id).with_for_update()
+    )).scalar_one_or_none()
+    now = datetime.now(timezone.utc)
+    if (not server or server.user_id != user.id
+            or server.billing_type != BillingType.MONTHLY
+            or server.status != ServerStatus.ACTIVE):
+        return False, f"{ERR} این سرویس قابل تمدید نیست.", server_id
+    # ضد ابیوز: یک تمدید دستی در هر دوره — بازچک زیر قفل (دابل-کلیک/موازی)
+    if _renew_blocked_until(server):
+        return False, (f"{ERR} شما در این ماه سرویس خود را تمدید کرده‌اید — "
+                       "تمدید بعدی از ماه آینده امکان‌پذیر است."), server_id
+
+    amount = await _renew_amount_toman(session, server)
+    if amount <= 0:
+        return False, (f"{ERR} در حال حاضر امکان محاسبه مبلغ تمدید نیست — "
+                       "کمی بعد دوباره تلاش کنید."), server_id
+    if code:
+        # بازچک اعتبار کد لحظه‌ی کسر (ظرفیت/انقضا/اختصاصی بودن)
+        if (not code.is_active
+                or (code.expires_at and code.expires_at < now)
+                or (code.max_uses and code.use_count >= code.max_uses)
+                or (code.user_id and code.user_id != user.id)):
+            return False, f"{ERR} کد تخفیف دیگر معتبر نیست.", server_id
+        amount = amount * (1 - float(code.discount_percent) / 100)
+
+    billing = BillingService(session)
+    ok = await billing.debit(user.id, amount, server_id=server.id,
+                             description=f"تمدید ماهانه — {server.name}")
+    if not ok:
+        return False, (f"{ERR} موجودی کیف پول کافی نیست.\n"
+                       f"مبلغ لازم برای تمدید: <b>{amount:,.0f} تومان</b>"), server_id
+
+    base = server.expires_at or now
+    if base.tzinfo is None:
+        base = base.replace(tzinfo=timezone.utc)
+    if base < now:
+        base = now
+    server.expires_at = base + timedelta(days=30)
+    extra = dict(server.extra_data or {})
+    extra["manual_renewed_at"] = now.isoformat()
+    extra.pop("renew_notice_sent", None)
+    server.extra_data = extra
+    if code:
+        code.use_count += 1
+    await session.flush()
+
+    # لاگ ادمین — هم‌قالبِ لاگ خرید
+    plan_name = server.name
+    try:
+        pid = extra.get("plan_id")
+        if pid:
+            plan = await session.get(ServerPlan, int(pid))
+            if plan:
+                plan_name = plan.display_name or plan.name
+    except Exception:
+        pass
+    try:
+        from bot.services.log_service import LogService
+        await LogService(bot, session).log_renewal(user, server, plan_name, amount)
+    except Exception:
+        pass
+
+    receipt = (
+        f"کاربر گرامی مبلغ {amount:,.0f} تومان برای تمدید سرویس {server.name} "
+        f"با آدرس آیپی {server.ip_address or '—'} از کیف پول شما کاسته شد "
+        "و سرویس تمدید شد." + _RENEW_SIGN
+    )
+    return True, receipt, server_id
+
+
+@router.callback_query(F.data.startswith("srv_renew:"))
+async def cb_srv_renew(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
+    server = await session.get(Server, int(cb.data.split(":")[1]))
+    if not server or server.user_id != user.id:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    if server.billing_type != BillingType.MONTHLY or server.status != ServerStatus.ACTIVE:
+        await cb.answer("این سرویس قابل تمدید نیست.", show_alert=True)
+        return
+    if _renew_blocked_until(server):
+        await cb.answer(
+            "شما در این ماه سرویس خود را تمدید کرده‌اید — تمدید بعدی از ماه آینده امکان‌پذیر است.",
+            show_alert=True,
+        )
+        return
+    amount = await _renew_amount_toman(session, server)
+    if amount <= 0:
+        await cb.answer("در حال حاضر امکان محاسبه مبلغ تمدید نیست — کمی بعد تلاش کنید.",
+                        show_alert=True)
+        return
+    await cb.answer()
+    await state.set_state(RenewStates.entering_discount)
+    await state.update_data(renew_server_id=server.id, renew_discount_id=None)
+    await cb.message.edit_text(
+        '‏<tg-emoji emoji-id="5229064374403998351">🏷</tg-emoji> '
+        f"<b>تمدید سرویس {server.name}</b>\n\n"
+        f"مبلغ تمدید یک‌ماهه: <b>{amount:,.0f} تومان</b>\n\n"
+        "اگر کد تخفیف دارید وارد کنید، وگرنه از دکمه زیر استفاده کنید:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="بدون کد تخفیف", callback_data="renewdisc:skip",
+                                  **{"icon_custom_emoji_id": "5346172687863529237"})],
+            [InlineKeyboardButton(text="انصراف", callback_data="renewdisc:cancel",
+                                  **{"style": "danger", "icon_custom_emoji_id": "5240241223632954241"})],
+        ]),
+    )
+
+
+@router.callback_query(RenewStates.entering_discount, F.data == "renewdisc:cancel")
+async def cb_renew_cancel(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    server_id = int(data.get("renew_server_id") or 0)
+    await state.clear()
+    await _render_server_detail(cb, user, session, server_id)
+
+
+@router.callback_query(RenewStates.entering_discount, F.data == "renewdisc:skip")
+async def cb_renew_skip(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
+    await cb.answer()
+    ok, text, server_id = await _perform_renewal(cb.bot, session, user, state)
+    await cb.message.edit_text(text, parse_mode="HTML",
+                               reply_markup=_renew_back_kb(server_id))
+
+
+@router.message(RenewStates.entering_discount)
+async def msg_renew_discount(message: Message, user: User, state: FSMContext, session: AsyncSession):
+    raw = (message.text or "").strip().upper()
+    if raw in ("/SKIP", "SKIP"):
+        ok, text, server_id = await _perform_renewal(message.bot, session, user, state)
+        await message.answer(text, parse_mode="HTML", reply_markup=_renew_back_kb(server_id))
+        return
+
+    now = datetime.now(timezone.utc)
+    code = (await session.execute(
+        select(DiscountCode).where(
+            DiscountCode.code == raw,
+            DiscountCode.is_active == True,
+        )
+    )).scalar_one_or_none()
+    if not code:
+        await message.answer(f"{ERR} کد تخفیف نامعتبر است.", parse_mode="HTML")
+        return
+    if code.expires_at and code.expires_at < now:
+        await message.answer(f"{ERR} کد تخفیف منقضی شده.", parse_mode="HTML")
+        return
+    if code.max_uses and code.use_count >= code.max_uses:
+        await message.answer(f"{ERR} ظرفیت این کد تخفیف پر شده.", parse_mode="HTML")
+        return
+    if code.user_id and code.user_id != user.id:
+        # کد اختصاصیِ کاربر دیگر
+        await message.answer(f"{ERR} کد تخفیف نامعتبر است.", parse_mode="HTML")
+        return
+
+    await state.update_data(renew_discount_id=code.id)
+    ok, text, server_id = await _perform_renewal(message.bot, session, user, state)
+    prefix = (f"✅ کد تخفیف <b>{code.code}</b> — {code.discount_percent:.0f}% اعمال شد.\n\n"
+              if ok else "")
+    await message.answer(prefix + text, parse_mode="HTML",
+                         reply_markup=_renew_back_kb(server_id))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1677,6 +1903,10 @@ async def msg_discount_code(message: Message, user: User, state: FSMContext, ses
         return
     if code.max_uses and code.use_count >= code.max_uses:
         await message.answer(f"{ERR} ظرفیت این کد تخفیف پر شده.", parse_mode="HTML")
+        return
+    if code.user_id and code.user_id != user.id:
+        # کد اختصاصیِ کاربر دیگر — نباید برای بقیه کار کند (حفره‌ی قبلی)
+        await message.answer(f"{ERR} کد تخفیف نامعتبر است.", parse_mode="HTML")
         return
 
     await state.update_data(discount_id=code.id, discount_percent=code.discount_percent)

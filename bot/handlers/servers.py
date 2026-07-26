@@ -785,6 +785,28 @@ async def _select_category(cb: CallbackQuery, user: User, state: FSMContext,
         await cb.answer("در این دسته‌بندی محصولی موجود نیست.", show_alert=True)
         return
 
+    # تایم‌وب: اگر ظرفیتِ اکانت پر است (بالانس حتی کفافِ ارزان‌ترین سرورِ جدید را
+    # نمی‌دهد → سرورِ بعدی no_paid می‌شود)، همان لحظه‌ی زدن روی دسته پاپ‌آپ بده و
+    # وارد فلوی خرید نشو.
+    _tw_plans = [p for p in plans if p.provider_type == ProviderType.TIMEWEB]
+    if _tw_plans:
+        try:
+            from bot.providers.timeweb import TimewebProvider
+            from bot.services.timeweb_settings import get_account as _tw_get_account
+            _acc = await _tw_get_account(session)
+            _min_need = min(
+                (float((p.extra_data or {}).get("cost_monthly") or 0)
+                 for p in _tw_plans if (p.extra_data or {}).get("cost_monthly")),
+                default=0.0)
+            if _acc and _min_need and not await TimewebProvider(
+                    api_token=_acc.api_key or "").capacity_ok(_min_need):
+                await cb.answer(
+                    "⚠️ ظرفیت سرویس‌دهنده پر شده است — لطفاً کمی بعد دوباره تلاش کنید.",
+                    show_alert=True)
+                return
+        except Exception:
+            pass  # fail-open → precheckِ ساخت backstop است
+
     # گروه‌های چند-لوکیشنه (هتزنر/جیکور/تایم‌وب): اول لوکیشن، بعد محصولات همان لوکیشن
     _MULTI_LOC = (ProviderType.HETZNER, ProviderType.GCORE, ProviderType.TIMEWEB)
     if any(p.provider_type in _MULTI_LOC for p in plans):

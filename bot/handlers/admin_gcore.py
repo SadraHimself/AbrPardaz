@@ -841,10 +841,13 @@ async def _render_gc_family(msg, session: AsyncSession, account: ProviderAccount
             meta = VOLUME_TYPES[vt]
             mark = "✅" if (p.provider_plan_id, vt) in imported else "⬜"
             short = "s" if vt == "standard" else "h"
+            # سرعت اولِ دکمه — آخرِ متن در دکمه‌های باریک بریده می‌شود و دو
+            # واریانت عینِ هم دیده می‌شدند («standard» داخل اسم flavor = خانواده‌ی
+            # پردازنده است، ربطی به نوع دیسک ندارد)
             rows.append([
                 InlineKeyboardButton(
-                    text=f"{mark} {p.provider_plan_id} · {p.cpu}c/{ram_g}G · "
-                         f"{_sym(p.currency)}{p.price_monthly:g} · {meta['mbit']}Mb",
+                    text=f"{mark} {meta['mbit']}Mb | {p.provider_plan_id} · "
+                         f"{p.cpu}c/{ram_g}G · {_sym(p.currency)}{p.price_monthly:g}",
                     callback_data=f"admin:gcpick:{rid}:{p.provider_plan_id}:{short}",
                 ),
                 InlineKeyboardButton(

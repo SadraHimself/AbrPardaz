@@ -874,8 +874,8 @@ async def msg_renew_discount(message: Message, user: User, state: FSMContext, se
 #  BUY SERVER — category → plan → billing → discount → confirm
 # ══════════════════════════════════════════════════════════════════════════════
 
-# صفحه‌بندی لیست ارائه‌دهنده‌ها: ۴ گروه در هر صفحه (۲×۲)
-_GRP_PAGE_SIZE = 4
+# صفحه‌بندی لیست ارائه‌دهنده‌ها: ۶ گروه در هر صفحه (۳ ردیف × ۲تایی)
+_GRP_PAGE_SIZE = 6
 _NAV_NEXT_EMOJI = "5345844853009828446"      # بعدی
 _NAV_PREV_EMOJI = "5348414733806484250"      # قبلی
 _NAV_EDGE_EMOJI = "5294096239464295059"      # اول/آخر لیست (غیرفعال)

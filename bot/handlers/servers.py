@@ -2119,11 +2119,14 @@ async def _show_confirm(msg, state: FSMContext, session, from_message=False, use
     if _pe.get("cpu_type_label"):
         _freq = f" @ {_pe['cpu_frequency']}GHz" if _pe.get("cpu_frequency") else ""
         cpu_line = f"• نوع پردازنده: {_pe['cpu_type_label']}{_freq}\n"
-    # جیکور: نوع دیسک/سرعت کانال (استاندارد ۳۰۰ / پرسرعت ۵۰۰ مگابیت)
+    # جیکور: نوع دیسک/سرعت کانال — سرعت اول (عدد+مگابیت فارسی) بعد لیبل لاتین
+    # تا در RTL ترتیبش به‌هم نریزد: «نوع سرور: 500 مگابیت | High CPU»
     if _pe.get("volume_label"):
         _mb = _pe.get("bandwidth_mbit")
-        cpu_line += (f"• نوع سرور: {_pe['volume_label']}"
-                     + (f" — {_mb} مگابیت" if _mb else "") + "\n")
+        if _mb:
+            cpu_line += f"• نوع سرور: {_mb} مگابیت | {_pe['volume_label']}\n"
+        else:
+            cpu_line += f"• نوع سرور: {_pe['volume_label']}\n"
     # موقعیت: شهر واقعی (region_name) به‌جای کد خام لوکیشن
     loc_show = _pe.get("region_name") or plan.location or "نامشخص"
     discount_line = f"• تخفیف: {discount_pct:.0f}% (قیمت اصلی: {base_price:,.0f} T)\n" if discount_pct else ""

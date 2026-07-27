@@ -619,6 +619,21 @@ class GcoreProvider(BaseProvider):
             "currency": (data.get("currency_code") or "USD").lower(),
         }
 
+    async def preview_floating_ip_price(self, region_id: int) -> dict:
+        """قیمت زنده‌ی یک External/Floating IP از endpoint رسمی pricing جیکور
+        (POST /cloud/v1/pricing/{p}/{r}/floating_ips با count=1 — داکس آنلاین
+        2026-07-27؛ در GCORE.md نیامده بود). خروجی: {price_per_hour,
+        price_per_month, currency}."""
+        data = await self._request(
+            "POST", f"/cloud/v1/pricing/{self.project_id}/{region_id}/floating_ips",
+            json={"count": 1},
+        )
+        return {
+            "price_per_hour": float(data.get("price_per_hour") or 0),
+            "price_per_month": float(data.get("price_per_month") or 0),
+            "currency": (data.get("currency_code") or "USD").lower(),
+        }
+
     async def client_info(self) -> dict:
         """اطلاعات اکانت (id برای quota + email برای نمایش) — تست توکن."""
         return await self._request("GET", "/iam/clients/me")

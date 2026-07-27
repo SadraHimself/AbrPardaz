@@ -2062,7 +2062,9 @@ async def _gcore_os_pricing(session: AsyncSession, plan: ServerPlan,
     if disk_used == plan_disk and lic_h <= 0 and not is_win:
         return base, 0.0, disk_used, None   # حالت عادی — همان قیمت پلن
 
-    from bot.services.gcore_settings import get_ip_month, get_margins, get_volume_rate
+    from bot.services.gcore_settings import (
+        get_margins, get_volume_rate, ip_monthly_cost,
+    )
     import asyncio as _aio
     import time as _time
     extra = plan.extra_data or {}
@@ -2112,8 +2114,19 @@ async def _gcore_os_pricing(session: AsyncSession, plan: ServerPlan,
                 raise RuntimeError("قیمت دیسک از سرویس‌دهنده خوانده نشد — کمی بعد تلاش کنید")
             _gc_volprice_cache[vkey] = (now, vol_h)
     # External IP جدا بیل می‌شود (پنل جیکور) — در قیمت پایه هم هست؛ اینجا هم
-    # که از صفر حساب می‌کنیم باید لحاظ شود وگرنه انتخاب ویندوز/دیسک بزرگ IP را می‌پراند
-    ip_h = (await get_ip_month(session)) / 720.0
+    # که از صفر حساب می‌کنیم باید لحاظ شود وگرنه انتخاب ویندوز/دیسک بزرگ IP را
+    # می‌پراند. نرخ دستی یا قیمت زنده‌ی API (کش ۵دقیقه)؛ نبود هر دو → کپیِ
+    # ذخیره‌شده‌ی پلن از سینک/ایمپورت (ip_cost_monthly).
+    ikey = ("iph", account.id, rid)
+    cached = _gc_volprice_cache.get(ikey)
+    if cached and now - cached[0] < 300:
+        ip_m = cached[1]
+    else:
+        ip_m = await ip_monthly_cost(session, prov, rid)
+        _gc_volprice_cache[ikey] = (now, ip_m)
+    if ip_m <= 0:
+        ip_m = float(extra.get("ip_cost_monthly") or 0)
+    ip_h = ip_m / 720.0
     sale_h = round((flavor_h + vol_h + lic_h + ip_h) * (1 + float(mh or 0) / 100), 4)
     addon = max(0.0, round(sale_h - base, 4))
     return sale_h, addon, disk_used, flavor_override

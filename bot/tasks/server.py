@@ -383,8 +383,8 @@ def sync_gcore_catalog(self):
         from bot.database.models import ProviderAccount, ProviderType, ServerPlan
         from bot.providers.gcore import GcoreProvider
         from bot.services.gcore_settings import (
-            disk_monthly_cost, full_costs, get_ip_month, get_margins,
-            get_volume_rate, is_excluded_flavor,
+            disk_monthly_cost, full_costs, get_ip_rate, get_margins,
+            get_volume_rate, ip_monthly_cost, is_excluded_flavor,
         )
         from bot.services.log_service import LogService
         from sqlalchemy import select
@@ -408,7 +408,7 @@ def sync_gcore_catalog(self):
 
             mh, _mm_unused = await get_margins(session)
             manual_rate = await get_volume_rate(session)   # 0 = قیمت زنده از API
-            ip_m = await get_ip_month(session)             # External IP (€/ماه)
+            ip_manual = await get_ip_rate(session)         # 0 = قیمت زنده از API
             _dm_cache: dict = {}
             prov = GcoreProvider(
                 api_token=account.api_key or "",
@@ -447,16 +447,18 @@ def sync_gcore_catalog(self):
                                 await log.log_plan_unavailable(
                                     plan.display_name or plan.name, loc_label)
                             continue
-                        # قیمت خرید کامل = flavor تازه + هزینه دیسک (نرخ دستی یا
-                        # قیمت زنده از API). قیمت زنده‌ی ناموفق → قیمت قبلی حفظ شود
+                        # قیمت خرید کامل = flavor تازه + دیسک + External IP (نرخ
+                        # دستی یا قیمت زنده از API). زنده‌ی ناموفق → قیمت قبلی حفظ
                         dm = await disk_monthly_cost(
                             session, prov, rid, int(plan.disk or 0), _dm_cache)
-                        if dm <= 0 and manual_rate <= 0:
+                        ipm = await ip_monthly_cost(session, prov, rid, _dm_cache)
+                        if (dm <= 0 and manual_rate <= 0) or \
+                           (ipm <= 0 and ip_manual <= 0):
                             ch = extra.get("cost_hourly")
                             cm = extra.get("cost_monthly")
                         else:
                             ch, cm = full_costs(info.price_hourly or 0,
-                                                info.price_monthly or 0, dm, ip_m)
+                                                info.price_monthly or 0, dm, ipm)
                         changed = False
                         if extra.get("flavor_cost_hourly") != info.price_hourly or \
                            extra.get("flavor_cost_monthly") != info.price_monthly or \
@@ -465,6 +467,8 @@ def sync_gcore_catalog(self):
                             extra["flavor_cost_hourly"] = info.price_hourly
                             extra["flavor_cost_monthly"] = info.price_monthly
                             extra["cost_hourly"], extra["cost_monthly"] = ch, cm
+                            if ipm > 0:
+                                extra["ip_cost_monthly"] = ipm
                             if info.currency:
                                 extra["currency"] = info.currency
                             changed = True

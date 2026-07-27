@@ -82,7 +82,7 @@ async def _gc_account(session: AsyncSession) -> ProviderAccount | None:
 
 async def _render_gc_home(msg, session: AsyncSession):
     from bot.services.gcore_settings import (
-        get_default_disk_gb, get_group_name, get_ip_month, get_margins,
+        get_default_disk_gb, get_group_name, get_ip_rate, get_margins,
         get_volume_rate,
     )
     account = await _gc_account(session)
@@ -104,7 +104,7 @@ async def _render_gc_home(msg, session: AsyncSession):
     group = await get_group_name(session)
     vol_rate = await get_volume_rate(session)
     disk_gb = await get_default_disk_gb(session)
-    ip_month = await get_ip_month(session)
+    ip_rate = await get_ip_rate(session)
     cfg = account.extra_config or {}
     vm_limit = int(cfg.get("vm_limit") or 0)
     token_masked = f"{(account.api_key or '')[:6]}…{(account.api_key or '')[-4:]}"
@@ -136,7 +136,8 @@ async def _render_gc_home(msg, session: AsyncSession):
                               callback_data="admin:gc_volrate"),
          InlineKeyboardButton(text=f"دیسک پیش‌فرض: {disk_gb} GB",
                               callback_data="admin:gc_diskgb")],
-        [InlineKeyboardButton(text=f"هزینه IP ماهانه: {ip_month:g}",
+        [InlineKeyboardButton(text=f"هزینه IP: {ip_rate:g} /ماه (دستی)" if ip_rate
+                              else "هزینه IP: خودکار (از API)",
                               callback_data="admin:gc_iprate")],
         [InlineKeyboardButton(text=f"گروه مقصد: {group}", callback_data="admin:gcgrp")],
         [InlineKeyboardButton(
@@ -453,9 +454,12 @@ async def cb_gc_iprate(cb: CallbackQuery, state: FSMContext):
     await state.set_state(GcoreFSM.edit_iprate)
     await cb.message.edit_text(
         "<b>هزینه‌ی External IP جیکور</b>\n\n"
-        "پنل جیکور IP عمومی را جدا بیل می‌کند (الان €3/ماه) و قیمتش در API "
-        "نیست — این عدد در «قیمت خرید کامل» همه‌ی پلن‌ها لحاظ می‌شود.\n\n"
-        "هزینه‌ی ماهانه‌ی IP را به ارز اکانت وارد کنید (مثال: 3):",
+        "پیش‌فرض «خودکار» است: قیمت IP زنده از API قیمت‌گذاری خود جیکور "
+        "خوانده می‌شود و نیازی به تنظیم دستی نیست.\n"
+        "این هزینه در «قیمت خرید کامل» همه‌ی پلن‌ها لحاظ می‌شود (پنل جیکور "
+        "IP را جدا بیل می‌کند).\n\n"
+        "فقط برای override دستی، هزینه‌ی ماهانه را به ارز اکانت وارد کنید "
+        "(0 = برگشت به حالت خودکار):",
         parse_mode="HTML", reply_markup=cancel_admin_kb(),
     )
     await cb.answer()
@@ -469,12 +473,14 @@ async def gc_iprate_value(message: Message, state: FSMContext, session: AsyncSes
     await state.clear()
     await set_ip_month(session, float(message.text))
     await session.flush()
+    _volprice_cache.clear()
     account = await _gc_account(session)
     n = await recompute_catalog_costs(
         session, provider=_prov(account) if account else None)
     await apply_margins_to_catalog(session)
+    label = message.text if float(message.text) > 0 else "خودکار (از API)"
     await message.answer(
-        f"هزینه IP: {message.text}/ماه — قیمت خرید/فروش {n} محصول بازمحاسبه شد.",
+        f"هزینه IP: {label} — قیمت خرید/فروش {n} محصول بازمحاسبه شد.",
         reply_markup=back_to_admin_kb("admin:gcore"),
     )
 
@@ -640,6 +646,20 @@ async def _disk_monthly(session: AsyncSession, account: ProviderAccount,
     if cached and now - cached[0] < 300:
         return cached[1]
     val = await disk_monthly_cost(session, _prov(account), rid, gb)
+    _volprice_cache[key] = (now, val)
+    return val
+
+
+async def _ip_monthly(session: AsyncSession, account: ProviderAccount,
+                      rid: int) -> float:
+    """هزینه ماهانه External IP با کش ۵ دقیقه‌ای (نرخ دستی یا قیمت زنده API)."""
+    from bot.services.gcore_settings import ip_monthly_cost
+    key = ("ip", account.id, int(rid))
+    cached = _volprice_cache.get(key)
+    now = time.monotonic()
+    if cached and now - cached[0] < 300:
+        return cached[1]
+    val = await ip_monthly_cost(session, _prov(account), rid)
     _volprice_cache[key] = (now, val)
     return val
 
@@ -912,7 +932,7 @@ async def cb_gc_family(cb: CallbackQuery, session: AsyncSession):
 
 @router.callback_query(F.data.startswith("admin:gcinfo:"))
 async def cb_gc_info(cb: CallbackQuery, session: AsyncSession):
-    from bot.services.gcore_settings import full_costs, get_default_disk_gb, get_ip_month
+    from bot.services.gcore_settings import full_costs, get_default_disk_gb
     account = await _gc_account(session)
     if not account:
         await cb.answer("اکانت یافت نشد.", show_alert=True)
@@ -926,7 +946,7 @@ async def cb_gc_info(cb: CallbackQuery, session: AsyncSession):
         return
     disk_gb = await get_default_disk_gb(session)
     dm = await _disk_monthly(session, account, rid, disk_gb)
-    ip_m = await get_ip_month(session)
+    ip_m = await _ip_monthly(session, account, rid)
     ch, cm = full_costs(info.price_hourly or 0, info.price_monthly or 0, dm, ip_m)
     ram_g = info.ram // 1024 if info.ram >= 1024 else info.ram
     cur_word = {"usd": "دلار", "eur": "یورو"}.get(
@@ -947,10 +967,10 @@ async def cb_gc_info(cb: CallbackQuery, session: AsyncSession):
 
 async def _import_one(session: AsyncSession, account: ProviderAccount,
                       region: dict, info, group_name: str) -> ServerPlan:
-    from bot.services.gcore_settings import full_costs, get_default_disk_gb, get_ip_month
+    from bot.services.gcore_settings import full_costs, get_default_disk_gb
     disk_gb = await get_default_disk_gb(session)
     dm = await _disk_monthly(session, account, int(region["id"]), disk_gb)
-    ip_m = await get_ip_month(session)
+    ip_m = await _ip_monthly(session, account, int(region["id"]))
     ch, cm = full_costs(info.price_hourly or 0, info.price_monthly or 0, dm, ip_m)
     plan = ServerPlan(
         provider_type=ProviderType.GCORE,
@@ -966,10 +986,11 @@ async def _import_one(session: AsyncSession, account: ProviderAccount,
         provider_plan_id=info.provider_plan_id,
         extra_data={
             "currency": (info.currency or "usd"),
-            "cost_hourly": ch,                    # خرید کامل (flavor + دیسک)
+            "cost_hourly": ch,                    # خرید کامل (flavor + دیسک + IP)
             "cost_monthly": cm,
             "flavor_cost_hourly": info.price_hourly,   # خرید خامِ flavor (برای سینک)
             "flavor_cost_monthly": info.price_monthly,
+            "ip_cost_monthly": ip_m,              # External IP (fallback قیمت per-OS)
             "region_id": int(region["id"]),       # برای فراخوانی‌های API
             "region_name": region["display_name"],  # لیبل مرحله‌ی لوکیشن خرید
         },

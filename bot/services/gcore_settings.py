@@ -31,12 +31,9 @@ _KEY_MM = "gcore_margin_monthly"
 _KEY_GROUP = "gcore_group"
 _KEY_VOL_RATE = "gcore_volume_price_gb_month"   # قیمت هر GB دیسک در ماه (ارز اکانت)
 _KEY_DISK_GB = "gcore_default_disk_gb"          # دیسک پیش‌فرض پلن‌های جدید (GB)
-_KEY_IP_MONTH = "gcore_ip_price_month"          # هزینه‌ی External IP در ماه (ارز اکانت)
+_KEY_IP_MONTH = "gcore_ip_price_month"          # override دستی IP در ماه (0 = خودکار)
 _DEFAULT_GROUP = "Gcore"
 _DEFAULT_DISK_GB = 5    # دیسک پیش‌فرض Cloud VMهای جیکور (تصمیم 2026-07-22)
-# پنل جیکور External IP را جدا بیل می‌کند (اسکرین‌شات 2026-07-27: €3/ماه) و
-# قیمتش در API قیمت‌گذاری نیست → ثابتِ قابل‌تنظیم از پنل ادمین (الگوی IP تایم‌وب)
-_DEFAULT_IP_MONTH = 3.0
 
 
 def is_excluded_flavor(flavor_id: str) -> bool:
@@ -129,15 +126,44 @@ async def set_default_disk_gb(session: AsyncSession, value: int) -> None:
     await _set(session, _KEY_DISK_GB, int(value))
 
 
-async def get_ip_month(session: AsyncSession) -> float:
-    """هزینه‌ی ماهانه‌ی External IP (ارز اکانت) — پیش‌فرض ۳ (پنل جیکور €3/ماه).
-    سرور بدون IPv4 معنا ندارد، پس همیشه در قیمت خرید کامل لحاظ می‌شود."""
-    v = await _get_float(session, _KEY_IP_MONTH)
-    return float(v) if v is not None else _DEFAULT_IP_MONTH
+async def get_ip_rate(session: AsyncSession) -> float:
+    """نرخ دستی External IP در ماه (ارز اکانت) — فقط نقش override دارد.
+    0 (پیش‌فرض) = حالت خودکار: قیمت زنده از endpoint pricing خود جیکور."""
+    return await _get_float(session, _KEY_IP_MONTH) or 0.0
 
 
 async def set_ip_month(session: AsyncSession, value: float) -> None:
     await _set(session, _KEY_IP_MONTH, value)
+
+
+async def ip_monthly_cost(session: AsyncSession, provider, region_id: int,
+                          cache: dict | None = None) -> float:
+    """هزینه‌ی ماهانه‌ی External IP (ارز اکانت) — سرور بدون IPv4 معنا ندارد،
+    پس همیشه در قیمت خرید کامل لحاظ می‌شود (پنل جیکور جدا بیلش می‌کند).
+
+    نرخ دستی >0 → override؛ وگرنه قیمت زنده از
+    `provider.preview_floating_ip_price` (الگوی disk_monthly_cost).
+    خطای API → 0 با لاگ (فراخوان باید قیمت قبلی را نگه دارد، نه بی‌IP بفروشد)."""
+    rate = await get_ip_rate(session)
+    if rate > 0:
+        return rate
+    key = ("ip", int(region_id))
+    if cache is not None and key in cache:
+        return cache[key]
+    val = 0.0
+    if provider is not None and region_id:
+        try:
+            import asyncio as _aio
+            p = await _aio.wait_for(
+                provider.preview_floating_ip_price(int(region_id)), timeout=20)
+            val = float(p.get("price_per_month") or 0) or \
+                float(p.get("price_per_hour") or 0) * 720.0
+        except Exception as e:
+            logger.warning("gcore floating-ip price preview failed (region %s): %s",
+                           region_id, e)
+    if cache is not None:
+        cache[key] = val
+    return val
 
 
 def full_costs(flavor_hourly: float, flavor_monthly: float,
@@ -155,9 +181,9 @@ async def recompute_catalog_costs(session: AsyncSession, provider=None) -> int:
     (flavor_cost_*) + هزینه‌ی دیسک (نرخ دستی یا قیمت زنده‌ی API — حالت خودکار
     provider لازم دارد). بعد از تغییر نرخ دیسک صدا زده می‌شود."""
     rate = await get_volume_rate(session)
-    if rate <= 0 and provider is None:
+    ip_rate = await get_ip_rate(session)
+    if (rate <= 0 or ip_rate <= 0) and provider is None:
         return 0   # حالت خودکار بدون provider — سینک ۳۰دقیقه‌ای جبران می‌کند
-    ip_m = await get_ip_month(session)
     plans = (await session.execute(
         select(ServerPlan).where(ServerPlan.provider_type == ProviderType.GCORE)
     )).scalars().all()
@@ -171,10 +197,12 @@ async def recompute_catalog_costs(session: AsyncSession, provider=None) -> int:
             continue
         rid = int(extra.get("region_id") or 0)
         dm = await disk_monthly_cost(session, provider, rid, int(p.disk or 0), cache)
-        if dm <= 0 and rate <= 0:
+        ipm = await ip_monthly_cost(session, provider, rid, cache)
+        if (dm <= 0 and rate <= 0) or (ipm <= 0 and ip_rate <= 0):
             continue   # قیمت زنده در دسترس نیست — قیمت قبلی حفظ شود
-        ch, cm = full_costs(float(fh or 0), float(fm or 0), dm, ip_m)
+        ch, cm = full_costs(float(fh or 0), float(fm or 0), dm, ipm)
         extra["cost_hourly"], extra["cost_monthly"] = ch, cm
+        extra["ip_cost_monthly"] = ipm   # برای قیمت‌گذاری per-OS خرید (fallback)
         p.extra_data = extra
         count += 1
     await session.flush()

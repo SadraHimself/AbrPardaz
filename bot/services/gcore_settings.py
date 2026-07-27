@@ -31,8 +31,12 @@ _KEY_MM = "gcore_margin_monthly"
 _KEY_GROUP = "gcore_group"
 _KEY_VOL_RATE = "gcore_volume_price_gb_month"   # قیمت هر GB دیسک در ماه (ارز اکانت)
 _KEY_DISK_GB = "gcore_default_disk_gb"          # دیسک پیش‌فرض پلن‌های جدید (GB)
+_KEY_IP_MONTH = "gcore_ip_price_month"          # هزینه‌ی External IP در ماه (ارز اکانت)
 _DEFAULT_GROUP = "Gcore"
 _DEFAULT_DISK_GB = 5    # دیسک پیش‌فرض Cloud VMهای جیکور (تصمیم 2026-07-22)
+# پنل جیکور External IP را جدا بیل می‌کند (اسکرین‌شات 2026-07-27: €3/ماه) و
+# قیمتش در API قیمت‌گذاری نیست → ثابتِ قابل‌تنظیم از پنل ادمین (الگوی IP تایم‌وب)
+_DEFAULT_IP_MONTH = 3.0
 
 
 def is_excluded_flavor(flavor_id: str) -> bool:
@@ -125,12 +129,24 @@ async def set_default_disk_gb(session: AsyncSession, value: int) -> None:
     await _set(session, _KEY_DISK_GB, int(value))
 
 
+async def get_ip_month(session: AsyncSession) -> float:
+    """هزینه‌ی ماهانه‌ی External IP (ارز اکانت) — پیش‌فرض ۳ (پنل جیکور €3/ماه).
+    سرور بدون IPv4 معنا ندارد، پس همیشه در قیمت خرید کامل لحاظ می‌شود."""
+    v = await _get_float(session, _KEY_IP_MONTH)
+    return float(v) if v is not None else _DEFAULT_IP_MONTH
+
+
+async def set_ip_month(session: AsyncSession, value: float) -> None:
+    await _set(session, _KEY_IP_MONTH, value)
+
+
 def full_costs(flavor_hourly: float, flavor_monthly: float,
-               disk_monthly: float) -> tuple[float, float]:
-    """قیمت خرید کامل (flavor + هزینه‌ی ماهانه‌ی دیسک) — ساعتی و ماهانه."""
+               disk_monthly: float, ip_monthly: float = 0.0) -> tuple[float, float]:
+    """قیمت خرید کامل (flavor + دیسک + External IP) — ساعتی و ماهانه."""
     dm = float(disk_monthly or 0)
-    cost_monthly = round(float(flavor_monthly or 0) + dm, 4)
-    cost_hourly = round(float(flavor_hourly or 0) + dm / 720.0, 6)
+    ipm = float(ip_monthly or 0)
+    cost_monthly = round(float(flavor_monthly or 0) + dm + ipm, 4)
+    cost_hourly = round(float(flavor_hourly or 0) + (dm + ipm) / 720.0, 6)
     return cost_hourly, cost_monthly
 
 
@@ -141,6 +157,7 @@ async def recompute_catalog_costs(session: AsyncSession, provider=None) -> int:
     rate = await get_volume_rate(session)
     if rate <= 0 and provider is None:
         return 0   # حالت خودکار بدون provider — سینک ۳۰دقیقه‌ای جبران می‌کند
+    ip_m = await get_ip_month(session)
     plans = (await session.execute(
         select(ServerPlan).where(ServerPlan.provider_type == ProviderType.GCORE)
     )).scalars().all()
@@ -156,7 +173,7 @@ async def recompute_catalog_costs(session: AsyncSession, provider=None) -> int:
         dm = await disk_monthly_cost(session, provider, rid, int(p.disk or 0), cache)
         if dm <= 0 and rate <= 0:
             continue   # قیمت زنده در دسترس نیست — قیمت قبلی حفظ شود
-        ch, cm = full_costs(float(fh or 0), float(fm or 0), dm)
+        ch, cm = full_costs(float(fh or 0), float(fm or 0), dm, ip_m)
         extra["cost_hourly"], extra["cost_monthly"] = ch, cm
         p.extra_data = extra
         count += 1

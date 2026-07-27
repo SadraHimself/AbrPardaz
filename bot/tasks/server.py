@@ -383,8 +383,8 @@ def sync_gcore_catalog(self):
         from bot.database.models import ProviderAccount, ProviderType, ServerPlan
         from bot.providers.gcore import GcoreProvider
         from bot.services.gcore_settings import (
-            disk_monthly_cost, full_costs, get_margins, get_volume_rate,
-            is_excluded_flavor,
+            disk_monthly_cost, full_costs, get_ip_month, get_margins,
+            get_volume_rate, is_excluded_flavor,
         )
         from bot.services.log_service import LogService
         from sqlalchemy import select
@@ -408,6 +408,7 @@ def sync_gcore_catalog(self):
 
             mh, _mm_unused = await get_margins(session)
             manual_rate = await get_volume_rate(session)   # 0 = قیمت زنده از API
+            ip_m = await get_ip_month(session)             # External IP (€/ماه)
             _dm_cache: dict = {}
             prov = GcoreProvider(
                 api_token=account.api_key or "",
@@ -455,7 +456,7 @@ def sync_gcore_catalog(self):
                             cm = extra.get("cost_monthly")
                         else:
                             ch, cm = full_costs(info.price_hourly or 0,
-                                                info.price_monthly or 0, dm)
+                                                info.price_monthly or 0, dm, ip_m)
                         changed = False
                         if extra.get("flavor_cost_hourly") != info.price_hourly or \
                            extra.get("flavor_cost_monthly") != info.price_monthly or \

@@ -2062,7 +2062,7 @@ async def _gcore_os_pricing(session: AsyncSession, plan: ServerPlan,
     if disk_used == plan_disk and lic_h <= 0 and not is_win:
         return base, 0.0, disk_used, None   # حالت عادی — همان قیمت پلن
 
-    from bot.services.gcore_settings import get_margins, get_volume_rate
+    from bot.services.gcore_settings import get_ip_month, get_margins, get_volume_rate
     import asyncio as _aio
     import time as _time
     extra = plan.extra_data or {}
@@ -2111,7 +2111,10 @@ async def _gcore_os_pricing(session: AsyncSession, plan: ServerPlan,
             if vol_h <= 0:
                 raise RuntimeError("قیمت دیسک از سرویس‌دهنده خوانده نشد — کمی بعد تلاش کنید")
             _gc_volprice_cache[vkey] = (now, vol_h)
-    sale_h = round((flavor_h + vol_h + lic_h) * (1 + float(mh or 0) / 100), 4)
+    # External IP جدا بیل می‌شود (پنل جیکور) — در قیمت پایه هم هست؛ اینجا هم
+    # که از صفر حساب می‌کنیم باید لحاظ شود وگرنه انتخاب ویندوز/دیسک بزرگ IP را می‌پراند
+    ip_h = (await get_ip_month(session)) / 720.0
+    sale_h = round((flavor_h + vol_h + lic_h + ip_h) * (1 + float(mh or 0) / 100), 4)
     addon = max(0.0, round(sale_h - base, 4))
     return sale_h, addon, disk_used, flavor_override
 

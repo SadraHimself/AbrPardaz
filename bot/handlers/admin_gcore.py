@@ -56,6 +56,7 @@ class GcoreFSM(StatesGroup):
     edit_margin = State()
     edit_volrate = State()
     edit_diskgb = State()
+    edit_iprate = State()
 
 
 _CUR_SYM = {"usd": "$", "eur": "€"}
@@ -81,7 +82,8 @@ async def _gc_account(session: AsyncSession) -> ProviderAccount | None:
 
 async def _render_gc_home(msg, session: AsyncSession):
     from bot.services.gcore_settings import (
-        get_default_disk_gb, get_group_name, get_margins, get_volume_rate,
+        get_default_disk_gb, get_group_name, get_ip_month, get_margins,
+        get_volume_rate,
     )
     account = await _gc_account(session)
 
@@ -102,6 +104,7 @@ async def _render_gc_home(msg, session: AsyncSession):
     group = await get_group_name(session)
     vol_rate = await get_volume_rate(session)
     disk_gb = await get_default_disk_gb(session)
+    ip_month = await get_ip_month(session)
     cfg = account.extra_config or {}
     vm_limit = int(cfg.get("vm_limit") or 0)
     token_masked = f"{(account.api_key or '')[:6]}…{(account.api_key or '')[-4:]}"
@@ -133,6 +136,8 @@ async def _render_gc_home(msg, session: AsyncSession):
                               callback_data="admin:gc_volrate"),
          InlineKeyboardButton(text=f"دیسک پیش‌فرض: {disk_gb} GB",
                               callback_data="admin:gc_diskgb")],
+        [InlineKeyboardButton(text=f"هزینه IP ماهانه: {ip_month:g}",
+                              callback_data="admin:gc_iprate")],
         [InlineKeyboardButton(text=f"گروه مقصد: {group}", callback_data="admin:gcgrp")],
         [InlineKeyboardButton(
             text=("غیرفعال کردن" if account.is_active else "فعال کردن"),
@@ -147,7 +152,7 @@ async def _render_gc_home(msg, session: AsyncSession):
         f"سرورهای فعال مشتری: {servers_count}"
         f"{f' / {vm_limit}' if vm_limit else ''}\n"
         f"محصولات ایمپورت‌شده: {plans_count}\n\n"
-        "فروش جیکور <b>فقط ساعتی</b> است. قیمت خرید = flavor + دیسک×نرخ دیسک — "
+        "فروش جیکور <b>فقط ساعتی</b> است. قیمت خرید = flavor + دیسک + IP — "
         "قیمت فروش = خرید × (۱ + سود٪).\n"
         "محصول ایمپورت‌شده تا تعیین «سود ساعتی» غیرفعال است و در فروش دیده نمی‌شود.\n"
         "ریبیلد و تغییر رمز برای جیکور در دسترس نیست (محدودیت API).",
@@ -439,6 +444,37 @@ async def gc_volrate_value(message: Message, state: FSMContext, session: AsyncSe
     label = message.text if float(message.text) > 0 else "خودکار (از API)"
     await message.answer(
         f"نرخ دیسک: {label} — قیمت خرید/فروش {n} محصول بازمحاسبه شد.",
+        reply_markup=back_to_admin_kb("admin:gcore"),
+    )
+
+
+@router.callback_query(F.data == "admin:gc_iprate")
+async def cb_gc_iprate(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(GcoreFSM.edit_iprate)
+    await cb.message.edit_text(
+        "<b>هزینه‌ی External IP جیکور</b>\n\n"
+        "پنل جیکور IP عمومی را جدا بیل می‌کند (الان €3/ماه) و قیمتش در API "
+        "نیست — این عدد در «قیمت خرید کامل» همه‌ی پلن‌ها لحاظ می‌شود.\n\n"
+        "هزینه‌ی ماهانه‌ی IP را به ارز اکانت وارد کنید (مثال: 3):",
+        parse_mode="HTML", reply_markup=cancel_admin_kb(),
+    )
+    await cb.answer()
+
+
+@router.message(GcoreFSM.edit_iprate, F.text.regexp(r"^\d+(\.\d+)?$"))
+async def gc_iprate_value(message: Message, state: FSMContext, session: AsyncSession):
+    from bot.services.gcore_settings import (
+        apply_margins_to_catalog, recompute_catalog_costs, set_ip_month,
+    )
+    await state.clear()
+    await set_ip_month(session, float(message.text))
+    await session.flush()
+    account = await _gc_account(session)
+    n = await recompute_catalog_costs(
+        session, provider=_prov(account) if account else None)
+    await apply_margins_to_catalog(session)
+    await message.answer(
+        f"هزینه IP: {message.text}/ماه — قیمت خرید/فروش {n} محصول بازمحاسبه شد.",
         reply_markup=back_to_admin_kb("admin:gcore"),
     )
 
@@ -876,7 +912,7 @@ async def cb_gc_family(cb: CallbackQuery, session: AsyncSession):
 
 @router.callback_query(F.data.startswith("admin:gcinfo:"))
 async def cb_gc_info(cb: CallbackQuery, session: AsyncSession):
-    from bot.services.gcore_settings import full_costs, get_default_disk_gb
+    from bot.services.gcore_settings import full_costs, get_default_disk_gb, get_ip_month
     account = await _gc_account(session)
     if not account:
         await cb.answer("اکانت یافت نشد.", show_alert=True)
@@ -890,7 +926,8 @@ async def cb_gc_info(cb: CallbackQuery, session: AsyncSession):
         return
     disk_gb = await get_default_disk_gb(session)
     dm = await _disk_monthly(session, account, rid, disk_gb)
-    ch, cm = full_costs(info.price_hourly or 0, info.price_monthly or 0, dm)
+    ip_m = await get_ip_month(session)
+    ch, cm = full_costs(info.price_hourly or 0, info.price_monthly or 0, dm, ip_m)
     ram_g = info.ram // 1024 if info.ram >= 1024 else info.ram
     cur_word = {"usd": "دلار", "eur": "یورو"}.get(
         (info.currency or "usd").lower(), (info.currency or "").upper())
@@ -903,17 +940,18 @@ async def cb_gc_info(cb: CallbackQuery, session: AsyncSession):
         f"قیمت خرید کامل ({cur_word}):\n"
         f"ساعتی: {round(ch, 5):g}\n"
         f"ماهانه: {round(cm, 2):g} (فلور {round(info.price_monthly or 0, 2):g} "
-        f"+ دیسک {round(dm, 2):g})",
+        f"+ دیسک {round(dm, 2):g} + آی‌پی {round(ip_m, 2):g})",
         show_alert=True,
     )
 
 
 async def _import_one(session: AsyncSession, account: ProviderAccount,
                       region: dict, info, group_name: str) -> ServerPlan:
-    from bot.services.gcore_settings import full_costs, get_default_disk_gb
+    from bot.services.gcore_settings import full_costs, get_default_disk_gb, get_ip_month
     disk_gb = await get_default_disk_gb(session)
     dm = await _disk_monthly(session, account, int(region["id"]), disk_gb)
-    ch, cm = full_costs(info.price_hourly or 0, info.price_monthly or 0, dm)
+    ip_m = await get_ip_month(session)
+    ch, cm = full_costs(info.price_hourly or 0, info.price_monthly or 0, dm, ip_m)
     plan = ServerPlan(
         provider_type=ProviderType.GCORE,
         provider_account_id=account.id,

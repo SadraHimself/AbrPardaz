@@ -1317,6 +1317,15 @@ async def cb_select_plan(cb: CallbackQuery, state: FSMContext, session: AsyncSes
 @router.callback_query(BuyServerStates.selecting_billing, F.data.startswith("buybilling:"))
 async def cb_select_billing(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
     billing = cb.data.split(":")[1]
+    data = await state.get_data()
+    # ضد ابیوز: callback جعلی/کهنه («buybilling:hourly» روی پلن فقط-ماهانه مثل
+    # تایم‌وب) نباید عبور کند — قیمت None = خرید صفر تومانی
+    _plan = await session.get(ServerPlan, data.get("plan_id") or 0)
+    if not _plan or not (
+        _plan.price_hourly if billing == "hourly" else _plan.price_monthly
+    ):
+        await cb.answer("این چرخه بیلینگ برای این محصول فعال نیست.", show_alert=True)
+        return
     await state.update_data(billing=billing)
     data = await state.get_data()
     if data.get("late_billing"):
@@ -1341,6 +1350,25 @@ async def _ask_billing_late(target, state: FSMContext, session: AsyncSession,
     if not plan:
         await (target.answer if from_message else target.edit_text)("محصول یافت نشد.")
         await state.clear()
+        return
+    if not plan.price_hourly:
+        # فقط-ماهانه (تایم‌وب از 2026-07-26): مرحله‌ی انتخاب چرخه حذف —
+        # مستقیم ماهانه + کد تخفیف
+        await state.update_data(billing="monthly")
+        await state.set_state(BuyServerStates.entering_discount)
+        _text = ('‏<tg-emoji emoji-id="5229064374403998351">🏷</tg-emoji> <b>کد تخفیف</b>\n\n'
+                 "اگر کد تخفیف دارید وارد کنید.\n"
+                 "در غیر این صورت از دکمه زیر استفاده کنید:")
+        _kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="بدون کد تخفیف", callback_data="buydisc:skip",
+                                  **{"icon_custom_emoji_id": "5346172687863529237"})],
+            [InlineKeyboardButton(text="انصراف", callback_data="cancel",
+                                  **{"style": "danger", "icon_custom_emoji_id": "5240241223632954241"})],
+        ])
+        if from_message:
+            await target.answer(_text, parse_mode="HTML", reply_markup=_kb)
+        else:
+            await target.edit_text(_text, parse_mode="HTML", reply_markup=_kb)
         return
     _cur = obj_currency(plan)
     hourly_t = plan.price_hourly or 0

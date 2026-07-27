@@ -3,10 +3,10 @@
 فلو: محصولات ← سرویس‌دهنده‌ها ← تایم‌وب
 - افزودن اکانت: نام + JWT Token (پنل تایم‌وب ← «API и Terraform») → تست زنده
   (وضعیت اکانت + موجودی + تعرفه‌ها) → ذخیره → حذف پیام توکن از چت
-- جزئیات: تست / ایمپورت / ویرایش نام-توکن / لیمیت VM دستی / سود ساعتی و ماهانه /
+- جزئیات: تست / ایمپورت / ویرایش نام-توکن / لیمیت VM دستی / سود ماهانه /
   نرخ روبل (خودکار از Navasan؛ اینجا قابل‌تنظیم دستی) / گروه مقصد / حذف
 - ایمپورت: لوکیشن → لیست تعرفه‌ها با «قیمت خرید» (₽ ماهانه) → تپ = ServerPlan
-  (غیرفعال تا تعیین سود). قیمت خرید ساعتی = ماهانه ÷ ۷۲۰.
+  (غیرفعال تا تعیین سود). ⚠️ تایم‌وب فقط-ماهانه است (2026-07-26؛ ساعتی → RootVDS).
 
 ⚠️ عملیاتی: «تأیید حذف سرویس‌ها» (تلگرام/SMS) در پنل تایم‌وب باید خاموش باشد
 وگرنه حذف سرور از API کار نمی‌کند.
@@ -220,7 +220,7 @@ async def tw_add_token(message: Message, state: FSMContext, session: AsyncSessio
         f"نام: {account.name}\n"
         f"موجودی اکانت: {info.get('balance'):,.0f} {info.get('currency')}\n"
         f"تعرفه‌ها: {info.get('presets')} در {info.get('locations')} لوکیشن\n\n"
-        "حالا «سود ساعتی/ماهانه» را تنظیم و محصولات را ایمپورت کنید.\n"
+        "حالا «سود ماهانه» را تنظیم و محصولات را ایمپورت کنید.\n"
         "⚠️ یادآوری: «تأیید حذف سرویس‌ها» در پنل تایم‌وب خاموش باشد.",
         parse_mode="HTML",
         reply_markup=back_to_admin_kb("admin:timeweb"),
@@ -327,17 +327,18 @@ async def tw_limit_value(message: Message, state: FSMContext, session: AsyncSess
 
 @router.callback_query(F.data.startswith("admin:twm:"))
 async def cb_tw_margin(cb: CallbackQuery, state: FSMContext):
-    kind = cb.data.split(":")[2]
-    await state.update_data(tw_margin_kind=kind)
+    # تایم‌وب فقط-ماهانه (2026-07-26) — سود ساعتی حذف شد
+    if cb.data.split(":")[2] != "m":
+        await cb.answer("تایم‌وب فقط ماهانه فروخته می‌شود.", show_alert=True)
+        return
     await state.set_state(TimewebFSM.edit_margin)
-    label = "ساعتی" if kind == "h" else "ماهانه"
     await cb.message.edit_text(
-        f"<b>درصد سود {label} (کل تایم‌وب)</b>\n\n"
+        "<b>درصد سود ماهانه (کل تایم‌وب)</b>\n\n"
         "قیمت فروش = قیمت خرید (روبل) × (۱ + سود٪)\n"
         "این سود روی <b>همه‌ی محصولات تایم‌وب</b> اعمال می‌شود و در سینک "
         "دوره‌ای هم دنبال قیمت تایم‌وب می‌ماند. با ثبت سود، محصولات "
         "ایمپورت‌شده فعال می‌شوند.\n\n"
-        f"درصد سود {label} را وارد کنید (مثال: 35):",
+        "درصد سود ماهانه را وارد کنید (مثال: 35):",
         parse_mode="HTML", reply_markup=cancel_admin_kb(),
     )
     await cb.answer()
@@ -346,10 +347,8 @@ async def cb_tw_margin(cb: CallbackQuery, state: FSMContext):
 @router.message(TimewebFSM.edit_margin, F.text.regexp(r"^\d+(\.\d+)?$"))
 async def tw_margin_value(message: Message, state: FSMContext, session: AsyncSession):
     from bot.services.timeweb_settings import apply_margins_to_catalog, set_margin
-    data = await state.get_data()
     await state.clear()
-    await set_margin(session, hourly=(data.get("tw_margin_kind") == "h"),
-                     value=float(message.text))
+    await set_margin(session, hourly=False, value=float(message.text))
     await session.flush()
     updated = await apply_margins_to_catalog(session)
     await message.answer(
@@ -528,8 +527,8 @@ async def cb_tw_import(cb: CallbackQuery, session: AsyncSession):
     rows.append([InlineKeyboardButton(text="بازگشت", callback_data="admin:timeweb")])
     await cb.message.edit_text(
         "<b>ایمپورت محصولات تایم‌وب</b>\n\n"
-        f"محصولات به گروه «{group_name}» می‌روند. قیمت‌ها ₽ ماهانه‌اند "
-        "(ساعتی = ÷۷۲۰).\nلوکیشن را انتخاب کنید:",
+        f"محصولات به گروه «{group_name}» می‌روند. قیمت‌ها ₽ ماهانه‌اند.\n"
+        "لوکیشن را انتخاب کنید:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )

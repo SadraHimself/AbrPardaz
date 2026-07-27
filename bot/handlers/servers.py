@@ -1174,6 +1174,12 @@ async def cb_buy_location(cb: CallbackQuery, user: User, state: FSMContext, sess
         types = {_gc_flavor_type(p.provider_plan_id) for p in plans}
         ordered = [t for t in _GC_TYPE_ORDER if t in types] + \
                   sorted(t for t in types if t not in _GC_TYPE_ORDER)
+        if len(ordered) == 1:
+            # فقط یک خانواده‌ی flavor → مرحله‌ی اضافی نپرس؛ مستقیم برو به
+            # مرحله‌ی Standard/High CPU (یا لیست پلن‌ها). بازگشتش = لیست لوکیشن‌ها.
+            await _gc_show_family(cb, state, session, group, gid, loc,
+                                  ordered[0], back_cb=f"buygrp:{gid}")
+            return
         rows = [[InlineKeyboardButton(
             text=_GC_TYPE_LABELS.get(t, t.title()),
             callback_data=f"buyloctype:{gid}:{loc}:{t}")] for t in ordered]
@@ -1242,13 +1248,12 @@ async def cb_buy_tw_type(cb: CallbackQuery, user: User, state: FSMContext, sessi
                             back_cb=f"buyloc:{gid}:{loc}")
 
 
-@router.callback_query(_BUY_NAV_STATES, F.data.startswith("buyloctype:"))
-async def cb_buy_location_type(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
-    _, gid, loc, ftype = cb.data.split(":")
-    group = await session.get(ProductGroup, int(gid))
-    if not group or group.is_hidden:
-        await cb.answer("این گروه در دسترس نیست.", show_alert=True)
-        return
+async def _gc_show_family(cb: CallbackQuery, state: FSMContext, session: AsyncSession,
+                          group: ProductGroup, gid: str, loc: str, ftype: str,
+                          back_cb: str):
+    """جیکور بعد از انتخاب لوکیشن/خانواده: اگر هر دو نوع (Standard/High CPU)
+    موجود باشد مرحله‌ی نوع، وگرنه مستقیم لیست پلن‌ها. back_cb = مقصدِ بازگشت
+    (لیست لوکیشن‌ها وقتی مرحله‌ی خانواده حذف شده؛ وگرنه صفحه‌ی خانواده)."""
     result = await session.execute(
         select(ServerPlan).where(
             ServerPlan.category == group.name,
@@ -1263,8 +1268,6 @@ async def cb_buy_location_type(cb: CallbackQuery, user: User, state: FSMContext,
     if not plans:
         await cb.answer("در این دسته محصولی موجود نیست.", show_alert=True)
         return
-    # جیکور: مرحله‌ی «نوع سرور» بر اساس نوع دیسک/سرعت (استاندارد ۳۰۰ / پرسرعت ۵۰۰
-    # مگابیت — الگوی نوعِ سرورِ تایم‌وب) اگر هر دو واریانت موجود باشند
     _vts = {(p.extra_data or {}).get("volume_type") or "standard" for p in plans}
     if len(_vts) > 1:
         from bot.services.gcore_settings import VOLUME_TYPES
@@ -1278,7 +1281,7 @@ async def cb_buy_location_type(cb: CallbackQuery, user: User, state: FSMContext,
                 text=meta["label"],
                 callback_data=f"buygcvol:{gid}:{loc}:{ftype}:{short}")])
         rows.append([InlineKeyboardButton(
-            text="بازگشت", callback_data=f"buyloc:{gid}:{loc}",
+            text="بازگشت", callback_data=back_cb,
             **{"icon_custom_emoji_id": "5258236805890710909"})])
         await state.set_state(BuyServerStates.selecting_plan)
         await cb.message.edit_text(
@@ -1289,9 +1292,19 @@ async def cb_buy_location_type(cb: CallbackQuery, user: User, state: FSMContext,
         )
         await cb.answer()
         return
-    # بازگشت از لیست پلن‌ها → همین صفحه‌ی نوع سرور (buyloc دوباره نوع‌ها را می‌سازد)
     await _render_plan_list(cb, state, session, group.name, plans,
-                            back_cb=f"buyloc:{gid}:{loc}")
+                            back_cb=back_cb)
+
+
+@router.callback_query(_BUY_NAV_STATES, F.data.startswith("buyloctype:"))
+async def cb_buy_location_type(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
+    _, gid, loc, ftype = cb.data.split(":")
+    group = await session.get(ProductGroup, int(gid))
+    if not group or group.is_hidden:
+        await cb.answer("این گروه در دسترس نیست.", show_alert=True)
+        return
+    await _gc_show_family(cb, state, session, group, gid, loc, ftype,
+                          back_cb=f"buyloc:{gid}:{loc}")
 
 
 @router.callback_query(_BUY_NAV_STATES, F.data.startswith("buygcvol:"))

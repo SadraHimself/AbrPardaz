@@ -891,13 +891,19 @@ async def cb_gc_info(cb: CallbackQuery, session: AsyncSession):
     disk_gb = await get_default_disk_gb(session)
     dm = await _disk_monthly(session, account, rid, disk_gb)
     ch, cm = full_costs(info.price_hourly or 0, info.price_monthly or 0, dm)
-    s = _sym(info.currency)
+    ram_g = info.ram // 1024 if info.ram >= 1024 else info.ram
+    cur_word = {"usd": "دلار", "eur": "یورو"}.get(
+        (info.currency or "usd").lower(), (info.currency or "").upper())
+    # قالبِ خوانا: هر مقدار در خط خودش با لیبل فارسی — بدون اسلش/علامتِ چسبیده
+    # که ترتیب متن RTL را به‌هم می‌ریزد
     await cb.answer(
-        f"{pid} — {info.cpu} vCPU / {info.ram // 1024 if info.ram >= 1024 else info.ram} GB RAM\n"
-        f"Flavor: {s}{info.price_hourly:g}/h · {s}{info.price_monthly:g}/mo\n"
-        f"Disk {disk_gb}GB: {s}{dm:g}/mo\n"
-        f"قیمت خرید کامل: {s}{ch:g}/h · {s}{cm:g}/mo\n"
-        "(ترافیک: نامحدود/رایگان)",
+        f"{pid}\n"
+        f"{info.cpu} هسته | {ram_g} گیگ رم | {disk_gb} گیگ دیسک\n"
+        "ترافیک: نامحدود و رایگان\n\n"
+        f"قیمت خرید کامل ({cur_word}):\n"
+        f"ساعتی: {round(ch, 5):g}\n"
+        f"ماهانه: {round(cm, 2):g} (فلور {round(info.price_monthly or 0, 2):g} "
+        f"+ دیسک {round(dm, 2):g})",
         show_alert=True,
     )
 

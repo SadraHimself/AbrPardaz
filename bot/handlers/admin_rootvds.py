@@ -645,10 +645,13 @@ async def cb_rv_info(cb: CallbackQuery, session: AsyncSession):
         await cb.answer("تعرفه یافت نشد.", show_alert=True)
         return
     ram_g = info.ram // 1024 if info.ram >= 1024 else info.ram
+    # قالبِ خوانا: هر مقدار در خط خودش با لیبل فارسی
     await cb.answer(
-        f"preset {pid} — {info.cpu} vCPU / {ram_g}GB RAM / {info.disk}GB\n"
-        f"خرید: ₽{info.price_monthly:g}/ماه · ₽{info.price_hourly:g}/ساعت\n"
-        f"{info.name}",
+        f"{pid}" + (f" — {info.name}" if info.name else "") + "\n"
+        f"{info.cpu} هسته | {ram_g} گیگ رم | {info.disk} گیگ دیسک\n\n"
+        "قیمت خرید (روبل):\n"
+        f"ساعتی: {round(info.price_hourly or 0, 4):g}\n"
+        f"ماهانه: {round(info.price_monthly or 0, 2):g}",
         show_alert=True,
     )
 

@@ -719,15 +719,19 @@ async def cb_tw_info(cb: CallbackQuery, session: AsyncSession):
     except Exception:
         raw = {}
     from bot.services.timeweb_settings import IP_RUB_MONTH, full_costs
-    ch, cm = full_costs(info.price_monthly or 0)
+    _, cm = full_costs(info.price_monthly or 0)
     ram_g = info.ram // 1024 if info.ram >= 1024 else info.ram
+    _freq = f" {raw.get('cpu_frequency')}GHz" if raw.get("cpu_frequency") else ""
+    _dt = str(raw.get("disk_type") or "").upper()
+    _bw = raw.get("bandwidth")
+    # قالبِ خوانا: هر مقدار در خط خودش با لیبل فارسی (تایم‌وب فقط ماهانه)
     await cb.answer(
-        f"preset {pid} — {info.cpu} vCPU ({raw.get('cpu_frequency', '?')}GHz) / "
-        f"{ram_g}GB RAM / {info.disk}GB {str(raw.get('disk_type') or '').upper()}\n"
-        f"کانال: {raw.get('bandwidth', '?')} Mbit (ترافیک نامحدود)\n"
-        f"تعرفه: ₽{info.price_monthly:g} + IP: ₽{IP_RUB_MONTH:g}\n"
-        f"خرید کامل: ₽{cm:g}/ماه · ₽{ch:g}/ساعت\n"
-        f"{raw.get('description_short') or ''}",
+        f"{pid}\n"
+        f"{info.cpu} هسته{_freq} | {ram_g} گیگ رم | {info.disk} گیگ {_dt}\n"
+        + (f"کانال: {_bw} Mbit — ترافیک نامحدود\n" if _bw else "ترافیک: نامحدود\n")
+        + "\nقیمت خرید (روبل):\n"
+        f"ماهانه: {round(cm, 2):g} "
+        f"(تعرفه {info.price_monthly:g} + آی‌پی {IP_RUB_MONTH:g})",
         show_alert=True,
     )
 

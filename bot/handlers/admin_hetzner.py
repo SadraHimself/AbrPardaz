@@ -781,12 +781,14 @@ async def cb_hz_info(cb: CallbackQuery, session: AsyncSession):
     if not info:
         await cb.answer("پلن یافت نشد.", show_alert=True)
         return
+    # قالبِ خوانا: هر مقدار در خط خودش با لیبل فارسی
     await cb.answer(
-        f"{pid.upper()} — {info.cpu} vCPU / {info.ram // 1024} GB RAM / {info.disk} GB Disk\n"
-        f"Hourly cost: €{info.price_hourly:g}\n"
-        f"Monthly cost: €{info.price_monthly:g}\n"
-        f"Traffic: {info.bandwidth:,} GB\n"
-        "(EUR incl. VAT)",
+        f"{pid.upper()}\n"
+        f"{info.cpu} هسته | {info.ram // 1024} گیگ رم | {info.disk} گیگ دیسک\n"
+        f"ترافیک: {info.bandwidth:,} گیگ\n\n"
+        "قیمت خرید (یورو، با مالیات):\n"
+        f"ساعتی: {round(info.price_hourly or 0, 5):g}\n"
+        f"ماهانه: {round(info.price_monthly or 0, 2):g}",
         show_alert=True,
     )
 

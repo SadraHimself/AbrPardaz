@@ -63,15 +63,49 @@ _TW_COUNTRY_FLAGS = {
     "us": "5927292517610426176",   # آمریکا
 }
 
+# پرچم پریمیوم بر اساس «نام شهرِ» لوکیشن (جیکور — اسلاگ‌هایش کد کشور ندارد؛
+# region_name مثل «Paris-2» با تطبیق کلیدواژه پرچم می‌گیرد)
+_CITY_FLAGS = {
+    "almaty": "5228718354658769982",        # قزاقستان
+    "amsterdam": "5411124743841524806",     # هلند
+    "baku": "5224731117474555599",          # آذربایجان
+    "london": "5929543986711629299",        # بریتانیا
+    "dubai": "5449495646656537594",         # امارات
+    "istanbul": "5226948110873278599",      # ترکیه
+    "johannesburg": "5341547124049852736",  # آفریقای جنوبی
+    "luxembourg": "5411158944666101440",    # لوکزامبورگ
+    "paris": "5931269906434624310",         # فرانسه
+    "frankfurt": "5409360418520967565",     # آلمان
+    "moscow": "5449408995691341691",        # روسیه
+}
 
-def _loc_flag(loc: str | None) -> str | None:
-    """اموجی پرچم یک لوکیشن: اول نگاشت هتزنر، بعد کشورِ اسلاگ (تایم‌وب)."""
-    if not loc:
-        return None
-    meta = _HZ_LOC_META.get(loc)
-    if meta:
-        return meta[0]
-    return _TW_COUNTRY_FLAGS.get(loc.split("-")[0].lower())
+
+def _loc_flag(loc: str | None, label: str | None = None) -> str | None:
+    """اموجی پرچم یک لوکیشن: نگاشت هتزنر → کشورِ اسلاگ (تایم‌وب) →
+    کلیدواژه‌ی شهر در لیبل (جیکور)."""
+    if loc:
+        meta = _HZ_LOC_META.get(loc)
+        if meta:
+            return meta[0]
+        flag = _TW_COUNTRY_FLAGS.get(loc.split("-")[0].lower())
+        if flag:
+            return flag
+    if label:
+        _ll = label.lower()
+        for city, flag in _CITY_FLAGS.items():
+            if city in _ll:
+                return flag
+    return None
+
+
+def _clean_loc_label(label: str) -> str:
+    """پسوند عددیِ ریجن در نمایش لازم نیست: «Paris-2» → «Paris»."""
+    label = (label or "").strip()
+    if "-" in label:
+        head, tail = label.rsplit("-", 1)
+        if tail.isdigit():
+            return head
+    return label
 
 
 # نوع flavor جیکور از توکن دوم ID («g2-standard-…» → standard) — مرحله «نوع سرور»
@@ -1087,9 +1121,10 @@ async def _select_category(cb: CallbackQuery, user: User, state: FSMContext,
         pair = []
         for loc in locs:
             _, label = _HZ_LOC_META.get(loc, (None, _dyn_labels.get(loc, loc)))
-            emoji_id = _loc_flag(loc)
+            emoji_id = _loc_flag(loc, label)
             kw = {"icon_custom_emoji_id": emoji_id} if emoji_id else {}
-            pair.append(InlineKeyboardButton(text=label, callback_data=f"buyloc:{gid}:{loc}", **kw))
+            pair.append(InlineKeyboardButton(text=_clean_loc_label(label),
+                                             callback_data=f"buyloc:{gid}:{loc}", **kw))
             if len(pair) == 2:
                 rows.append(pair)
                 pair = []
@@ -1131,9 +1166,10 @@ async def _render_plan_list(cb: CallbackQuery, state: FSMContext, session: Async
         # می‌دارد تا با متن فارسی تداخل نکند.
         _code = plan.display_name or plan.name
         label = f"‏⁦{_code}⁩ | {specs}"
-        # اموجی پریمیوم اختصاصی محصول؛ وگرنه پرچمِ لوکیشن (هتزنر/تایم‌وب)
+        # اموجی پریمیوم اختصاصی محصول؛ وگرنه پرچمِ لوکیشن (هتزنر/تایم‌وب/جیکور)
         _pe = (plan.extra_data or {}).get("emoji_id") \
-            or _loc_flag(plan.location)
+            or _loc_flag(plan.location,
+                         (plan.extra_data or {}).get("region_name"))
         _kw = {"icon_custom_emoji_id": _pe} if _pe else {}
         builder.button(text=label, callback_data=f"buyplan:{plan.id}", **_kw)
     builder.button(text="بازگشت", callback_data=back_cb, **{"icon_custom_emoji_id": "5258236805890710909"})

@@ -447,19 +447,28 @@ def sync_gcore_catalog(self):
                                 await log.log_plan_unavailable(
                                     plan.display_name or plan.name, loc_label)
                             continue
-                        # قیمت خرید کامل = flavor تازه + دیسک + External IP (نرخ
-                        # دستی یا قیمت زنده از API). زنده‌ی ناموفق → قیمت قبلی حفظ
+                        # نوع دیسک/سرعت: پلن‌های قدیمیِ بدون volume_type = استاندارد
+                        # (self-heal — از این به بعد هر flavor دو واریانت دارد)
+                        _vt = extra.get("volume_type") or "standard"
+                        changed = False
+                        if not extra.get("volume_type"):
+                            extra["volume_type"] = _vt
+                            extra.setdefault("bandwidth_mbit", 300)
+                            extra.setdefault("volume_label", "استاندارد")
+                            changed = True
+                        # قیمت خرید کامل = flavor تازه + دیسک (per نوع) + External IP
+                        # (نرخ دستی یا قیمت زنده از API). زنده‌ی ناموفق → قیمت قبلی حفظ
                         dm = await disk_monthly_cost(
-                            session, prov, rid, int(plan.disk or 0), _dm_cache)
+                            session, prov, rid, int(plan.disk or 0), _dm_cache,
+                            type_name=_vt)
                         ipm = await ip_monthly_cost(session, prov, rid, _dm_cache)
-                        if (dm <= 0 and manual_rate <= 0) or \
+                        if (dm <= 0 and (manual_rate <= 0 or _vt != "standard")) or \
                            (ipm <= 0 and ip_manual <= 0):
                             ch = extra.get("cost_hourly")
                             cm = extra.get("cost_monthly")
                         else:
                             ch, cm = full_costs(info.price_hourly or 0,
                                                 info.price_monthly or 0, dm, ipm)
-                        changed = False
                         if extra.get("flavor_cost_hourly") != info.price_hourly or \
                            extra.get("flavor_cost_monthly") != info.price_monthly or \
                            extra.get("cost_hourly") != ch or \

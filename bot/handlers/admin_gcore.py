@@ -637,15 +637,15 @@ _volprice_cache: dict = {}
 
 
 async def _disk_monthly(session: AsyncSession, account: ProviderAccount,
-                        rid: int, gb: int) -> float:
-    """هزینه ماهانه دیسک با کش ۵ دقیقه‌ای (نرخ دستی یا قیمت زنده API)."""
+                        rid: int, gb: int, vtype: str = "standard") -> float:
+    """هزینه ماهانه دیسک (per نوع) با کش ۵ دقیقه‌ای (نرخ دستی یا قیمت زنده API)."""
     from bot.services.gcore_settings import disk_monthly_cost
-    key = (account.id, int(rid), int(gb))
+    key = (account.id, int(rid), int(gb), vtype)
     cached = _volprice_cache.get(key)
     now = time.monotonic()
     if cached and now - cached[0] < 300:
         return cached[1]
-    val = await disk_monthly_cost(session, _prov(account), rid, gb)
+    val = await disk_monthly_cost(session, _prov(account), rid, gb, type_name=vtype)
     _volprice_cache[key] = (now, val)
     return val
 
@@ -704,14 +704,18 @@ def _is_excluded(flavor_id: str) -> bool:
 
 
 async def _imported_map(session: AsyncSession, slug: str) -> dict:
-    """provider_plan_id → ServerPlan برای محصولات ایمپورت‌شده‌ی این region."""
+    """(provider_plan_id, volume_type) → ServerPlan برای این region.
+    هر flavor دو واریانت دارد (استاندارد/پرسرعت) — کلید جفتی است؛ پلن‌های
+    قدیمیِ بدونِ volume_type استاندارد حساب می‌شوند."""
     rows = (await session.execute(
         select(ServerPlan).where(
             ServerPlan.provider_type == ProviderType.GCORE,
             ServerPlan.location == slug,
         )
     )).scalars().all()
-    return {p.provider_plan_id: p for p in rows}
+    return {(p.provider_plan_id,
+             (p.extra_data or {}).get("volume_type") or "standard"): p
+            for p in rows}
 
 
 @router.callback_query(F.data == "admin:gc_import")
@@ -787,13 +791,13 @@ async def cb_gc_location(cb: CallbackQuery, session: AsyncSession):
         fams.setdefault(_family(p.provider_plan_id), []).append(p)
     # خانواده‌هایی که فقط پلن ایمپورت‌شده‌ی قدیمی دارند (استثناشده/حذف‌شده از عرضه)
     # هم باید دکمه بگیرند تا ادمین بتواند پلن‌هایشان را حذف کند
-    for pid in imported:
+    for pid, _vt in imported:
         fams.setdefault(_family(pid), [])
 
     rows = []
     for fam in sorted(fams):
-        total = len(fams[fam])
-        n_imp = sum(1 for pid in imported if _family(pid) == fam)
+        total = len(fams[fam]) * 2   # هر flavor دو واریانت (استاندارد/پرسرعت)
+        n_imp = sum(1 for (pid, _v) in imported if _family(pid) == fam)
         rows.append([InlineKeyboardButton(
             text=f"{fam} ({n_imp}/{total})",
             callback_data=f"admin:gcfam:{rid}:{fam}",
@@ -809,7 +813,7 @@ async def cb_gc_location(cb: CallbackQuery, session: AsyncSession):
 
 async def _render_gc_family(msg, session: AsyncSession, account: ProviderAccount,
                             rid: int, fam: str):
-    from bot.services.gcore_settings import get_default_disk_gb
+    from bot.services.gcore_settings import VOLUME_TYPES, get_default_disk_gb
     region = await _gc_region(account, rid)
     if not region:
         return
@@ -818,31 +822,36 @@ async def _render_gc_family(msg, session: AsyncSession, account: ProviderAccount
              and not _is_excluded(p.provider_plan_id)]
     imported = await _imported_map(session, region["slug"])
     disk_gb = await get_default_disk_gb(session)
-    dm = await _disk_monthly(session, account, rid, disk_gb)
+    dm_std = await _disk_monthly(session, account, rid, disk_gb, "standard")
+    dm_hi = await _disk_monthly(session, account, rid, disk_gb, "ssd_hiiops")
 
     rows = []
     for p in sorted(plans, key=lambda x: (x.price_monthly or 0)):
-        mark = "✅" if p.provider_plan_id in imported else "⬜"
         ram_g = p.ram // 1024 if p.ram >= 1024 else p.ram
-        rows.append([
-            InlineKeyboardButton(
-                text=f"{mark} {p.provider_plan_id} · {p.cpu}c/{ram_g}G · "
-                     f"{_sym(p.currency)}{p.price_monthly:g}",
-                callback_data=f"admin:gcpick:{rid}:{p.provider_plan_id}",
-            ),
-            InlineKeyboardButton(
-                text="ℹ️",
-                callback_data=f"admin:gcinfo:{rid}:{p.provider_plan_id}",
-            ),
-        ])
+        # هر flavor دو واریانت: استاندارد ۳۰۰ مگابیت / پرسرعت ۵۰۰ مگابیت
+        for vt, meta in VOLUME_TYPES.items():
+            mark = "✅" if (p.provider_plan_id, vt) in imported else "⬜"
+            short = "s" if vt == "standard" else "h"
+            rows.append([
+                InlineKeyboardButton(
+                    text=f"{mark} {p.provider_plan_id} · {p.cpu}c/{ram_g}G · "
+                         f"{_sym(p.currency)}{p.price_monthly:g} · {meta['mbit']}Mb",
+                    callback_data=f"admin:gcpick:{rid}:{p.provider_plan_id}:{short}",
+                ),
+                InlineKeyboardButton(
+                    text="ℹ️",
+                    callback_data=f"admin:gcinfo:{rid}:{p.provider_plan_id}:{short}",
+                ),
+            ])
     # ایمپورت‌شده‌هایی که دیگر در این region نیستند — قابل حذف بمانند
     shown = {p.provider_plan_id for p in plans}
-    for pid in sorted(imported):
+    for pid, vt in sorted(imported):
         if _family(pid) != fam or pid in shown:
             continue
+        short = "s" if vt == "standard" else "h"
         rows.append([InlineKeyboardButton(
-            text=f"⛔ {pid} · ناموجود — حذف",
-            callback_data=f"admin:gcpick:{rid}:{pid}",
+            text=f"⛔ {pid} ({VOLUME_TYPES.get(vt, {}).get('mbit', '?')}Mb) · ناموجود — حذف",
+            callback_data=f"admin:gcpick:{rid}:{pid}:{short}",
         )])
     rows.append([
         InlineKeyboardButton(text="ایمپورت همه", callback_data=f"admin:gcfamon:{rid}:{fam}"),
@@ -851,9 +860,9 @@ async def _render_gc_family(msg, session: AsyncSession, account: ProviderAccount
     rows.append([InlineKeyboardButton(text="بازگشت", callback_data=f"admin:gcloc:{rid}")])
     await msg.edit_text(
         f"<b>{fam} — {region['display_name']}</b>\n\n"
-        "عدد = قیمت خرید ماهانه‌ی flavor (بدون دیسک) · تپ = افزودن/حذف · ℹ️ = جزئیات\n"
-        f"دیسک پلن‌های جدید: {disk_gb} GB ≈ {dm:g} در ماه "
-        "(قیمت زنده از API — به قیمت خرید اضافه می‌شود)\n"
+        "هر پلن دو نوع دارد: 300Mb = استاندارد · 500Mb = پرسرعت (High IOPS)\n"
+        "عدد = قیمت خرید ماهانه‌ی flavor (بدون دیسک/IP) · تپ = افزودن/حذف · ℹ️ = جزئیات\n"
+        f"دیسک {disk_gb} گیگ: استاندارد ≈ {dm_std:g} · پرسرعت ≈ {dm_hi:g} در ماه\n"
         "<i>محصول تازه‌ایمپورت‌شده تا تعیین سود غیرفعال می‌ماند.</i>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
@@ -878,12 +887,14 @@ async def cb_gc_family_all_on(cb: CallbackQuery, session: AsyncSession):
              and not _is_excluded(p.provider_plan_id)]
     imported = await _imported_map(session, region["slug"])
     group_name = await get_group_name(session)
+    from bot.services.gcore_settings import VOLUME_TYPES
     added = 0
     for info in plans:
-        if info.provider_plan_id in imported:
-            continue
-        await _import_one(session, account, region, info, group_name)
-        added += 1
+        for vt in VOLUME_TYPES:   # هر flavor دو واریانت: استاندارد + پرسرعت
+            if (info.provider_plan_id, vt) in imported:
+                continue
+            await _import_one(session, account, region, info, group_name, vt)
+            added += 1
     await session.flush()
     if added:
         await apply_margins_to_catalog(session)
@@ -905,7 +916,7 @@ async def cb_gc_family_all_off(cb: CallbackQuery, session: AsyncSession):
         return
     imported = await _imported_map(session, region["slug"])
     removed = kept = 0
-    for pid, plan in imported.items():
+    for (pid, _vt), plan in imported.items():
         if _family(pid) != fam:
             continue
         deleted, _ = await _remove_plan(session, plan)
@@ -939,13 +950,16 @@ async def cb_gc_info(cb: CallbackQuery, session: AsyncSession):
         return
     parts = cb.data.split(":")
     rid, pid = int(parts[2]), parts[3]
+    vt = "ssd_hiiops" if (len(parts) > 4 and parts[4] == "h") else "standard"
     plans = await _region_plans(account, rid)
     info = next((p for p in plans if p.provider_plan_id == pid), None)
     if not info:
         await cb.answer("پلن یافت نشد.", show_alert=True)
         return
+    from bot.services.gcore_settings import VOLUME_TYPES
+    meta = VOLUME_TYPES.get(vt) or VOLUME_TYPES["standard"]
     disk_gb = await get_default_disk_gb(session)
-    dm = await _disk_monthly(session, account, rid, disk_gb)
+    dm = await _disk_monthly(session, account, rid, disk_gb, vt)
     ip_m = await _ip_monthly(session, account, rid)
     ch, cm = full_costs(info.price_hourly or 0, info.price_monthly or 0, dm, ip_m)
     ram_g = info.ram // 1024 if info.ram >= 1024 else info.ram
@@ -954,9 +968,9 @@ async def cb_gc_info(cb: CallbackQuery, session: AsyncSession):
     # قالبِ خوانا: هر مقدار در خط خودش با لیبل فارسی — بدون اسلش/علامتِ چسبیده
     # که ترتیب متن RTL را به‌هم می‌ریزد
     await cb.answer(
-        f"{pid}\n"
+        f"{pid} — {meta['label']}\n"
         f"{info.cpu} هسته | {ram_g} گیگ رم | {disk_gb} گیگ دیسک\n"
-        "ترافیک: نامحدود و رایگان\n\n"
+        f"کانال: {meta['mbit']} مگابیت — ترافیک نامحدود و رایگان\n\n"
         f"قیمت خرید کامل ({cur_word}):\n"
         f"ساعتی: {round(ch, 5):g}\n"
         f"ماهانه: {round(cm, 2):g} (فلور {round(info.price_monthly or 0, 2):g} "
@@ -966,16 +980,21 @@ async def cb_gc_info(cb: CallbackQuery, session: AsyncSession):
 
 
 async def _import_one(session: AsyncSession, account: ProviderAccount,
-                      region: dict, info, group_name: str) -> ServerPlan:
-    from bot.services.gcore_settings import full_costs, get_default_disk_gb
+                      region: dict, info, group_name: str,
+                      volume_type: str = "standard") -> ServerPlan:
+    from bot.services.gcore_settings import (
+        VOLUME_TYPES, full_costs, get_default_disk_gb,
+    )
+    meta = VOLUME_TYPES.get(volume_type) or VOLUME_TYPES["standard"]
     disk_gb = await get_default_disk_gb(session)
-    dm = await _disk_monthly(session, account, int(region["id"]), disk_gb)
+    dm = await _disk_monthly(session, account, int(region["id"]), disk_gb, volume_type)
     ip_m = await _ip_monthly(session, account, int(region["id"]))
     ch, cm = full_costs(info.price_hourly or 0, info.price_monthly or 0, dm, ip_m)
     plan = ServerPlan(
         provider_type=ProviderType.GCORE,
         provider_account_id=account.id,
-        name=f"{info.provider_plan_id}-{region['slug']}",   # نام داخلی — یکتا با لوکیشن
+        # نام داخلی — یکتا با لوکیشن + پسوند نوع (پرسرعت = -hi)
+        name=f"{info.provider_plan_id}-{region['slug']}{meta['suffix']}",
         display_name=info.provider_plan_id.upper(),
         ram=info.ram, cpu=info.cpu, disk=disk_gb,
         bandwidth=0,                              # ترافیک جیکور نامحدود (0 = نامحدود)
@@ -991,6 +1010,9 @@ async def _import_one(session: AsyncSession, account: ProviderAccount,
             "flavor_cost_hourly": info.price_hourly,   # خرید خامِ flavor (برای سینک)
             "flavor_cost_monthly": info.price_monthly,
             "ip_cost_monthly": ip_m,              # External IP (fallback قیمت per-OS)
+            "volume_type": volume_type,           # نوع دیسک (create + قیمت‌گذاری)
+            "bandwidth_mbit": meta["mbit"],       # ۳۰۰ استاندارد / ۵۰۰ پرسرعت
+            "volume_label": meta["label"],        # لیبل مرحله‌ی «نوع سرور» خرید
             "region_id": int(region["id"]),       # برای فراخوانی‌های API
             "region_name": region["display_name"],  # لیبل مرحله‌ی لوکیشن خرید
         },
@@ -1023,18 +1045,23 @@ async def cb_gc_pick(cb: CallbackQuery, session: AsyncSession):
         return
     parts = cb.data.split(":")
     rid, pid = int(parts[2]), parts[3]
+    # واریانت نوع دیسک: s=استاندارد h=پرسرعت (کیبوردهای قدیمی بدون بخش نوع = s)
+    vt = "ssd_hiiops" if (len(parts) > 4 and parts[4] == "h") else "standard"
     region = await _gc_region(account, rid)
     if not region:
         await cb.answer("لوکیشن یافت نشد.", show_alert=True)
         return
 
-    existing = (await session.execute(
+    rows_all = (await session.execute(
         select(ServerPlan).where(
             ServerPlan.provider_type == ProviderType.GCORE,
             ServerPlan.provider_plan_id == pid,
             ServerPlan.location == region["slug"],
         )
-    )).scalar_one_or_none()
+    )).scalars().all()
+    existing = next(
+        (p for p in rows_all
+         if ((p.extra_data or {}).get("volume_type") or "standard") == vt), None)
 
     if existing:
         deleted, note = await _remove_plan(session, existing)
@@ -1050,7 +1077,7 @@ async def cb_gc_pick(cb: CallbackQuery, session: AsyncSession):
             await cb.answer("پلن در این لوکیشن موجود نیست.", show_alert=True)
             return
         group_name = await get_group_name(session)
-        await _import_one(session, account, region, info, group_name)
+        await _import_one(session, account, region, info, group_name, vt)
         await session.flush()
         mh, mm = await get_margins(session)
         if mh is not None or mm is not None:

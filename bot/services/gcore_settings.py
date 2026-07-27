@@ -36,6 +36,15 @@ _DEFAULT_GROUP = "Gcore"
 _DEFAULT_DISK_GB = 5    # دیسک پیش‌فرض Cloud VMهای جیکور (تصمیم 2026-07-22)
 
 
+# دو نوعِ سرور (تصمیم 2026-07-27 — الگوی نوعِ سرورِ تایم‌وب): نوعِ volume بوت
+# پهنای باند را هم تعیین می‌کند (مشاهده‌ی پنل: استاندارد ۳۰۰ / High IOPS ۵۰۰ مگابیت).
+# هر flavor دو واریانتِ پلن دارد؛ قیمتِ دیسک per-type از API خوانده می‌شود.
+VOLUME_TYPES = {
+    "standard":   {"label": "استاندارد", "mbit": 300, "suffix": ""},
+    "ssd_hiiops": {"label": "پرسرعت (High IOPS)", "mbit": 500, "suffix": "-hi"},
+}
+
+
 def is_excluded_flavor(flavor_id: str) -> bool:
     """خانواده‌های عرضه‌نشدنی (تصمیم‌های 2026-07-21/22):
     - Basic VM (CPU اشتراکی): «shared» در ID — بدون SLA/اسنپ‌شات، شبکه محدود
@@ -89,16 +98,18 @@ async def set_volume_rate(session: AsyncSession, value: float) -> None:
 
 
 async def disk_monthly_cost(session: AsyncSession, provider, region_id: int,
-                            disk_gb: int, cache: dict | None = None) -> float:
-    """هزینه‌ی ماهانه‌ی volume بوت (ارز اکانت).
+                            disk_gb: int, cache: dict | None = None,
+                            type_name: str = "standard") -> float:
+    """هزینه‌ی ماهانه‌ی volume بوت (ارز اکانت) — per نوعِ دیسک.
 
-    نرخ دستی >0 → override (disk×نرخ)؛ وگرنه قیمت زنده از
-    `provider.preview_volume_price` (endpoint رسمی pricing جیکور).
+    نرخ دستی >0 → override (disk×نرخ) **فقط برای نوع standard**؛ نوع پرسرعت
+    (ssd_hiiops) همیشه قیمت زنده از `provider.preview_volume_price` است.
     خطای API → 0 با لاگ (فراخوان باید قیمت قبلی را نگه دارد، نه صفر بفروشد)."""
+    type_name = type_name or "standard"
     rate = await get_volume_rate(session)
-    if rate > 0:
+    if rate > 0 and type_name == "standard":
         return float(disk_gb) * rate
-    key = (int(region_id), int(disk_gb))
+    key = (int(region_id), int(disk_gb), type_name)
     if cache is not None and key in cache:
         return cache[key]
     val = 0.0
@@ -106,12 +117,13 @@ async def disk_monthly_cost(session: AsyncSession, provider, region_id: int,
         try:
             import asyncio as _aio
             p = await _aio.wait_for(
-                provider.preview_volume_price(int(region_id), int(disk_gb)),
+                provider.preview_volume_price(int(region_id), int(disk_gb),
+                                              type_name=type_name),
                 timeout=20)
             val = float(p.get("price_per_month") or 0)
         except Exception as e:
-            logger.warning("gcore volume price preview failed (region %s, %sGB): %s",
-                           region_id, disk_gb, e)
+            logger.warning("gcore volume price preview failed (region %s, %sGB, %s): %s",
+                           region_id, disk_gb, type_name, e)
     if cache is not None:
         cache[key] = val
     return val
@@ -196,9 +208,12 @@ async def recompute_catalog_costs(session: AsyncSession, provider=None) -> int:
         if fh is None and fm is None:
             continue
         rid = int(extra.get("region_id") or 0)
-        dm = await disk_monthly_cost(session, provider, rid, int(p.disk or 0), cache)
+        _vt = extra.get("volume_type") or "standard"
+        dm = await disk_monthly_cost(session, provider, rid, int(p.disk or 0),
+                                     cache, type_name=_vt)
         ipm = await ip_monthly_cost(session, provider, rid, cache)
-        if (dm <= 0 and rate <= 0) or (ipm <= 0 and ip_rate <= 0):
+        if (dm <= 0 and (rate <= 0 or _vt != "standard")) \
+                or (ipm <= 0 and ip_rate <= 0):
             continue   # قیمت زنده در دسترس نیست — قیمت قبلی حفظ شود
         ch, cm = full_costs(float(fh or 0), float(fm or 0), dm, ipm)
         extra["cost_hourly"], extra["cost_monthly"] = ch, cm

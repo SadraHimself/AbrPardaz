@@ -1263,9 +1263,62 @@ async def cb_buy_location_type(cb: CallbackQuery, user: User, state: FSMContext,
     if not plans:
         await cb.answer("در این دسته محصولی موجود نیست.", show_alert=True)
         return
+    # جیکور: مرحله‌ی «نوع سرور» بر اساس نوع دیسک/سرعت (استاندارد ۳۰۰ / پرسرعت ۵۰۰
+    # مگابیت — الگوی نوعِ سرورِ تایم‌وب) اگر هر دو واریانت موجود باشند
+    _vts = {(p.extra_data or {}).get("volume_type") or "standard" for p in plans}
+    if len(_vts) > 1:
+        from bot.services.gcore_settings import VOLUME_TYPES
+        rows = []
+        for vt, meta in VOLUME_TYPES.items():
+            if vt not in _vts:
+                continue
+            short = "s" if vt == "standard" else "h"
+            rows.append([InlineKeyboardButton(
+                text=f"{meta['label']} — {meta['mbit']} مگابیت",
+                callback_data=f"buygcvol:{gid}:{loc}:{ftype}:{short}")])
+        rows.append([InlineKeyboardButton(
+            text="بازگشت", callback_data=f"buyloc:{gid}:{loc}",
+            **{"icon_custom_emoji_id": "5258236805890710909"})])
+        await state.set_state(BuyServerStates.selecting_plan)
+        await cb.message.edit_text(
+            '<tg-emoji emoji-id="5926980668624998964">🟡</tg-emoji> '
+            "نوع سرور را انتخاب کنید:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+        await cb.answer()
+        return
     # بازگشت از لیست پلن‌ها → همین صفحه‌ی نوع سرور (buyloc دوباره نوع‌ها را می‌سازد)
     await _render_plan_list(cb, state, session, group.name, plans,
                             back_cb=f"buyloc:{gid}:{loc}")
+
+
+@router.callback_query(_BUY_NAV_STATES, F.data.startswith("buygcvol:"))
+async def cb_buy_gc_vol(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
+    """جیکور: لیست پلن‌های یک لوکیشن+خانواده با نوعِ دیسک/سرعتِ انتخابی."""
+    _, gid, loc, ftype, short = cb.data.split(":")
+    vt = "ssd_hiiops" if short == "h" else "standard"
+    group = await session.get(ProductGroup, int(gid))
+    if not group or group.is_hidden:
+        await cb.answer("این گروه در دسترس نیست.", show_alert=True)
+        return
+    result = await session.execute(
+        select(ServerPlan).where(
+            ServerPlan.category == group.name,
+            ServerPlan.is_active == True,
+            ServerPlan.location == loc,
+        )
+    )
+    plans = sorted(
+        [p for p in result.scalars().all()
+         if _gc_flavor_type(p.provider_plan_id) == ftype
+         and ((p.extra_data or {}).get("volume_type") or "standard") == vt],
+        key=plan_sort_key)
+    if not plans:
+        await cb.answer("در این دسته محصولی موجود نیست.", show_alert=True)
+        return
+    await _render_plan_list(cb, state, session, group.name, plans,
+                            back_cb=f"buyloctype:{gid}:{loc}:{ftype}")
 
 
 @router.callback_query(BuyServerStates.selecting_plan, F.data.startswith("buyplan:"))
@@ -2007,6 +2060,11 @@ async def _show_confirm(msg, state: FSMContext, session, from_message=False, use
     if _pe.get("cpu_type_label"):
         _freq = f" @ {_pe['cpu_frequency']}GHz" if _pe.get("cpu_frequency") else ""
         cpu_line = f"• نوع پردازنده: {_pe['cpu_type_label']}{_freq}\n"
+    # جیکور: نوع دیسک/سرعت کانال (استاندارد ۳۰۰ / پرسرعت ۵۰۰ مگابیت)
+    if _pe.get("volume_label"):
+        _mb = _pe.get("bandwidth_mbit")
+        cpu_line += (f"• نوع سرور: {_pe['volume_label']}"
+                     + (f" — {_mb} مگابیت" if _mb else "") + "\n")
     # موقعیت: شهر واقعی (region_name) به‌جای کد خام لوکیشن
     loc_show = _pe.get("region_name") or plan.location or "نامشخص"
     discount_line = f"• تخفیف: {discount_pct:.0f}% (قیمت اصلی: {base_price:,.0f} T)\n" if discount_pct else ""
@@ -2097,17 +2155,19 @@ async def _gcore_os_pricing(session: AsyncSession, plan: ServerPlan,
     else:
         flavor_h = float(extra.get("flavor_cost_hourly") or 0)
 
+    _vt = extra.get("volume_type") or "standard"
     rate = await get_volume_rate(session)
-    if rate > 0:
+    if rate > 0 and _vt == "standard":   # نرخ دستی فقط برای دیسک استاندارد
         vol_h = disk_used * rate / 720.0
     else:
-        vkey = (account.id, rid, disk_used)
+        vkey = (account.id, rid, disk_used, _vt)
         cached = _gc_volprice_cache.get(vkey)
         if cached and now - cached[0] < 300:
             vol_h = cached[1]
         else:
             p = await _aio.wait_for(
-                prov.preview_volume_price(rid, disk_used), timeout=15)
+                prov.preview_volume_price(rid, disk_used, type_name=_vt),
+                timeout=15)
             vol_h = float(p.get("price_per_hour") or 0) or \
                 float(p.get("price_per_month") or 0) / 720.0
             if vol_h <= 0:

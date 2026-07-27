@@ -839,13 +839,15 @@ async def _render_gc_family(msg, session: AsyncSession, account: ProviderAccount
         # تکرارِ مشخصات (خودِ اسم flavor یعنی cpu-ram) و بدون پهنای باند تا متن
         # کوتاه بماند و نوع همیشه دیده شود
         for vt in vt_offer:
-            meta = VOLUME_TYPES[vt]
             mark = "✅" if (p.provider_plan_id, vt) in imported else "⬜"
             short = "s" if vt == "standard" else "h"
+            # کوتاه که هیچ‌وقت بریده نشود: نوعِ High با ⚡ اولِ متن مشخص می‌شود
+            # (Standard بدون تگ)؛ قیمت ۲ رقم اعشار
+            _tag = "" if vt == "standard" else "⚡"
             rows.append([
                 InlineKeyboardButton(
-                    text=f"{mark} {p.provider_plan_id} · {meta['label']} · "
-                         f"{_sym(p.currency)}{p.price_monthly:g}",
+                    text=f"{mark}{_tag} {p.provider_plan_id} · "
+                         f"{_sym(p.currency)}{p.price_monthly:.2f}",
                     callback_data=f"admin:gcpick:{rid}:{p.provider_plan_id}:{short}",
                 ),
                 InlineKeyboardButton(
@@ -869,8 +871,8 @@ async def _render_gc_family(msg, session: AsyncSession, account: ProviderAccount
     ])
     rows.append([InlineKeyboardButton(text="بازگشت", callback_data=f"admin:gcloc:{rid}")])
     if "ssd_hiiops" in vt_offer:
-        _types_line = ("هر پلن دو نوع دارد: Standard (کانال ۳۰۰) · High CPU (کانال ۵۰۰ + دیسک پرسرعت)\n"
-                       f"دیسک {disk_gb} گیگ: Standard ≈ {dm_std:g} · High CPU ≈ {dm_hi:g} در ماه\n")
+        _types_line = ("بدون علامت = Standard (کانال ۳۰۰) · ⚡ = High CPU (کانال ۵۰۰ + دیسک پرسرعت)\n"
+                       f"دیسک {disk_gb} گیگ: Standard ≈ {dm_std:g} · High ≈ {dm_hi:g} در ماه\n")
     else:
         _types_line = ("این لوکیشن نوع High CPU ندارد — فقط Standard.\n"
                        f"دیسک {disk_gb} گیگ ≈ {dm_std:g} در ماه\n")

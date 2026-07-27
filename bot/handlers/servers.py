@@ -53,6 +53,26 @@ _HZ_LOC_META = {
     "sin":  ("5292144120993686909", "Singapore"),
 }
 
+# پرچم پریمیوم لوکیشن‌های تایم‌وب — بر اساس کشورِ اسلاگ (ru-3 → روسیه؛
+# همه‌ی شهرهای روسیه یک پرچم دارند)
+_TW_COUNTRY_FLAGS = {
+    "ru": "5449408995691341691",   # روسیه (همه‌ی ریجن‌ها)
+    "de": "5409360418520967565",   # آلمان
+    "nl": "5411124743841524806",   # هلند
+    "kz": "5228718354658769982",   # قزاقستان
+    "us": "5927292517610426176",   # آمریکا
+}
+
+
+def _loc_flag(loc: str | None) -> str | None:
+    """اموجی پرچم یک لوکیشن: اول نگاشت هتزنر، بعد کشورِ اسلاگ (تایم‌وب)."""
+    if not loc:
+        return None
+    meta = _HZ_LOC_META.get(loc)
+    if meta:
+        return meta[0]
+    return _TW_COUNTRY_FLAGS.get(loc.split("-")[0].lower())
+
 
 # نوع flavor جیکور از توکن دوم ID («g2-standard-…» → standard) — مرحله «نوع سرور»
 _GC_TYPE_LABELS = {
@@ -1066,7 +1086,8 @@ async def _select_category(cb: CallbackQuery, user: User, state: FSMContext,
         rows = []
         pair = []
         for loc in locs:
-            emoji_id, label = _HZ_LOC_META.get(loc, (None, _dyn_labels.get(loc, loc)))
+            _, label = _HZ_LOC_META.get(loc, (None, _dyn_labels.get(loc, loc)))
+            emoji_id = _loc_flag(loc)
             kw = {"icon_custom_emoji_id": emoji_id} if emoji_id else {}
             pair.append(InlineKeyboardButton(text=label, callback_data=f"buyloc:{gid}:{loc}", **kw))
             if len(pair) == 2:
@@ -1110,9 +1131,9 @@ async def _render_plan_list(cb: CallbackQuery, state: FSMContext, session: Async
         # می‌دارد تا با متن فارسی تداخل نکند.
         _code = plan.display_name or plan.name
         label = f"‏⁦{_code}⁩ | {specs}"
-        # اموجی پریمیوم اختصاصی محصول؛ وگرنه پرچمِ لوکیشن (هتزنر)
+        # اموجی پریمیوم اختصاصی محصول؛ وگرنه پرچمِ لوکیشن (هتزنر/تایم‌وب)
         _pe = (plan.extra_data or {}).get("emoji_id") \
-            or _HZ_LOC_META.get(plan.location or "", (None,))[0]
+            or _loc_flag(plan.location)
         _kw = {"icon_custom_emoji_id": _pe} if _pe else {}
         builder.button(text=label, callback_data=f"buyplan:{plan.id}", **_kw)
     builder.button(text="بازگشت", callback_data=back_cb, **{"icon_custom_emoji_id": "5258236805890710909"})

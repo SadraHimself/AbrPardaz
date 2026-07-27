@@ -794,9 +794,11 @@ async def cb_gc_location(cb: CallbackQuery, session: AsyncSession):
     for pid, _vt in imported:
         fams.setdefault(_family(pid), [])
 
+    # تعداد واریانت به موجودیِ نوع دیسک در region بستگی دارد (پرسرعت همه‌جا نیست)
+    _nvt = 2 if "ssd_hiiops" in (region.get("volume_types") or []) else 1
     rows = []
     for fam in sorted(fams):
-        total = len(fams[fam]) * 2   # هر flavor دو واریانت (استاندارد/پرسرعت)
+        total = len(fams[fam]) * _nvt
         n_imp = sum(1 for (pid, _v) in imported if _family(pid) == fam)
         rows.append([InlineKeyboardButton(
             text=f"{fam} ({n_imp}/{total})",
@@ -822,14 +824,21 @@ async def _render_gc_family(msg, session: AsyncSession, account: ProviderAccount
              and not _is_excluded(p.provider_plan_id)]
     imported = await _imported_map(session, region["slug"])
     disk_gb = await get_default_disk_gb(session)
+    # انواع دیسکِ واقعاً موجود در این region (از available_volume_types خود API —
+    # مثلاً قزاقستان پرسرعت ندارد) → واریانتِ ناموجود اصلاً نمایش/ایمپورت نمی‌شود
+    _avail = set(region.get("volume_types") or [])
+    _avail.add("standard")
+    vt_offer = [vt for vt in VOLUME_TYPES if vt in _avail]
     dm_std = await _disk_monthly(session, account, rid, disk_gb, "standard")
-    dm_hi = await _disk_monthly(session, account, rid, disk_gb, "ssd_hiiops")
+    dm_hi = (await _disk_monthly(session, account, rid, disk_gb, "ssd_hiiops")
+             if "ssd_hiiops" in vt_offer else 0.0)
 
     rows = []
     for p in sorted(plans, key=lambda x: (x.price_monthly or 0)):
         ram_g = p.ram // 1024 if p.ram >= 1024 else p.ram
-        # هر flavor دو واریانت: استاندارد ۳۰۰ مگابیت / پرسرعت ۵۰۰ مگابیت
-        for vt, meta in VOLUME_TYPES.items():
+        # هر flavor یک ردیف به‌ازای هر نوعِ موجود: استاندارد ۳۰۰ / پرسرعت ۵۰۰ مگابیت
+        for vt in vt_offer:
+            meta = VOLUME_TYPES[vt]
             mark = "✅" if (p.provider_plan_id, vt) in imported else "⬜"
             short = "s" if vt == "standard" else "h"
             rows.append([
@@ -858,11 +867,16 @@ async def _render_gc_family(msg, session: AsyncSession, account: ProviderAccount
         InlineKeyboardButton(text="حذف همه", callback_data=f"admin:gcfamoff:{rid}:{fam}"),
     ])
     rows.append([InlineKeyboardButton(text="بازگشت", callback_data=f"admin:gcloc:{rid}")])
+    if "ssd_hiiops" in vt_offer:
+        _types_line = ("هر پلن دو نوع دارد: 300Mb = استاندارد · 500Mb = پرسرعت (High IOPS)\n"
+                       f"دیسک {disk_gb} گیگ: استاندارد ≈ {dm_std:g} · پرسرعت ≈ {dm_hi:g} در ماه\n")
+    else:
+        _types_line = ("این لوکیشن دیسک پرسرعت (High IOPS) ندارد — فقط استاندارد (300Mb).\n"
+                       f"دیسک {disk_gb} گیگ ≈ {dm_std:g} در ماه\n")
     await msg.edit_text(
         f"<b>{fam} — {region['display_name']}</b>\n\n"
-        "هر پلن دو نوع دارد: 300Mb = استاندارد · 500Mb = پرسرعت (High IOPS)\n"
+        + _types_line +
         "عدد = قیمت خرید ماهانه‌ی flavor (بدون دیسک/IP) · تپ = افزودن/حذف · ℹ️ = جزئیات\n"
-        f"دیسک {disk_gb} گیگ: استاندارد ≈ {dm_std:g} · پرسرعت ≈ {dm_hi:g} در ماه\n"
         "<i>محصول تازه‌ایمپورت‌شده تا تعیین سود غیرفعال می‌ماند.</i>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
@@ -888,9 +902,14 @@ async def cb_gc_family_all_on(cb: CallbackQuery, session: AsyncSession):
     imported = await _imported_map(session, region["slug"])
     group_name = await get_group_name(session)
     from bot.services.gcore_settings import VOLUME_TYPES
+    # فقط انواعِ دیسکِ واقعاً موجود در این region (پرسرعت همه‌جا نیست)
+    _avail = set(region.get("volume_types") or [])
+    _avail.add("standard")
     added = 0
     for info in plans:
-        for vt in VOLUME_TYPES:   # هر flavor دو واریانت: استاندارد + پرسرعت
+        for vt in VOLUME_TYPES:
+            if vt not in _avail:
+                continue
             if (info.provider_plan_id, vt) in imported:
                 continue
             await _import_one(session, account, region, info, group_name, vt)
@@ -965,16 +984,17 @@ async def cb_gc_info(cb: CallbackQuery, session: AsyncSession):
     ram_g = info.ram // 1024 if info.ram >= 1024 else info.ram
     cur_word = {"usd": "دلار", "eur": "یورو"}.get(
         (info.currency or "usd").lower(), (info.currency or "").upper())
-    # قالبِ خوانا: هر مقدار در خط خودش با لیبل فارسی — بدون اسلش/علامتِ چسبیده
-    # که ترتیب متن RTL را به‌هم می‌ریزد
+    # قالبِ خوانا و فشرده — سقف پاپ‌آپ تلگرام ۲۰۰ کاراکتر است (متنِ بلندتر کلاً
+    # reject می‌شود؛ باگ قبلی: واریانت پرسرعت با لیبل بلند از ۲۰۰ رد می‌شد)
+    _short = "پرسرعت" if vt == "ssd_hiiops" else "استاندارد"
     await cb.answer(
-        f"{pid} — {meta['label']}\n"
-        f"{info.cpu} هسته | {ram_g} گیگ رم | {disk_gb} گیگ دیسک\n"
-        f"کانال: {meta['mbit']} مگابیت — ترافیک نامحدود و رایگان\n\n"
-        f"قیمت خرید کامل ({cur_word}):\n"
-        f"ساعتی: {round(ch, 5):g}\n"
-        f"ماهانه: {round(cm, 2):g} (فلور {round(info.price_monthly or 0, 2):g} "
-        f"+ دیسک {round(dm, 2):g} + آی‌پی {round(ip_m, 2):g})",
+        (f"{pid} · {_short}\n"
+         f"{info.cpu} هسته | {ram_g} گیگ رم | {disk_gb} گیگ | {meta['mbit']}Mb\n"
+         "ترافیک نامحدود رایگان\n\n"
+         f"خرید ({cur_word}):\n"
+         f"ساعتی: {round(ch, 5):g}\n"
+         f"ماهانه: {round(cm, 2):g} (فلور {round(info.price_monthly or 0, 2):g} "
+         f"+ دیسک {round(dm, 2):g} + IP {round(ip_m, 2):g})")[:195],
         show_alert=True,
     )
 
@@ -1070,6 +1090,10 @@ async def cb_gc_pick(cb: CallbackQuery, session: AsyncSession):
     else:
         if _is_excluded(pid):
             await cb.answer("این خانواده ارائه نمی‌شود (Basic VM / memory).", show_alert=True)
+            return
+        # واریانتِ پرسرعت فقط اگر region واقعاً ssd_hiiops دارد (API-محور)
+        if vt == "ssd_hiiops" and "ssd_hiiops" not in (region.get("volume_types") or []):
+            await cb.answer("این لوکیشن دیسک پرسرعت (High IOPS) ندارد.", show_alert=True)
             return
         plans = await _region_plans(account, rid)
         info = next((p for p in plans if p.provider_plan_id == pid), None)

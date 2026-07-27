@@ -572,7 +572,8 @@ class GcoreProvider(BaseProvider):
         تمرکز فروش روی Cloud VM است نه Basic VM (تصمیم پروژه 2026-07-21) →
         regionهایی که فقط Basic VM دارند (has_kvm=false) لیست نمی‌شوند."""
         data = await self._request(
-            "GET", "/cloud/v1/regions", params={"limit": "200"})
+            "GET", "/cloud/v1/regions",
+            params={"limit": "200", "show_volume_types": "true"})
         out = []
         for r in data.get("results") or []:
             if not r.get("has_kvm"):
@@ -583,6 +584,10 @@ class GcoreProvider(BaseProvider):
                 "slug": r.get("slug") or str(r.get("id")),
                 "country": r.get("country") or "",
                 "zone": r.get("zone") or "",
+                # انواع دیسکِ واقعاً موجود در region (standard/ssd_hiiops/cold…)
+                # — مبنای نمایش/ایمپورتِ واریانتِ پرسرعت؛ خالی = فقط استاندارد
+                "volume_types": [str(v) for v in
+                                 (r.get("available_volume_types") or [])],
             })
         out.sort(key=lambda x: x["display_name"])
         return out

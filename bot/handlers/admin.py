@@ -812,6 +812,14 @@ async def group_edit_name(message: Message, state: FSMContext, session: AsyncSes
     await session.execute(
         update(ServerPlan).where(ServerPlan.category == old_name).values(category=new_name)
     )
+    # اگر این گروه «گروه مقصدِ» یک provider است (هتزنر/جیکور/تایم‌وب/روت)، تنظیمِ
+    # ذخیره‌شده هم باید همراهش عوض شود — وگرنه ایمپورت/سینکِ بعدی گروهی با اسمِ
+    # قدیمی از نو می‌سازد و محصولات جدید آنجا می‌روند (دوپارگی کاتالوگ).
+    from bot.database.models import BotSettings
+    for _key in ("hetzner_group", "gcore_group", "timeweb_group", "rootvds_group"):
+        _row = await session.get(BotSettings, _key)
+        if _row and (_row.value or "") == old_name:
+            _row.value = new_name
     await session.flush()
     await _render_group_detail(message, session, group, edit=False)
 

@@ -289,10 +289,10 @@ class ServerService:
         if action == "unsuspend":
             ok = await provider.unsuspend_server(sid)
             if ok:
-                server.status = ServerStatus.ACTIVE
-                server.suspend_reason = None
-                server.suspended_at = None
-                await self.session.flush()
+                # از مسیرِ واحدِ بیلینگ — علاوه بر وضعیت، لنگرِ کسر ساعتی را هم
+                # ریست می‌کند تا دوره‌ی تعلیق retro-charge نشود
+                from bot.services.billing import BillingService
+                await BillingService(self.session).unsuspend_server_db(server)
             return ok
         if action == "change_ip":
             new_ip = await provider.change_ip(sid)

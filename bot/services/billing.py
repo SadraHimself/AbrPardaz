@@ -116,14 +116,19 @@ class BillingService:
             description=f"ساعتی — {server.name}",
         )
         if success:
-            now = datetime.now(timezone.utc)
-            # Anchor last_billed_at to creation time to prevent cumulative drift.
-            # e.g. created at 02:19 → bills at 03:19, 04:19, 05:19 exactly.
+            # لنگر دقیقاً «یک ساعت» از قبلی جلو می‌رود (روی گریدِ ساعتِ ساخت —
+            # بدون drift). ساعت‌های عقب‌افتاده (داون‌تایم worker / نبودِ نرخ ارز)
+            # در اجراهای بعدیِ تسکِ دقیقه‌ای یکی‌یکی کسر می‌شوند، نه بخشیده.
+            # ⚠️ قبلاً لنگر به «ساعتِ فعلی» می‌پرید و هر ساعتِ عقب‌افتاده مجانی
+            # رد می‌شد. دوره‌ی تعلیق retro-charge نمی‌شود چون unsuspend_server_db
+            # لنگر را به موقعیتِ فعلیِ گرید ریست می‌کند.
             created = server.created_at
             if created.tzinfo is None:
                 created = created.replace(tzinfo=timezone.utc)
-            elapsed_hours = int((now - created).total_seconds() // 3600)
-            server.last_billed_at = created + timedelta(hours=max(elapsed_hours, 1))
+            prev = server.last_billed_at or created
+            if prev.tzinfo is None:
+                prev = prev.replace(tzinfo=timezone.utc)
+            server.last_billed_at = max(prev, created) + timedelta(hours=1)
         return success
 
     # ── Monthly billing ───────────────────────────────────────────────────────
@@ -183,6 +188,16 @@ class BillingService:
         server.status = ServerStatus.ACTIVE
         server.suspend_reason = None
         server.suspended_at = None
+        # لنگرِ بیلینگ ساعتی به موقعیتِ فعلی روی گریدِ ساختِ سرور ریست می‌شود تا
+        # دوره‌ی تعلیق retro-charge نشود (کسرِ بعدی = یک ساعت بعد از همین لحظه).
+        if server.billing_type == BillingType.HOURLY:
+            created = server.created_at
+            if created and created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            if created:
+                elapsed = int((datetime.now(timezone.utc) - created)
+                              .total_seconds() // 3600)
+                server.last_billed_at = created + timedelta(hours=max(elapsed, 0))
         await self.session.flush()
 
     # ── Traffic billing ───────────────────────────────────────────────────────

@@ -126,12 +126,15 @@ def run_snapshot_billing(self):
                         snap.user_id, amount,
                         description=f"اسنپ‌شات — {snap.source_server_name or '—'}")
                     if ok:
-                        # anchor به ساخت، مثل بیلینگ ساعتی سرور (بدون drift)
+                        # لنگر +۱ ساعت از قبلی (روی گریدِ ساخت، بدون drift) —
+                        # ساعت‌های عقب‌افتاده در اجراهای بعدی کسر می‌شوند نه بخشیده
                         created = snap.created_at
                         if created.tzinfo is None:
                             created = created.replace(tzinfo=timezone.utc)
-                        elapsed = int((datetime.now(timezone.utc) - created).total_seconds() // 3600)
-                        snap.last_billed_at = created + timedelta(hours=max(elapsed, 1))
+                        prev = snap.last_billed_at or created
+                        if prev.tzinfo is None:
+                            prev = prev.replace(tzinfo=timezone.utc)
+                        snap.last_billed_at = max(prev, created) + timedelta(hours=1)
                     else:
                         # موجودی ناکافی → حذف اسنپ‌شات
                         try:

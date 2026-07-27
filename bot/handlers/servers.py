@@ -1273,8 +1273,9 @@ async def cb_buy_location_type(cb: CallbackQuery, user: User, state: FSMContext,
             if vt not in _vts:
                 continue
             short = "s" if vt == "standard" else "h"
+            # فقط اسم نوع (Standard / High CPU) — سرعت در صفحه‌ی تأیید می‌آید
             rows.append([InlineKeyboardButton(
-                text=f"{meta['label']} — {meta['mbit']} مگابیت",
+                text=meta["label"],
                 callback_data=f"buygcvol:{gid}:{loc}:{ftype}:{short}")])
         rows.append([InlineKeyboardButton(
             text="بازگشت", callback_data=f"buyloc:{gid}:{loc}",
@@ -2230,9 +2231,13 @@ def _fmt_mbit(mbit) -> str:
 
 def _traffic_desc(plan: ServerPlan) -> str:
     """شرح ترافیک پلن: حجمی (GB) یا نامحدود؛ برای providerهای با سرعت کانال
-    (تایم‌وب) سرعت به‌صورت گیگابیت/مگابیت تمیز ذکر می‌شود."""
+    (تایم‌وب) سرعت به‌صورت گیگابیت/مگابیت تمیز ذکر می‌شود.
+    جیکور: سرعت در دکمه‌ها نمی‌آید (نوعِ Standard/High CPU مرحله‌ی جداست و
+    سرعت فقط در صفحه‌ی تأیید نمایش داده می‌شود — تصمیم 2026-07-27)."""
     if plan.bandwidth:
         return f"{plan.bandwidth} GB"
+    if plan.provider_type == ProviderType.GCORE:
+        return "نامحدود"
     speed = _fmt_mbit((plan.extra_data or {}).get("bandwidth_mbit"))
     if speed:
         return f"نامحدود — سرعت {speed}"

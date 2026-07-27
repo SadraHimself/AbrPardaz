@@ -835,19 +835,17 @@ async def _render_gc_family(msg, session: AsyncSession, account: ProviderAccount
 
     rows = []
     for p in sorted(plans, key=lambda x: (x.price_monthly or 0)):
-        ram_g = p.ram // 1024 if p.ram >= 1024 else p.ram
-        # هر flavor یک ردیف به‌ازای هر نوعِ موجود: استاندارد ۳۰۰ / پرسرعت ۵۰۰ مگابیت
+        # هر flavor یک ردیف به‌ازای هر نوعِ موجود (Standard / High CPU) — بدون
+        # تکرارِ مشخصات (خودِ اسم flavor یعنی cpu-ram) و بدون پهنای باند تا متن
+        # کوتاه بماند و نوع همیشه دیده شود
         for vt in vt_offer:
             meta = VOLUME_TYPES[vt]
             mark = "✅" if (p.provider_plan_id, vt) in imported else "⬜"
             short = "s" if vt == "standard" else "h"
-            # سرعت اولِ دکمه — آخرِ متن در دکمه‌های باریک بریده می‌شود و دو
-            # واریانت عینِ هم دیده می‌شدند («standard» داخل اسم flavor = خانواده‌ی
-            # پردازنده است، ربطی به نوع دیسک ندارد)
             rows.append([
                 InlineKeyboardButton(
-                    text=f"{mark} {meta['mbit']}Mb | {p.provider_plan_id} · "
-                         f"{p.cpu}c/{ram_g}G · {_sym(p.currency)}{p.price_monthly:g}",
+                    text=f"{mark} {p.provider_plan_id} · {meta['label']} · "
+                         f"{_sym(p.currency)}{p.price_monthly:g}",
                     callback_data=f"admin:gcpick:{rid}:{p.provider_plan_id}:{short}",
                 ),
                 InlineKeyboardButton(
@@ -871,10 +869,10 @@ async def _render_gc_family(msg, session: AsyncSession, account: ProviderAccount
     ])
     rows.append([InlineKeyboardButton(text="بازگشت", callback_data=f"admin:gcloc:{rid}")])
     if "ssd_hiiops" in vt_offer:
-        _types_line = ("هر پلن دو نوع دارد: 300Mb = استاندارد · 500Mb = پرسرعت (High IOPS)\n"
-                       f"دیسک {disk_gb} گیگ: استاندارد ≈ {dm_std:g} · پرسرعت ≈ {dm_hi:g} در ماه\n")
+        _types_line = ("هر پلن دو نوع دارد: Standard (کانال ۳۰۰) · High CPU (کانال ۵۰۰ + دیسک پرسرعت)\n"
+                       f"دیسک {disk_gb} گیگ: Standard ≈ {dm_std:g} · High CPU ≈ {dm_hi:g} در ماه\n")
     else:
-        _types_line = ("این لوکیشن دیسک پرسرعت (High IOPS) ندارد — فقط استاندارد (300Mb).\n"
+        _types_line = ("این لوکیشن نوع High CPU ندارد — فقط Standard.\n"
                        f"دیسک {disk_gb} گیگ ≈ {dm_std:g} در ماه\n")
     await msg.edit_text(
         f"<b>{fam} — {region['display_name']}</b>\n\n"
@@ -989,7 +987,7 @@ async def cb_gc_info(cb: CallbackQuery, session: AsyncSession):
         (info.currency or "usd").lower(), (info.currency or "").upper())
     # قالبِ خوانا و فشرده — سقف پاپ‌آپ تلگرام ۲۰۰ کاراکتر است (متنِ بلندتر کلاً
     # reject می‌شود؛ باگ قبلی: واریانت پرسرعت با لیبل بلند از ۲۰۰ رد می‌شد)
-    _short = "پرسرعت" if vt == "ssd_hiiops" else "استاندارد"
+    _short = meta["label"]
     await cb.answer(
         (f"{pid} · {_short}\n"
          f"{info.cpu} هسته | {ram_g} گیگ رم | {disk_gb} گیگ | {meta['mbit']}Mb\n"

@@ -447,14 +447,19 @@ def sync_gcore_catalog(self):
                                 await log.log_plan_unavailable(
                                     plan.display_name or plan.name, loc_label)
                             continue
-                        # نوع دیسک/سرعت: پلن‌های قدیمیِ بدون volume_type = استاندارد
-                        # (self-heal — از این به بعد هر flavor دو واریانت دارد)
+                        # نوع دیسک/سرعت: پلن‌های قدیمیِ بدون volume_type = Standard؛
+                        # لیبل/سرعت همیشه با VOLUME_TYPES نرمال می‌شود (self-heal —
+                        # تغییرِ برندینگ روی پلن‌های ایمپورت‌شده‌ی قبلی هم بنشیند)
+                        from bot.services.gcore_settings import VOLUME_TYPES as _VTS
                         _vt = extra.get("volume_type") or "standard"
+                        _vmeta = _VTS.get(_vt) or _VTS["standard"]
                         changed = False
-                        if not extra.get("volume_type"):
+                        if extra.get("volume_type") != _vt or \
+                           extra.get("volume_label") != _vmeta["label"] or \
+                           extra.get("bandwidth_mbit") != _vmeta["mbit"]:
                             extra["volume_type"] = _vt
-                            extra.setdefault("bandwidth_mbit", 300)
-                            extra.setdefault("volume_label", "استاندارد")
+                            extra["volume_label"] = _vmeta["label"]
+                            extra["bandwidth_mbit"] = _vmeta["mbit"]
                             changed = True
                         # قیمت خرید کامل = flavor تازه + دیسک (per نوع) + External IP
                         # (نرخ دستی یا قیمت زنده از API). زنده‌ی ناموفق → قیمت قبلی حفظ

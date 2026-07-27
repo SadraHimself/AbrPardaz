@@ -39,9 +39,11 @@ _DEFAULT_DISK_GB = 5    # دیسک پیش‌فرض Cloud VMهای جیکور (ت
 # دو نوعِ سرور (تصمیم 2026-07-27 — الگوی نوعِ سرورِ تایم‌وب): نوعِ volume بوت
 # پهنای باند را هم تعیین می‌کند (مشاهده‌ی پنل: استاندارد ۳۰۰ / High IOPS ۵۰۰ مگابیت).
 # هر flavor دو واریانتِ پلن دارد؛ قیمتِ دیسک per-type از API خوانده می‌شود.
+# برندینگ (تصمیم 2026-07-27): از دید کاربر Standard / High CPU — بدون ذکر پهنای
+# باند در دکمه‌ها؛ سرعت فقط در صفحه‌ی تأیید نهایی کنار بقیه‌ی مشخصات می‌آید.
 VOLUME_TYPES = {
-    "standard":   {"label": "استاندارد", "mbit": 300, "suffix": ""},
-    "ssd_hiiops": {"label": "پرسرعت (High IOPS)", "mbit": 500, "suffix": "-hi"},
+    "standard":   {"label": "Standard", "mbit": 300, "suffix": ""},
+    "ssd_hiiops": {"label": "High CPU", "mbit": 500, "suffix": "-hi"},
 }
 
 

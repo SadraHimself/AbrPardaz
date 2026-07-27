@@ -1117,13 +1117,22 @@ async def _select_category(cb: CallbackQuery, user: User, state: FSMContext,
         for p in plans:
             if p.location and (p.extra_data or {}).get("region_name"):
                 _dyn_labels[p.location] = p.extra_data["region_name"]
+        _labels = {loc: _HZ_LOC_META.get(loc, (None, _dyn_labels.get(loc, loc)))[1]
+                   for loc in locs}
+        # پسوند عددی فقط وقتی حذف می‌شود که ابهام نسازد: اگر دو ریجنِ هم‌شهر
+        # (Paris-1 و Paris-2) هم‌زمان فعال باشند، پسوندها می‌مانند
+        from collections import Counter as _LCounter
+        _ccount = _LCounter(_clean_loc_label(l) for l in _labels.values())
         rows = []
         pair = []
         for loc in locs:
-            _, label = _HZ_LOC_META.get(loc, (None, _dyn_labels.get(loc, loc)))
+            label = _labels[loc]
+            shown = _clean_loc_label(label)
+            if _ccount[shown] > 1:
+                shown = label
             emoji_id = _loc_flag(loc, label)
             kw = {"icon_custom_emoji_id": emoji_id} if emoji_id else {}
-            pair.append(InlineKeyboardButton(text=_clean_loc_label(label),
+            pair.append(InlineKeyboardButton(text=shown,
                                              callback_data=f"buyloc:{gid}:{loc}", **kw))
             if len(pair) == 2:
                 rows.append(pair)

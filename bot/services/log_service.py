@@ -140,6 +140,20 @@ class LogService:
             f"{await self._origin_line(server)}",
         )
 
+    async def log_traffic_purchase(self, user: User, server: Server,
+                                   gb: float, amount: float) -> None:
+        """خرید ترافیک اضافه — هم‌قالبِ لاگ خرید."""
+        await self._send(
+            "purchase",
+            f"📶 <b>خرید ترافیک</b>\n\n"
+            f"{self._user_line(user)}\n"
+            f"📦 بسته: {gb:.0f} گیگابایت\n"
+            f"🖥 سرور: {server.name}\n"
+            f"🌐 آیپی: <code>{server.ip_address or '—'}</code>\n"
+            f"💵 مبلغ: {amount:,.0f} تومان"
+            f"{await self._origin_line(server)}",
+        )
+
     async def log_ip_change(self, user: User, server: Server,
                             old_ip: str, new_ip: str, fee: float = 0) -> None:
         fee_line = f"\n💵 هزینه: <b>{fee:,.0f} تومان</b>" if fee > 0 else "\n💵 هزینه: رایگان"

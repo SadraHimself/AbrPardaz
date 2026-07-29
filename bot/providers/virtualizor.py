@@ -1,6 +1,7 @@
 """Virtualizor KVM API client."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -753,9 +754,61 @@ class VirtualizorProvider(BaseProvider):
         await _revert()
         raise RuntimeError("افزودن آی‌پی دوم برای این سرور توسط پنل انجام نشد")
 
+    async def _vs_row(self, server_id: str) -> dict:
+        """رکورد خام یک VPS از act=vs (کلید = vpsid)."""
+        data = await self._request("vs", query={"vpsid": server_id})
+        vs_list = data.get("vs", {}) or {}
+        return vs_list.get(str(server_id)) or (next(iter(vs_list.values())) if vs_list else {})
+
+    async def get_bandwidth_quota(self, server_id: str) -> int:
+        """سهمیه‌ی ترافیک فعلی (GB). صفر = نامحدود."""
+        vs = await self._vs_row(server_id)
+        try:
+            return int(float(vs.get("bandwidth") or 0))
+        except (TypeError, ValueError):
+            return 0
+
     async def add_traffic(self, server_id: str, gb: int) -> bool:
-        # vpsid in URL query; editvps=1 submit trigger + bandwidth in POST body
-        data = await self._request("managevps", {"editvps": 1, "bandwidth": gb}, query={"vpsid": server_id})
-        done_val = data.get("done")
-        return bool(done_val) if not isinstance(done_val, dict) else bool(done_val.get("done"))
+        """افزودن ترافیک به سهمیه‌ی فعلی.
+
+        ⚠️ فیلد `bandwidth` در managevps «مقدار کل» است نه افزایشی (همان فیلدِ
+        addvs و همان فیلدی که act=vs برمی‌گرداند). باگ قبلی: مستقیم gb نوشته
+        می‌شد → سهمیه‌ی ۱۰۰۰گیگی با خرید ۱۰۰گیگ به ۱۰۰ **کاهش** می‌یافت.
+        الگوی درست (مثل add_extra_ip): خواندن مقدار فعلی → نوشتن مجموع →
+        بازخوانی و تأیید.
+        """
+        gb = int(gb)
+        if gb <= 0:
+            return True
+        current = await self.get_bandwidth_quota(server_id)
+        if current <= 0:
+            # صفر = نامحدود؛ نوشتن gb سهمیه را از نامحدود به gb محدود می‌کرد
+            raise RuntimeError("ترافیک این سرویس نامحدود است — نیازی به خرید ترافیک نیست.")
+        target = current + gb
+        await self._request("managevps", {"editvps": 1, "bandwidth": target},
+                            query={"vpsid": server_id})
+        # تأیید از منبع معتبر (پاسخ managevps قابل‌اتکا نیست).
+        # ⚠️ «خطای خواندن» با «اعمال‌نشدن» فرق دارد: اگر بازخوانی خطا داد یا
+        # پنل هنوز کهنه بود، دوباره تلاش می‌کنیم؛ خطا فقط وقتی داده می‌شود که
+        # یک خواندنِ موفق واقعاً مقدار کمتر برگرداند (وگرنه caller وجه را
+        # برمی‌گرداند در حالی که ترافیک روی پنل اضافه شده = ترافیک مجانی).
+        last_read: int | None = None
+        for attempt in range(3):
+            if attempt:
+                await asyncio.sleep(2)
+            try:
+                last_read = await self.get_bandwidth_quota(server_id)
+            except Exception:
+                last_read = None
+                continue
+            if last_read >= target:
+                return True
+        if last_read is not None and last_read < target:
+            raise RuntimeError(
+                f"افزودن ترافیک تأیید نشد (سهمیه: {last_read}GB به‌جای {target}GB).")
+        # بازخوانی قطعی نشد — احتمال زیاد نوشتن انجام شده؛ موفق در نظر می‌گیریم
+        # (برگرداندن وجه در این حالت یعنی ترافیک مجانی)
+        logger.warning("add_traffic: verify read failed for vps %s (target %sGB)",
+                       server_id, target)
+        return True
 

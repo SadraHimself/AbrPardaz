@@ -1,6 +1,7 @@
 """Server management handlers — Virtualizor only, category-based buying with discount codes."""
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 from aiogram import F, Router
@@ -19,7 +20,7 @@ from bot.database.models import (
 )
 from bot.keyboards.main import back_kb, cancel_kb
 from bot.keyboards.server import (
-    add_traffic_kb, server_actions_kb, server_delete_confirm_kb,
+    server_actions_kb, server_delete_confirm_kb,
     server_list_kb, subproducts_buy_kb,
 )
 from bot.providers import get_provider
@@ -38,6 +39,7 @@ def _esc(v) -> str:
     """HTML-escape متن exception قبل از قرارگیری در پیام parse_mode=HTML."""
     return _html.escape(str(v))
 
+logger = logging.getLogger(__name__)
 router = Router(name="servers")
 
 # تبدیل ارقام لاتین به فارسی برای نمایش مشخصات پلن
@@ -634,52 +636,9 @@ async def cb_server_rebuild_do(cb: CallbackQuery, user: User, session: AsyncSess
 
 
 # ── Traffic ───────────────────────────────────────────────────────────────────
-
-@router.callback_query(F.data.startswith("srv_traffic:"))
-async def cb_server_traffic(cb: CallbackQuery, user: User, session: AsyncSession):
-    server_id = int(cb.data.split(":")[1])
-    server = await session.get(Server, server_id)
-    if not server or server.user_id != user.id:
-        await cb.answer("سرور یافت نشد.", show_alert=True)
-        return
-    limit_text = f"{server.traffic_limit_gb:.0f} GB" if server.traffic_limit_gb else "نامحدود"
-    pct = int(server.traffic_used_gb / server.traffic_limit_gb * 100) if server.traffic_limit_gb else 0
-    bar = "█" * (pct // 10) + "░" * (10 - pct // 10)
-    await cb.message.edit_text(
-        f"📊 <b>ترافیک — {server.name}</b>\n\n"
-        f"مصرف: {server.traffic_used_gb:.2f} GB\n"
-        f"حد مجاز: {limit_text}\n"
-        f"[{bar}] {pct}%",
-        parse_mode="HTML",
-        reply_markup=add_traffic_kb(server_id),
-    )
-    await cb.answer()
-
-
-@router.callback_query(F.data.startswith("add_traffic:"))
-async def cb_do_add_traffic(cb: CallbackQuery, user: User, session: AsyncSession):
-    _, server_id_str, gb_str = cb.data.split(":")
-    server_id, gb = int(server_id_str), int(gb_str)
-    server = await session.get(Server, server_id)
-    if not server or server.user_id != user.id:
-        await cb.answer("سرور یافت نشد.", show_alert=True)
-        return
-    total = gb * 500
-    billing = BillingService(session)
-    ok = await billing.debit(user.id, total, server_id=server_id,
-                              description=f"خرید {gb}GB ترافیک — {server.name}")
-    if not ok:
-        await cb.answer("موجودی کافی نیست.", show_alert=True)
-        return
-    try:
-        svc = ServerService(session)
-        await svc.perform_action(server, "add_traffic", gb=gb)
-        if server.traffic_limit_gb:
-            server.traffic_limit_gb += gb
-        await cb.answer(f"✅ {gb} GB اضافه شد.")
-    except Exception as e:
-        await billing.credit(user.id, total, description=f"برگشت وجه ترافیک {gb}GB")
-        await cb.answer(f"❌ خطا: {e}", show_alert=True)
+# فلوی خرید ترافیک در بخش «BUY TRAFFIC» پایین‌تر است (تعرفه‌های پنل ادمین).
+# هندلرهای قدیمیِ `srv_traffic:` / `add_traffic:` حذف شدند: هیچ کیبوردی آن‌ها را
+# صدا نمی‌زد (کد مرده) و قیمتشان هاردکد ۵۰۰ تومان/گیگ بود.
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -902,6 +861,356 @@ async def msg_renew_discount(message: Message, user: User, state: FSMContext, se
               if ok else "")
     await message.answer(prefix + text, parse_mode="HTML",
                          reply_markup=_renew_back_kb(server_id))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  CONVERT hourly → monthly (فقط ویرچولایزور)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("srv_tomonthly:"))
+async def cb_srv_to_monthly(cb: CallbackQuery, user: User, session: AsyncSession):
+    server = await session.get(Server, int(cb.data.split(":")[1]))
+    if not server or server.user_id != user.id:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    if server.provider_type != ProviderType.VIRTUALIZOR:
+        await cb.answer("این قابلیت برای این سرویس‌دهنده در دسترس نیست.", show_alert=True)
+        return
+    if server.billing_type != BillingType.HOURLY or server.status != ServerStatus.ACTIVE:
+        await cb.answer("این سرویس قابل تبدیل نیست.", show_alert=True)
+        return
+    amount = await _renew_amount_toman(session, server)
+    if amount <= 0:
+        await cb.answer("در حال حاضر امکان محاسبه هزینه ماهانه نیست — کمی بعد تلاش کنید.",
+                        show_alert=True)
+        return
+    await cb.answer()
+    await cb.message.edit_text(
+        f"<b>تبدیل به ماهانه — {server.name}</b>\n\n"
+        "با انتخاب این گزینه شما با پرداخت هزینه یک ماه سرویس، سیکل سرویس خود را "
+        "از ساعتی به ماهانه تبدیل می‌کنید.\n\n"
+        f"هزینه یک ماه: <b>{amount:,.0f} تومان</b>\n\n"
+        "<i>پس از تبدیل، سرویس هر ۳۰ روز به‌صورت خودکار از کیف پول تمدید می‌شود و "
+        "امکان حذف آن توسط خودتان وجود ندارد.</i>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="تأیید و پرداخت",
+                                 callback_data=f"srv_tomonthly_do:{server.id}",
+                                 **{"style": "success", "icon_custom_emoji_id": "5206607081334906820"}),
+            InlineKeyboardButton(text="انصراف", callback_data=f"server:{server.id}",
+                                 **{"style": "danger", "icon_custom_emoji_id": "5240241223632954241"}),
+        ]]),
+    )
+
+
+@router.callback_query(F.data.startswith("srv_tomonthly_do:"))
+async def cb_srv_to_monthly_do(cb: CallbackQuery, user: User, session: AsyncSession):
+    from datetime import timedelta
+    server_id = int(cb.data.split(":")[1])
+    await cb.answer()
+    # قفل ردیف: ضد دابل‌کلیک/کسر دوباره
+    server = (await session.execute(
+        select(Server).where(Server.id == server_id).with_for_update()
+    )).scalar_one_or_none()
+    if (not server or server.user_id != user.id
+            or server.provider_type != ProviderType.VIRTUALIZOR
+            or server.billing_type != BillingType.HOURLY
+            or server.status != ServerStatus.ACTIVE):
+        await cb.message.edit_text(f"{ERR} این سرویس قابل تبدیل نیست.", parse_mode="HTML",
+                                   reply_markup=_renew_back_kb(server_id))
+        return
+    amount = await _renew_amount_toman(session, server)
+    if amount <= 0:
+        await cb.message.edit_text(
+            f"{ERR} در حال حاضر امکان محاسبه هزینه ماهانه نیست — کمی بعد تلاش کنید.",
+            parse_mode="HTML", reply_markup=_renew_back_kb(server_id))
+        return
+
+    billing = BillingService(session)
+    ok = await billing.debit(user.id, amount, server_id=server.id,
+                             description=f"تبدیل به ماهانه — {server.name}")
+    if not ok:
+        await cb.message.edit_text(
+            f"{ERR} موجودی کیف پول کافی نیست.\n"
+            f"مبلغ لازم: <b>{amount:,.0f} تومان</b>",
+            parse_mode="HTML", reply_markup=_renew_back_kb(server_id))
+        return
+
+    now = datetime.now(timezone.utc)
+    server.billing_type = BillingType.MONTHLY
+    server.expires_at = now + timedelta(days=30)
+    # لنگر ساعتی بسته شود تا اگر روزی به ساعتی برگشت، فاصله retro-charge نشود
+    server.last_billed_at = now.replace(second=0, microsecond=0)
+    extra = dict(server.extra_data or {})
+    extra.pop("renew_notice_sent", None)
+    # سورشارژ ساعتیِ per-server معنای ماهانه ندارد (بامپ دیسک/لایسنس جیکور)
+    extra.pop("price_addon_hourly", None)
+    # این پرداخت = تمدیدِ همین دوره؛ قفلِ «یک تمدید دستی در هر ۳۰ روز» مصرف شود
+    # تا کاربر بلافاصله با دکمه «تمدید» ماه دوم را ناخواسته نخرد
+    extra["manual_renewed_at"] = now.isoformat()
+    # کپی قیمت ماهانه روی رکورد سرور همگام شود (fallback در صورت حذف پلن —
+    # وگرنه سرور برای همیشه رایگان می‌ماند چون قیمتی برای کسر پیدا نمی‌شود)
+    try:
+        from bot.services.currency import server_live_price as _slp
+        _m_amount, _m_cur = await _slp(session, server, hourly=False)
+        if _m_amount and _m_amount > 0:
+            server.price_monthly = _m_amount
+            extra["currency"] = _m_cur
+    except Exception:
+        pass
+    server.extra_data = extra
+    await session.flush()
+
+    plan_name = server.name
+    try:
+        pid = extra.get("plan_id")
+        if pid:
+            plan = await session.get(ServerPlan, int(pid))
+            if plan:
+                plan_name = plan.display_name or plan.name
+    except Exception:
+        pass
+    try:
+        from bot.services.log_service import LogService
+        await LogService(cb.bot, session).log_renewal(user, server, plan_name, amount)
+    except Exception:
+        pass
+
+    await _safe_edit(
+        cb.message,
+        f"کاربر گرامی مبلغ {amount:,.0f} تومان از کیف پول شما کاسته شد و سیکل سرویس "
+        f"{server.name} با آدرس آیپی {server.ip_address or '—'} به <b>ماهانه</b> "
+        "تبدیل شد.\n"
+        f"تاریخ تمدید بعدی: {(now + timedelta(days=30)).strftime('%Y-%m-%d')}"
+        + _RENEW_SIGN,
+        _renew_back_kb(server_id))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  BUY TRAFFIC (فقط ویرچولایزور — تعرفه‌های per-account پنل ادمین)
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def _traffic_account(session: AsyncSession, server: Server):
+    if not server.provider_account_id:
+        return None
+    return await session.get(ProviderAccount, server.provider_account_id)
+
+
+@router.callback_query(F.data.startswith("srv_buytraffic:"))
+async def cb_srv_buy_traffic(cb: CallbackQuery, user: User, session: AsyncSession):
+    from bot.services.traffic_tariffs import get_tariffs, price_toman
+    server = await session.get(Server, int(cb.data.split(":")[1]))
+    if not server or server.user_id != user.id:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    if server.provider_type != ProviderType.VIRTUALIZOR:
+        await cb.answer("خرید ترافیک برای این سرویس‌دهنده در دسترس نیست.", show_alert=True)
+        return
+    if server.traffic_limit_gb is None:
+        await cb.answer("ترافیک این سرویس نامحدود است — نیازی به خرید ترافیک نیست.",
+                        show_alert=True)
+        return
+    if not (server.status == ServerStatus.ACTIVE
+            or (server.status == ServerStatus.SUSPENDED
+                and server.suspend_reason == SuspendReason.TRAFFIC_EXCEEDED)):
+        await cb.answer("خرید ترافیک برای این سرویس در وضعیت فعلی ممکن نیست.",
+                        show_alert=True)
+        return
+    account = await _traffic_account(session, server)
+    tariffs = get_tariffs(account, active_only=True) if account else []
+    if not tariffs:
+        await cb.answer("در حال حاضر تعرفه‌ی ترافیکی تعریف نشده است.", show_alert=True)
+        return
+    # قیمت‌ها قبل از cb.answer محاسبه می‌شوند تا حالت «هیچ تعرفه‌ی قابل‌نمایش»
+    # هم بتواند alert بدهد (پاسخِ دوباره به یک callback خطای تلگرام است)
+    rows = []
+    for t in tariffs:
+        toman = await price_toman(session, t)
+        if toman <= 0:
+            continue  # نرخ ارز در دسترس نیست → این تعرفه فعلاً نمایش داده نشود
+        rows.append([InlineKeyboardButton(
+            text=f"{t.get('name')} — {toman:,.0f} تومان",
+            callback_data=f"trf_buy:{server.id}:{t.get('id')}")])
+    if not rows:
+        await cb.answer("نرخ ارز هنوز تنظیم نشده — کمی بعد تلاش کنید.", show_alert=True)
+        return
+    await cb.answer()
+    rows.append([InlineKeyboardButton(text="بازگشت", callback_data=f"server:{server.id}",
+                                      **{"icon_custom_emoji_id": "5258236805890710909"})])
+    used = server.traffic_used_gb or 0
+    await cb.message.edit_text(
+        f"<b>خرید ترافیک — {server.name}</b>\n\n"
+        f"مصرف فعلی: {used:.2f} از {server.traffic_limit_gb:.0f} گیگابایت\n\n"
+        "یک بسته را انتخاب کنید:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+@router.callback_query(F.data.startswith("trf_buy:"))
+async def cb_traffic_confirm(cb: CallbackQuery, user: User, session: AsyncSession):
+    from bot.services.traffic_tariffs import get_tariff, price_toman
+    parts = cb.data.split(":")
+    server_id, tid = int(parts[1]), int(parts[2])
+    server = await session.get(Server, server_id)
+    if not server or server.user_id != user.id:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    account = await _traffic_account(session, server)
+    tariff = get_tariff(account, tid) if account else None
+    if not tariff or not tariff.get("is_active", True):
+        await cb.answer("این تعرفه دیگر در دسترس نیست.", show_alert=True)
+        return
+    toman = await price_toman(session, tariff)
+    if toman <= 0:
+        await cb.answer("نرخ ارز هنوز تنظیم نشده — کمی بعد تلاش کنید.", show_alert=True)
+        return
+    await cb.answer()
+    await cb.message.edit_text(
+        f"<b>خرید ترافیک — {server.name}</b>\n\n"
+        f"بسته: {tariff.get('name')}\n"
+        f"ترافیک: {float(tariff.get('gb') or 0):.0f} گیگابایت\n"
+        f"هزینه: <b>{toman:,.0f} تومان</b>\n\n"
+        "این مقدار به سهمیه‌ی فعلی سرویس شما اضافه می‌شود.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="تأیید و پرداخت",
+                                 callback_data=f"trf_do:{server_id}:{tid}",
+                                 **{"style": "success", "icon_custom_emoji_id": "5206607081334906820"}),
+            InlineKeyboardButton(text="انصراف", callback_data=f"server:{server_id}",
+                                 **{"style": "danger", "icon_custom_emoji_id": "5240241223632954241"}),
+        ]]),
+    )
+
+
+async def _safe_edit(msg, text: str, kb=None) -> None:
+    """ادیت پیام بدون بالا انداختن خطا — بعد از عملیات برگشت‌ناپذیرِ پنل، هر
+    استثنایی کل تراکنش (و کسر وجه) را rollback می‌کند در حالی که تغییر سمت پنل
+    باقی مانده است."""
+    try:
+        await msg.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data.startswith("trf_do:"))
+async def cb_traffic_do(cb: CallbackQuery, user: User, session: AsyncSession):
+    from bot.services.traffic_tariffs import get_tariff, price_toman
+    parts = cb.data.split(":")
+    server_id, tid = int(parts[1]), int(parts[2])
+    await cb.answer()
+    # قفل ردیف سرور — ضد دابل‌کلیک (دو بار کسر / دو بار افزودن)
+    server = (await session.execute(
+        select(Server).where(Server.id == server_id).with_for_update()
+    )).scalar_one_or_none()
+    kb = _renew_back_kb(server_id)
+    allowed_status = (
+        server is not None and (
+            server.status == ServerStatus.ACTIVE
+            or (server.status == ServerStatus.SUSPENDED
+                and server.suspend_reason == SuspendReason.TRAFFIC_EXCEEDED)
+        )
+    )
+    if (not server or server.user_id != user.id
+            or server.provider_type != ProviderType.VIRTUALIZOR
+            or not allowed_status):
+        await _safe_edit(cb.message, f"{ERR} این سرویس در دسترس نیست.", kb)
+        return
+    if server.traffic_limit_gb is None:
+        await _safe_edit(cb.message,
+                         f"{ERR} ترافیک این سرویس نامحدود است — نیازی به خرید نیست.", kb)
+        return
+    # ضد دابل‌کلیک: مهرِ آخرین خریدِ موفق. تپ دوم پشت قفل ردیف منتظر می‌ماند و
+    # بعد از commitِ تپ اول این مهر را می‌بیند و رد می‌شود.
+    # ⚠️ این مهر روی مسیر موفق پاک نمی‌شود؛ اگر پاک شود تراکنش دوم هرگز آن را
+    # نمی‌بیند (هر دو مسیر داخل یک تراکنشِ کامیت‌نشده بودند) و قفل بی‌اثر است.
+    _extra = dict(server.extra_data or {})
+    _lock_raw = _extra.get("trf_lock_at")
+    if _lock_raw:
+        try:
+            _lock_at = datetime.fromisoformat(_lock_raw)
+            if _lock_at.tzinfo is None:
+                _lock_at = _lock_at.replace(tzinfo=timezone.utc)
+            if (datetime.now(timezone.utc) - _lock_at).total_seconds() < 90:
+                await _safe_edit(cb.message,
+                                 f"{WARN} خرید ترافیک قبلی همین الان ثبت شده است — "
+                                 "برای خرید بسته‌ی بعدی یک دقیقه صبر کنید.", kb)
+                return
+        except (ValueError, TypeError):
+            pass
+
+    account = await _traffic_account(session, server)
+    tariff = get_tariff(account, tid) if account else None
+    if not tariff or not tariff.get("is_active", True):
+        await _safe_edit(cb.message, f"{ERR} این تعرفه دیگر در دسترس نیست.", kb)
+        return
+    gb = int(round(float(tariff.get("gb") or 0)))
+    toman = await price_toman(session, tariff)
+    if gb <= 0 or toman <= 0:
+        await _safe_edit(cb.message, f"{ERR} این تعرفه قابل خرید نیست.", kb)
+        return
+
+    billing = BillingService(session)
+    ok = await billing.debit(user.id, toman, server_id=server.id,
+                             description=f"خرید ترافیک {gb}GB — {server.name}")
+    if not ok:
+        await _safe_edit(
+            cb.message,
+            f"{ERR} موجودی کیف پول کافی نیست.\nمبلغ لازم: <b>{toman:,.0f} تومان</b>", kb)
+        return
+    _extra["trf_lock_at"] = datetime.now(timezone.utc).isoformat()
+    server.extra_data = _extra
+    await session.flush()
+
+    try:
+        svc = ServerService(session)
+        result = await svc.perform_action(server, "add_traffic", gb=gb)
+        if result is False:
+            raise RuntimeError("پنل درخواست افزودن ترافیک را نپذیرفت.")
+    except Exception as e:
+        # شکست سمت پنل → برگشت کامل وجه
+        await billing.credit(user.id, toman,
+                             description=f"برگشت وجه ترافیک {gb}GB — {server.name}")
+        _extra = dict(server.extra_data or {})
+        _extra.pop("trf_lock_at", None)
+        server.extra_data = _extra
+        await session.flush()
+        await _safe_edit(
+            cb.message,
+            f"{ERR} افزودن ترافیک انجام نشد: {_esc(e)}\n"
+            "مبلغ به‌طور کامل به کیف پول برگشت داده شد.", kb)
+        return
+
+    # ── از اینجا به بعد عملیات پنل انجام شده و برگشت‌ناپذیر است: هیچ استثنایی
+    #    نباید بالا برود، وگرنه میدل‌ور کل تراکنش (شامل کسر وجه) را rollback
+    #    می‌کند و ترافیک مجانی تحویل داده می‌شود.
+    try:
+        if server.traffic_limit_gb is not None:
+            server.traffic_limit_gb = float(server.traffic_limit_gb) + gb
+        # trf_lock_at عمداً باقی می‌ماند (کامیت می‌شود) تا تپ دومِ همین دکمه رد شود
+        # ترافیکِ تمام‌شده باعث تعلیق شده بود → با خرید ترافیک آزاد شود
+        if (server.status == ServerStatus.SUSPENDED
+                and server.suspend_reason == SuspendReason.TRAFFIC_EXCEEDED):
+            acc = await _traffic_account(session, server)
+            if acc and server.provider_server_id:
+                # اول پنل، بعد دیتابیس — وگرنه سرورِ خاموش «فعال» ثبت می‌شود
+                await get_provider(acc).unsuspend_server(server.provider_server_id)
+            await billing.unsuspend_server_db(server)
+        await session.flush()
+    except Exception:
+        logger.exception("traffic purchase post-steps failed for server %s", server_id)
+
+    try:
+        from bot.services.log_service import LogService
+        await LogService(cb.bot, session).log_traffic_purchase(user, server, gb, toman)
+    except Exception:
+        pass
+
+    await _safe_edit(
+        cb.message,
+        f"کاربر گرامی مبلغ {toman:,.0f} تومان از کیف پول شما کاسته شد و "
+        f"{gb} گیگابایت ترافیک به سرویس {server.name} با آدرس آیپی "
+        f"{server.ip_address or '—'} اضافه شد." + _RENEW_SIGN, kb)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

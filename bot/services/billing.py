@@ -32,6 +32,7 @@ class BillingService:
                      reference_id: Optional[str] = None) -> Transaction:
         result = await self.session.execute(
             select(User).where(User.id == user_id).with_for_update()
+            .execution_options(populate_existing=True)
         )
         user = result.scalar_one_or_none()
         if user:
@@ -57,8 +58,14 @@ class BillingService:
     async def debit(self, user_id: int, amount: float, server_id: Optional[int] = None,
                     description: str = "") -> bool:
         """Debit balance. Returns False if insufficient funds."""
+        # ⚠️ populate_existing الزامی است: AuthMiddleware همین کاربر را اول هر
+        # آپدیت در سشن لود می‌کند و SQLAlchemy به‌طور پیش‌فرض نتیجه‌ی SELECT را
+        # روی نمونه‌ی از-قبل-لودشده بازنویسی نمی‌کند. بدون این، قفل ردیف گرفته
+        # می‌شد ولی موجودیِ حافظه کهنه می‌ماند → دو خرید هم‌زمان هر دو از یک
+        # موجودیِ قدیمی کم می‌کردند (اضافه‌برداشت).
         result = await self.session.execute(
             select(User).where(User.id == user_id).with_for_update()
+            .execution_options(populate_existing=True)
         )
         user = result.scalar_one_or_none()
         if not user or user.balance < amount:
@@ -93,6 +100,15 @@ class BillingService:
         servers are converted with the live rate). Returns False if balance
         insufficient (caller should suspend the server).
         """
+        self.last_hourly_charged_toman = 0.0
+        # ریس تبدیل چرخه: تسک لیست سرورها را بدون قفل می‌گیرد و آبجکتِ حافظه
+        # ممکن است کهنه باشد؛ نوع بیلینگ تازه از دیتابیس خوانده می‌شود تا سرویسی
+        # که همین لحظه به ماهانه تبدیل شده، یک ساعت اضافه کسر نشود.
+        fresh_type = (await self.session.execute(
+            select(Server.billing_type).where(Server.id == server.id)
+        )).scalar_one_or_none()
+        if fresh_type != BillingType.HOURLY:
+            return True
         # قیمت لحظه‌ای از خودِ پلن — تغییر قیمت پلن فوراً روی سرورهای موجود اعمال می‌شود
         from bot.services.currency import server_live_price
         amount, currency = await server_live_price(self.session, server, hourly=True)
@@ -116,6 +132,9 @@ class BillingService:
             description=f"ساعتی — {server.name}",
         )
         if success:
+            # مبلغِ واقعاً کسرشده برای نوتیف (خروجی True در حالت‌های «رد شد»
+            # هم داریم — نوتیف نباید برای آن‌ها مبلغ اعلام کند)
+            self.last_hourly_charged_toman = amount_toman
             # لنگر دقیقاً «یک ساعت» از قبلی جلو می‌رود (روی گریدِ ساعتِ ساخت —
             # بدون drift). ساعت‌های عقب‌افتاده (داون‌تایم worker / نبودِ نرخ ارز)
             # در اجراهای بعدیِ تسکِ دقیقه‌ای یکی‌یکی کسر می‌شوند، نه بخشیده.

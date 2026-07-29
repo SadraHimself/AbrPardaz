@@ -4,7 +4,9 @@ from __future__ import annotations
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.database.models import BillingType, ProviderType, Server, ServerStatus
+from bot.database.models import (
+    BillingType, ProviderType, Server, ServerStatus, SuspendReason,
+)
 
 
 def _btn(text: str, cbd: str, style: str | None = None, icon: str | None = None) -> InlineKeyboardButton:
@@ -54,6 +56,9 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
     is_gcore = server.provider_type == ProviderType.GCORE
     # تایم‌وب: ریبیلد و تغییر رمز دارد؛ تغییر IP/آیپی اضافه/اسنپ‌شات در نسخه اول نه
     is_timeweb = server.provider_type == ProviderType.TIMEWEB
+    # ⚠️ در سطح تابع تعریف می‌شود: شاخه‌ی SUSPENDED هم به آن نیاز دارد
+    # (اگر داخل شاخه‌ی ACTIVE بماند → UnboundLocalError روی سرورهای تعلیق‌شده)
+    is_virt = server.provider_type == ProviderType.VIRTUALIZOR
     rows: list[list[InlineKeyboardButton]] = []
 
     if server.status == ServerStatus.ACTIVE:
@@ -68,7 +73,6 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
             reboot_row.append(_btn("آمار مصرف", f"srv_usage:{sid}", icon="5936143551854285132"))
         rows.append(reboot_row)
         # سیاست IP: ویرچولایزور فقط ماهانه؛ هتزنر (IP رایگان) ساعتی و ماهانه
-        is_virt = server.provider_type == ProviderType.VIRTUALIZOR
         if is_gcore:
             pass  # قابلیت‌های اختیاری جیکور در نسخه اول ارائه نمی‌شوند
         elif is_timeweb:
@@ -100,7 +104,15 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
                 _btn("اسنپ شات", f"srv_snap:{sid}", icon="5346269127059196142"),
                 _btn("آمار مصرف", f"srv_usage:{sid}", icon="5936143551854285132"),
             ])
+        # ویرچولایزور: خرید ترافیک اضافه (ساعتی و ماهانه) — تعرفه‌ها per-account.
+        # سرویس با ترافیک نامحدود دکمه نمی‌گیرد (چیزی برای خریدن ندارد)
+        if is_virt and server.traffic_limit_gb is not None:
+            rows.append([_btn("خرید ترافیک", f"srv_buytraffic:{sid}", icon="5936143551854285132")])
         if is_hourly:
+            # ویرچولایزور: تبدیل چرخه به ماهانه با پرداخت یک ماه
+            if is_virt:
+                rows.append([_btn("تبدیل به ماهانه", f"srv_tomonthly:{sid}",
+                                  "primary", "5902206159095339799")])
             rows.append([_btn("حذف سرور", f"srv_action:{sid}:delete_confirm", "danger", "5258130763148172425")])
         else:
             # ماهانه: تمدید دستی — یک‌بار در هر دوره (گارد در هندلر)
@@ -112,6 +124,12 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
         ])
         if is_hourly:
             rows[-1].append(_btn("حذف سرور", f"srv_action:{sid}:delete_confirm", "danger", "5258130763148172425"))
+        # تعلیقِ ترافیک‌تمام‌شده فقط با خرید ترافیک باز می‌شود → دکمه‌اش باید
+        # همین‌جا باشد (وگرنه کاربر در بن‌بست می‌ماند)
+        if (is_virt and server.suspend_reason == SuspendReason.TRAFFIC_EXCEEDED
+                and server.traffic_limit_gb is not None):
+            rows.append([_btn("خرید ترافیک", f"srv_buytraffic:{sid}", "primary",
+                              "5936143551854285132")])
 
     elif server.status != ServerStatus.DELETED:
         off_row = [_btn("روشن کردن", f"srv_action:{sid}:start", "success", "5913241115489734452")]
@@ -148,11 +166,6 @@ def subproducts_buy_kb(server_id: int, sub_products) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def add_traffic_kb(server_id: int) -> InlineKeyboardMarkup:
-    options = [50, 100, 200, 500, 1000]
-    builder = InlineKeyboardBuilder()
-    for gb in options:
-        builder.button(text=f"{gb} GB", callback_data=f"add_traffic:{server_id}:{gb}")
-    builder.button(text="بازگشت", callback_data=f"server:{server_id}", **{"icon_custom_emoji_id": "5258236805890710909"})
-    builder.adjust(3)
-    return builder.as_markup()
+# add_traffic_kb حذف شد: مقادیر و قیمتش هاردکد بود و هندلر `add_traffic:` هم
+# دیگر وجود ندارد. خرید ترافیک حالا از تعرفه‌های پنل ادمین می‌آید
+# (`srv_buytraffic:` در bot/handlers/servers.py).

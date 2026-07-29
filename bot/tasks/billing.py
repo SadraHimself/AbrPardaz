@@ -41,17 +41,18 @@ def run_hourly_billing(self):
             for server in servers:
                 success = await billing.charge_hourly(server)
                 if success:
+                    # ⚠️ True همیشه یعنی «کسر شد» نیست: نبودِ نرخ ارز، قیمت صفر،
+                    # یا سرویسی که همین لحظه به ماهانه تبدیل شده هم True می‌دهند
+                    # (بدون کسر). فقط وقتی واقعاً کسر شده نوتیف بفرست.
+                    charged = float(getattr(billing, "last_hourly_charged_toman", 0) or 0)
+                    if charged <= 0:
+                        continue
                     users_charged_ok.add(server.user_id)
                     user_obj = await session.get(User, server.user_id)
-                    # مبلغ نوتیف همیشه ریالی است (پلن ارزی با نرخ روز تبدیل می‌شود)
-                    cur = obj_currency(server)
-                    amount_toman = float(server.price_hourly or 0)
-                    if cur != "irt":
-                        amount_toman = await to_toman(session, amount_toman, cur)
                     from bot.tasks.server import notify_hourly_billing
                     notify_hourly_billing.delay(
                         server.user_id, server.id,
-                        amount_toman,
+                        charged,
                         float(user_obj.balance if user_obj else 0),
                     )
                 else:
@@ -271,11 +272,15 @@ def handle_balance_empty(user_id: int):
                 elapsed_hours = (now - balance_empty_at).total_seconds() / 3600
 
                 if elapsed_hours >= 3 and warn_level < 3:
-                    # حذف کامل تمام سرورها
+                    # حذف سرورهای ساعتی. ⚠️ سرویس ماهانه اینجا حذف نمی‌شود:
+                    # هزینه‌اش از قبل پرداخت شده و چرخه‌ی خودش را دارد
+                    # (یادآوری ۳روزه → ساسپند ۲۴ساعته → حذف). قبلاً همه‌ی
+                    # سرورها حذف می‌شدند و ماهِ پیش‌پرداخت‌شده می‌سوخت.
                     srv_result = await session.execute(
                         select(Server).where(
                             Server.user_id == user.id,
                             Server.status != ServerStatus.DELETED,
+                            Server.billing_type == BillingType.HOURLY,
                         )
                     )
                     servers = list(srv_result.scalars().all())

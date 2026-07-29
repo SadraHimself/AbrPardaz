@@ -9,7 +9,9 @@ from aiogram import F, Router
 from aiogram.filters import Filter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import (
+    CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message,
+)
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -70,6 +72,13 @@ class ProviderFSM(StatesGroup):
     add_key = State()
     add_pass = State()
     edit_value = State()
+
+
+class TrafficTariffFSM(StatesGroup):
+    add_name = State()
+    add_gb = State()
+    add_price = State()
+    add_currency = State()
 
 
 class PlanFSM(StatesGroup):
@@ -1719,6 +1728,183 @@ async def cb_plan_del_do(cb: CallbackQuery, session: AsyncSession):
         await session.flush()
     await cb.message.edit_text("محصول حذف شد.", reply_markup=back_to_admin_kb("admin:plans"))
     await cb.answer()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  TRAFFIC TARIFFS (per Virtualizor account — بسته‌های ترافیک اضافه)
+# ══════════════════════════════════════════════════════════════════════════════
+
+_TRF_CURRENCIES = [("irt", "تومان"), ("usd", "دلار"), ("eur", "یورو"), ("rub", "روبل")]
+
+
+async def _render_trf_list(msg, session: AsyncSession, provider_id: int):
+    from bot.services.traffic_tariffs import get_tariffs
+    from bot.services.currency import CURRENCY_LABELS
+    account = await session.get(ProviderAccount, provider_id)
+    if not account:
+        await msg.edit_text("سرویس‌دهنده یافت نشد.")
+        return
+    tariffs = get_tariffs(account)
+    rows = []
+    for t in tariffs:
+        mark = "✅" if t.get("is_active", True) else "❌"
+        cur = CURRENCY_LABELS.get((t.get("currency") or "irt").lower(), "")
+        price = float(t.get("price") or 0)
+        price_s = f"{price:,.0f}" if (t.get("currency") or "irt") == "irt" else f"{price:g}"
+        rows.append([InlineKeyboardButton(
+            text=f"{mark} {t.get('name')} — {float(t.get('gb') or 0):.0f}GB — {price_s} {cur}",
+            callback_data=f"admin:trf_item:{provider_id}:{t.get('id')}")])
+    rows.append([InlineKeyboardButton(text="افزودن تعرفه",
+                                      callback_data=f"admin:trf_add:{provider_id}")])
+    rows.append([InlineKeyboardButton(text="بازگشت",
+                                      callback_data=f"admin:prov:{provider_id}")])
+    await msg.edit_text(
+        f"<b>تعرفه‌های ترافیک — {account.name}</b>\n\n"
+        "بسته‌های ترافیک اضافه که کاربر می‌تواند برای سرورهای این سرویس‌دهنده "
+        "بخرد (ساعتی و ماهانه).\n"
+        "قیمت به ارز خودش ذخیره و لحظه‌ی خرید با نرخ روز به تومان تبدیل می‌شود."
+        + ("\n\n<i>هنوز تعرفه‌ای تعریف نشده.</i>" if not tariffs else ""),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+@router.callback_query(F.data.startswith("admin:trf:"))
+async def cb_trf_list(cb: CallbackQuery, session: AsyncSession):
+    await cb.answer()
+    await _render_trf_list(cb.message, session, int(cb.data.split(":")[2]))
+
+
+@router.callback_query(F.data.startswith("admin:trf_add:"))
+async def cb_trf_add(cb: CallbackQuery, state: FSMContext):
+    provider_id = int(cb.data.split(":")[2])
+    await state.update_data(trf_provider_id=provider_id)
+    await state.set_state(TrafficTariffFSM.add_name)
+    await cb.answer()
+    await cb.message.edit_text(
+        "<b>افزودن تعرفه ترافیک</b>\n\n"
+        "نام محصول را وارد کنید:\n<i>مثال: ۱۰۰ گیگابایت</i>",
+        parse_mode="HTML", reply_markup=cancel_admin_kb(),
+    )
+
+
+@router.message(TrafficTariffFSM.add_name)
+async def trf_add_name(message: Message, state: FSMContext):
+    await state.update_data(trf_name=(message.text or "").strip())
+    await state.set_state(TrafficTariffFSM.add_gb)
+    await message.answer(
+        "مقدار ترافیک را به <b>گیگابایت</b> وارد کنید:\n<i>مثال: 100</i>",
+        parse_mode="HTML", reply_markup=cancel_admin_kb(),
+    )
+
+
+@router.message(TrafficTariffFSM.add_gb, F.text.regexp(r"^\d+$"))
+async def trf_add_gb(message: Message, state: FSMContext):
+    # فقط عدد صحیح: API ویرچولایزور سهمیه را گیگابایتِ صحیح می‌گیرد و مقدار
+    # اعشاری باعث ناهماهنگی سهمیه‌ی پنل با محدودیت ثبت‌شده در ربات می‌شد
+    await state.update_data(trf_gb=int(message.text))
+    await state.set_state(TrafficTariffFSM.add_price)
+    await message.answer(
+        "قیمت را وارد کنید (فقط عدد — واحد را در مرحله بعد انتخاب می‌کنید):\n"
+        "<i>مثال: 5</i>",
+        parse_mode="HTML", reply_markup=cancel_admin_kb(),
+    )
+
+
+@router.message(TrafficTariffFSM.add_price, F.text.regexp(r"^\d+(\.\d+)?$"))
+async def trf_add_price(message: Message, state: FSMContext):
+    await state.update_data(trf_price=float(message.text))
+    await state.set_state(TrafficTariffFSM.add_currency)
+    data = await state.get_data()
+    rows = [[InlineKeyboardButton(
+        text=label, callback_data=f"admin:trf_cur:{data['trf_provider_id']}:{code}")]
+        for code, label in _TRF_CURRENCIES]
+    await message.answer(
+        "واحد قیمت را انتخاب کنید:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+@router.callback_query(TrafficTariffFSM.add_currency, F.data.startswith("admin:trf_cur:"))
+async def cb_trf_currency(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
+    from bot.services.traffic_tariffs import add_tariff
+    parts = cb.data.split(":")
+    provider_id, currency = int(parts[2]), parts[3]
+    data = await state.get_data()
+    await state.clear()
+    account = await session.get(ProviderAccount, provider_id)
+    if not account or "trf_gb" not in data:
+        await cb.answer("اطلاعات ناقص است — دوباره تلاش کنید.", show_alert=True)
+        return
+    await add_tariff(session, account, name=data.get("trf_name") or "ترافیک",
+                     gb=data["trf_gb"], price=data.get("trf_price") or 0,
+                     currency=currency)
+    await cb.answer("تعرفه اضافه شد.")
+    await _render_trf_list(cb.message, session, provider_id)
+
+
+@router.callback_query(F.data.startswith("admin:trf_item:"))
+async def cb_trf_item(cb: CallbackQuery, session: AsyncSession):
+    from bot.services.traffic_tariffs import get_tariff
+    from bot.services.currency import CURRENCY_LABELS
+    parts = cb.data.split(":")
+    provider_id, tid = int(parts[2]), int(parts[3])
+    account = await session.get(ProviderAccount, provider_id)
+    tariff = get_tariff(account, tid) if account else None
+    if not tariff:
+        await cb.answer("تعرفه یافت نشد.", show_alert=True)
+        return
+    await cb.answer()
+    cur = (tariff.get("currency") or "irt").lower()
+    price = float(tariff.get("price") or 0)
+    price_s = f"{price:,.0f}" if cur == "irt" else f"{price:g}"
+    active = tariff.get("is_active", True)
+    await cb.message.edit_text(
+        f"<b>{tariff.get('name')}</b>\n\n"
+        f"ترافیک: {float(tariff.get('gb') or 0):.0f} گیگابایت\n"
+        f"قیمت: {price_s} {CURRENCY_LABELS.get(cur, cur)}\n"
+        f"وضعیت: {'✅ فعال' if active else '❌ غیرفعال'}",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=("غیرفعال کردن" if active else "فعال کردن"),
+                                  callback_data=f"admin:trf_tog:{provider_id}:{tid}"),
+             InlineKeyboardButton(text="حذف",
+                                  callback_data=f"admin:trf_del:{provider_id}:{tid}")],
+            [InlineKeyboardButton(text="بازگشت", callback_data=f"admin:trf:{provider_id}")],
+        ]),
+    )
+
+
+@router.callback_query(F.data.startswith("admin:trf_tog:"))
+async def cb_trf_toggle(cb: CallbackQuery, session: AsyncSession):
+    from bot.services.traffic_tariffs import toggle_tariff
+    parts = cb.data.split(":")
+    provider_id, tid = int(parts[2]), int(parts[3])
+    account = await session.get(ProviderAccount, provider_id)
+    if not account:
+        await cb.answer("سرویس‌دهنده یافت نشد.", show_alert=True)
+        return
+    state_now = await toggle_tariff(session, account, tid)
+    if state_now is None:
+        await cb.answer("تعرفه یافت نشد.", show_alert=True)
+        await _render_trf_list(cb.message, session, provider_id)
+        return
+    await cb.answer("فعال شد." if state_now else "غیرفعال شد.")
+    await _render_trf_list(cb.message, session, provider_id)
+
+
+@router.callback_query(F.data.startswith("admin:trf_del:"))
+async def cb_trf_delete(cb: CallbackQuery, session: AsyncSession):
+    from bot.services.traffic_tariffs import delete_tariff
+    parts = cb.data.split(":")
+    provider_id, tid = int(parts[2]), int(parts[3])
+    account = await session.get(ProviderAccount, provider_id)
+    if not account:
+        await cb.answer("سرویس‌دهنده یافت نشد.", show_alert=True)
+        return
+    await delete_tariff(session, account, tid)
+    await cb.answer("تعرفه حذف شد.")
+    await _render_trf_list(cb.message, session, provider_id)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

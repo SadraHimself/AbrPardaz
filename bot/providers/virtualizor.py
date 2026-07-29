@@ -778,6 +778,7 @@ class VirtualizorProvider(BaseProvider):
         بازخوانی و تأیید.
         """
         gb = int(gb)
+        self.last_add_traffic_unverified = False
         if gb <= 0:
             return True
         current = await self.get_bandwidth_quota(server_id)
@@ -807,7 +808,9 @@ class VirtualizorProvider(BaseProvider):
             raise RuntimeError(
                 f"افزودن ترافیک تأیید نشد (سهمیه: {last_read}GB به‌جای {target}GB).")
         # بازخوانی قطعی نشد — احتمال زیاد نوشتن انجام شده؛ موفق در نظر می‌گیریم
-        # (برگرداندن وجه در این حالت یعنی ترافیک مجانی)
+        # (برگرداندن وجه در این حالت یعنی ترافیک مجانی). فلگ برای هشدار به ادمین
+        # تا موارد تأییدنشده دستی بررسی شوند.
+        self.last_add_traffic_unverified = True
         logger.warning("add_traffic: verify read failed for vps %s (target %sGB)",
                        server_id, target)
         return True

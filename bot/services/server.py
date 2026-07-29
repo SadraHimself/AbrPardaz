@@ -317,7 +317,12 @@ class ServerService:
                 await self.session.flush()
             return ok
         if action == "add_traffic":
-            return await provider.add_traffic(sid, kwargs["gb"])
+            ok = await provider.add_traffic(sid, kwargs["gb"])
+            # افزودن انجام شد ولی بازخوانیِ تأیید ممکن نشد → caller به ادمین
+            # هشدار می‌دهد تا دستی بررسی شود
+            self.last_add_traffic_unverified = bool(
+                getattr(provider, "last_add_traffic_unverified", False))
+            return ok
         if action == "change_password":
             new_pass = kwargs["password"]
             ok = await provider.change_root_password(sid, new_pass)

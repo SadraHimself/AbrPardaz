@@ -271,6 +271,21 @@ def handle_balance_empty(user_id: int):
                     balance_empty_at = balance_empty_at.replace(tzinfo=timezone.utc)
                 elapsed_hours = (now - balance_empty_at).total_seconds() / 3600
 
+                # تایم‌استمپِ کهنه (مثلاً کاربر مدتی هیچ سرویس ساعتی نداشته و
+                # مهلتِ قدیمی پاک نشده): چرخه از نو شروع شود، نه اینکه سرویسِ
+                # تازه‌خریده‌شده بدون هیچ اخطاری فوراً حذف شود
+                if elapsed_hours >= 12:
+                    extra["balance_empty_at"] = now.isoformat()
+                    extra["balance_warn_level"] = 0
+                    user.extra_data = extra
+                    await session.commit()
+                    await bot.send_message(
+                        user.telegram_id,
+                        '<tg-emoji emoji-id="4956611513369494230">⚠️</tg-emoji> کاربر گرامی موجودی شما به اتمام رسیده برای جلوگیری از حذف شدن سرویس ها موجودی خود را شارژ کنید',
+                        parse_mode="HTML",
+                    )
+                    return
+
                 if elapsed_hours >= 3 and warn_level < 3:
                     # حذف سرورهای ساعتی. ⚠️ سرویس ماهانه اینجا حذف نمی‌شود:
                     # هزینه‌اش از قبل پرداخت شده و چرخه‌ی خودش را دارد
@@ -301,7 +316,7 @@ def handle_balance_empty(user_id: int):
                     await session.commit()
                     await bot.send_message(
                         user.telegram_id,
-                        '<tg-emoji emoji-id="5258093637450866522">🤖</tg-emoji> کاربر عزیز سرویس های فعال شما به دلیل عدم شارژ کیف پول حذف شدند',
+                        '<tg-emoji emoji-id="5258093637450866522">🤖</tg-emoji> کاربر عزیز سرویس های ساعتی شما به دلیل عدم شارژ کیف پول حذف شدند',
                         parse_mode="HTML",
                     )
 

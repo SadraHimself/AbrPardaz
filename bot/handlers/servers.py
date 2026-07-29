@@ -959,6 +959,14 @@ async def cb_srv_to_monthly_do(cb: CallbackQuery, user: User, session: AsyncSess
     except Exception:
         pass
     server.extra_data = extra
+    # اگر این آخرین سرویس ساعتیِ کاربر بود، ساعتِ مهلتِ «موجودی تمام شد» باید
+    # پاک شود؛ وگرنه با خریدِ بعدیِ ساعتی، اولین کسرِ ناموفق تایم‌استمپِ کهنه را
+    # می‌بیند و بدون هیچ اخطاری سرویس‌ها را حذف می‌کند
+    _uex = dict(user.extra_data or {})
+    if "balance_empty_at" in _uex or "balance_warn_level" in _uex:
+        _uex.pop("balance_empty_at", None)
+        _uex.pop("balance_warn_level", None)
+        user.extra_data = _uex
     await session.flush()
 
     plan_name = server.name
@@ -1184,33 +1192,51 @@ async def cb_traffic_do(cb: CallbackQuery, user: User, session: AsyncSession):
     # ── از اینجا به بعد عملیات پنل انجام شده و برگشت‌ناپذیر است: هیچ استثنایی
     #    نباید بالا برود، وگرنه میدل‌ور کل تراکنش (شامل کسر وجه) را rollback
     #    می‌کند و ترافیک مجانی تحویل داده می‌شود.
+    # trf_lock_at عمداً باقی می‌ماند (کامیت می‌شود) تا تپ دومِ همین دکمه رد شود
     try:
         if server.traffic_limit_gb is not None:
             server.traffic_limit_gb = float(server.traffic_limit_gb) + gb
-        # trf_lock_at عمداً باقی می‌ماند (کامیت می‌شود) تا تپ دومِ همین دکمه رد شود
-        # ترافیکِ تمام‌شده باعث تعلیق شده بود → با خرید ترافیک آزاد شود
-        if (server.status == ServerStatus.SUSPENDED
-                and server.suspend_reason == SuspendReason.TRAFFIC_EXCEEDED):
+        await session.flush()
+    except Exception:
+        logger.exception("traffic purchase: limit bump failed for server %s", server_id)
+
+    # ترافیکِ تمام‌شده باعث تعلیق شده بود → با خرید ترافیک آزاد شود.
+    # شکستِ این مرحله نباید «موفقیت کامل» گزارش شود (سرور خاموش می‌ماند).
+    unsuspend_failed = False
+    if (server.status == ServerStatus.SUSPENDED
+            and server.suspend_reason == SuspendReason.TRAFFIC_EXCEEDED):
+        try:
             acc = await _traffic_account(session, server)
             if acc and server.provider_server_id:
                 # اول پنل، بعد دیتابیس — وگرنه سرورِ خاموش «فعال» ثبت می‌شود
                 await get_provider(acc).unsuspend_server(server.provider_server_id)
             await billing.unsuspend_server_db(server)
-        await session.flush()
-    except Exception:
-        logger.exception("traffic purchase post-steps failed for server %s", server_id)
+            await session.flush()
+        except Exception:
+            unsuspend_failed = True
+            logger.exception("traffic purchase: unsuspend failed for server %s", server_id)
 
     try:
         from bot.services.log_service import LogService
-        await LogService(cb.bot, session).log_traffic_purchase(user, server, gb, toman)
+        _log = LogService(cb.bot, session)
+        await _log.log_traffic_purchase(user, server, gb, toman)
+        if getattr(svc, "last_add_traffic_unverified", False):
+            # نوشتن انجام شد ولی بازخوانیِ تأیید ممکن نشد → بررسی دستی ادمین
+            await _log._send(
+                "purchase",
+                f"⚠️ <b>ترافیک تأییدنشده</b>\n\n"
+                f"سرور: {server.name} (vps {server.provider_server_id})\n"
+                f"بسته: {gb} گیگابایت — سهمیه‌ی پنل دستی بررسی شود.")
     except Exception:
         pass
 
+    tail = ("\n\n" + WARN + " فعال‌سازی خودکار سرویس انجام نشد — لطفاً از دکمه "
+            "«فعال‌سازی» در پنل سرویس استفاده کنید.") if unsuspend_failed else ""
     await _safe_edit(
         cb.message,
         f"کاربر گرامی مبلغ {toman:,.0f} تومان از کیف پول شما کاسته شد و "
         f"{gb} گیگابایت ترافیک به سرویس {server.name} با آدرس آیپی "
-        f"{server.ip_address or '—'} اضافه شد." + _RENEW_SIGN, kb)
+        f"{server.ip_address or '—'} اضافه شد." + tail + _RENEW_SIGN, kb)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

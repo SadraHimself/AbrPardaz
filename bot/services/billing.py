@@ -102,12 +102,15 @@ class BillingService:
         """
         self.last_hourly_charged_toman = 0.0
         # ریس تبدیل چرخه: تسک لیست سرورها را بدون قفل می‌گیرد و آبجکتِ حافظه
-        # ممکن است کهنه باشد؛ نوع بیلینگ تازه از دیتابیس خوانده می‌شود تا سرویسی
-        # که همین لحظه به ماهانه تبدیل شده، یک ساعت اضافه کسر نشود.
-        fresh_type = (await self.session.execute(
-            select(Server.billing_type).where(Server.id == server.id)
+        # کهنه است. ردیف با قفل و populate_existing تازه خوانده می‌شود تا:
+        #  (۱) تبدیلِ کامیت‌شده دیده شود، (۲) تبدیلِ در جریان (که قفل ردیف دارد)
+        # منتظر بماند و بعدش وضعیت واقعی خوانده شود — SELECT ساده در READ
+        # COMMITTED روی قفل بلاک نمی‌شود و مقدار قدیمی می‌خواند.
+        locked = (await self.session.execute(
+            select(Server).where(Server.id == server.id).with_for_update()
+            .execution_options(populate_existing=True)
         )).scalar_one_or_none()
-        if fresh_type != BillingType.HOURLY:
+        if locked is None or locked.billing_type != BillingType.HOURLY:
             return True
         # قیمت لحظه‌ای از خودِ پلن — تغییر قیمت پلن فوراً روی سرورهای موجود اعمال می‌شود
         from bot.services.currency import server_live_price

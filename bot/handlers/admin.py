@@ -1798,11 +1798,24 @@ async def trf_add_name(message: Message, state: FSMContext):
     )
 
 
-@router.message(TrafficTariffFSM.add_gb, F.text.regexp(r"^\d+$"))
+_FA_AR_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩٫،", "01234567890123456789..")
+
+
+def _norm_num(text: str) -> str:
+    """ارقام فارسی/عربی و جداکننده‌ها را به عدد لاتین تبدیل می‌کند."""
+    return (text or "").strip().translate(_FA_AR_DIGITS).replace(",", "").replace(" ", "")
+
+
+@router.message(TrafficTariffFSM.add_gb)
 async def trf_add_gb(message: Message, state: FSMContext):
     # فقط عدد صحیح: API ویرچولایزور سهمیه را گیگابایتِ صحیح می‌گیرد و مقدار
     # اعشاری باعث ناهماهنگی سهمیه‌ی پنل با محدودیت ثبت‌شده در ربات می‌شد
-    await state.update_data(trf_gb=int(message.text))
+    raw = _norm_num(message.text)
+    if not raw.isdigit() or int(raw) <= 0:
+        await message.answer("مقدار ترافیک باید عدد صحیح و بزرگ‌تر از صفر باشد. دوباره وارد کنید:",
+                             reply_markup=cancel_admin_kb())
+        return
+    await state.update_data(trf_gb=int(raw))
     await state.set_state(TrafficTariffFSM.add_price)
     await message.answer(
         "قیمت را وارد کنید (فقط عدد — واحد را در مرحله بعد انتخاب می‌کنید):\n"
@@ -1811,9 +1824,18 @@ async def trf_add_gb(message: Message, state: FSMContext):
     )
 
 
-@router.message(TrafficTariffFSM.add_price, F.text.regexp(r"^\d+(\.\d+)?$"))
+@router.message(TrafficTariffFSM.add_price)
 async def trf_add_price(message: Message, state: FSMContext):
-    await state.update_data(trf_price=float(message.text))
+    raw = _norm_num(message.text)
+    try:
+        price = float(raw)
+        if price <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer("قیمت باید یک عدد بزرگ‌تر از صفر باشد. دوباره وارد کنید:",
+                             reply_markup=cancel_admin_kb())
+        return
+    await state.update_data(trf_price=price)
     await state.set_state(TrafficTariffFSM.add_currency)
     data = await state.get_data()
     rows = [[InlineKeyboardButton(
@@ -1825,7 +1847,9 @@ async def trf_add_price(message: Message, state: FSMContext):
     )
 
 
-@router.callback_query(TrafficTariffFSM.add_currency, F.data.startswith("admin:trf_cur:"))
+# بدون state-filter: اگر state پاک شده باشد (ری‌استارت/فلوی دیگر) دکمه نباید
+# بی‌پاسخ بماند — گاردِ داده‌ی ناقص پایین‌تر پیام شفاف می‌دهد
+@router.callback_query(F.data.startswith("admin:trf_cur:"))
 async def cb_trf_currency(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
     from bot.services.traffic_tariffs import add_tariff
     parts = cb.data.split(":")

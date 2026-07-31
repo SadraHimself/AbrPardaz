@@ -166,6 +166,7 @@ class VirtualizorProvider(BaseProvider):
             cpu=int(vs.get("cores", 0) or 0),
             disk=int(vs.get("space", 0) or 0),
             bandwidth=int(vs.get("bandwidth", 0) or 0),
+            traffic_used_gb=float(vs.get("used_bandwidth", 0) or 0),
             os_name=vs.get("os_name"),
             extra_data={
                 "vpsid": vs.get("vpsid"),
@@ -760,22 +761,48 @@ class VirtualizorProvider(BaseProvider):
         vs_list = data.get("vs", {}) or {}
         return vs_list.get(str(server_id)) or (next(iter(vs_list.values())) if vs_list else {})
 
-    async def get_bandwidth_quota(self, server_id: str) -> int:
-        """سهمیه‌ی ترافیک فعلی (GB). صفر = نامحدود."""
+    async def bandwidth_info(self, server_id: str) -> tuple[int, float]:
+        """(سهمیه، مصرف) زنده از پنل — هر دو GB. سهمیه‌ی صفر = نامحدود.
+
+        نمایش به کاربر باید همیشه از همین‌جا بیاید (باقی‌مانده = سهمیه − مصرف)؛
+        شمارنده‌ی مستقل در دیتابیس نگه داشته نمی‌شود، چون ماژول WHMCS سرِ
+        سالگردِ ماهانه‌ی هر VM سقف را «سقف منهای مصرف دوره» می‌کند و هر کپیِ
+        محلی بلافاصله کهنه می‌شود."""
         vs = await self._vs_row(server_id)
         try:
-            return int(float(vs.get("bandwidth") or 0))
+            quota = int(float(vs.get("bandwidth") or 0))
         except (TypeError, ValueError):
-            return 0
+            quota = 0
+        try:
+            used = float(vs.get("used_bandwidth") or 0)
+        except (TypeError, ValueError):
+            used = 0.0
+        return quota, used
+
+    async def get_bandwidth_quota(self, server_id: str) -> int:
+        """سهمیه‌ی ترافیک فعلی (GB). صفر = نامحدود."""
+        quota, _ = await self.bandwidth_info(server_id)
+        return quota
 
     async def add_traffic(self, server_id: str, gb: int) -> bool:
-        """افزودن ترافیک به سهمیه‌ی فعلی.
+        """افزودن ترافیک به سهمیه‌ی فعلی (شارژِ یک‌باره‌ی استخر).
 
-        ⚠️ فیلد `bandwidth` در managevps «مقدار کل» است نه افزایشی (همان فیلدِ
-        addvs و همان فیلدی که act=vs برمی‌گرداند). باگ قبلی: مستقیم gb نوشته
-        می‌شد → سهمیه‌ی ۱۰۰۰گیگی با خرید ۱۰۰گیگ به ۱۰۰ **کاهش** می‌یافت.
-        الگوی درست (مثل add_extra_ip): خواندن مقدار فعلی → نوشتن مجموع →
-        بازخوانی و تأیید.
+        مدل عملیاتی این پنل: ماژول WHMCS «استخر کاهشی» دارد — سرِ سالگردِ ماهانه‌ی
+        هر VM (لنگر = تاریخ ساخت) خودش سقف را به «سقف منهای مصرف دوره» کاهش
+        می‌دهد. پس اینجا فقط یک‌بار سقف بالا می‌رود؛ **هیچ تسک برگرداندن/ریست
+        نباید ساخته شود** و مصرف ماه بعد خودکار کسر می‌شود.
+
+        قواعد سختِ نوشتن (هر تخطی = خرابیِ برگشت‌ناپذیر):
+          • تنها write مجاز: act=managevps با فقط vpsid + bandwidth
+            (editvps=1 صرفاً تریگرِ ثبتِ فرم است، نه فیلد پیکربندی). POSTِ ناقصِ
+            managevps با فیلدهای دیگر می‌تواند تنظیمات دیسک را خراب کند.
+          • هرگز act=bwreset — گرافِ تاریخیِ VM را برای همیشه پاک می‌کند.
+          • هرگز تاریخ ساخت VM دست نخورد (لنگر سالگرد است).
+          • هرگز bandwidth=0 نوشته نشود — صفر یعنی نامحدود (حداقل ۱).
+          • بعد از نوشتن حتماً بازخوانی و تأیید.
+
+        ⚠️ `bandwidth` مقدار **کل** است نه افزایشی → مقدار فعلی خوانده و مجموع
+        نوشته می‌شود.
         """
         gb = int(gb)
         self.last_add_traffic_unverified = False
@@ -785,8 +812,10 @@ class VirtualizorProvider(BaseProvider):
         if current <= 0:
             # صفر = نامحدود؛ نوشتن gb سهمیه را از نامحدود به gb محدود می‌کرد
             raise RuntimeError("ترافیک این سرویس نامحدود است — نیازی به خرید ترافیک نیست.")
-        target = current + gb
-        await self._request("managevps", {"editvps": 1, "bandwidth": target},
+        target = max(1, current + gb)   # هرگز صفر (=نامحدود) نوشته نشود
+        # payload حداقلی: vpsid + bandwidth (+ تریگر ثبت). هیچ فیلد دیگری اضافه نشود.
+        await self._request("managevps",
+                            {"vpsid": server_id, "editvps": 1, "bandwidth": target},
                             query={"vpsid": server_id})
         # تأیید از منبع معتبر (پاسخ managevps قابل‌اتکا نیست).
         # ⚠️ «خطای خواندن» با «اعمال‌نشدن» فرق دارد: اگر بازخوانی خطا داد یا
@@ -803,6 +832,7 @@ class VirtualizorProvider(BaseProvider):
                 last_read = None
                 continue
             if last_read >= target:
+                self.last_bandwidth_quota = last_read
                 return True
         if last_read is not None and last_read < target:
             raise RuntimeError(

@@ -38,7 +38,22 @@ def sync_all_traffic():
                     if not account:
                         continue
                     provider = get_provider(account)
-                    used_gb = await provider.get_traffic(server.provider_server_id)
+                    # ویرچولایزور: سقف هم زنده خوانده می‌شود. ماژول WHMCS سرِ
+                    # سالگرد ماهانه‌ی هر VM سقف را «سقف منهای مصرف دوره» می‌کند،
+                    # پس کپیِ دیتابیس کهنه می‌شود و تعلیقِ اشتباه می‌دهد.
+                    # منبع حقیقت = پنل (یک درخواست، هم سقف هم مصرف).
+                    if hasattr(provider, "bandwidth_info"):
+                        quota_gb, used_gb = await provider.bandwidth_info(
+                            server.provider_server_id)
+                        if quota_gb > 0:
+                            if server.traffic_limit_gb != float(quota_gb):
+                                server.traffic_limit_gb = float(quota_gb)
+                        else:
+                            # صفر = نامحدود (هرگز 0.0 ننویس؛ update_traffic
+                            # بلافاصله TRAFFIC_EXCEEDED می‌کند)
+                            server.traffic_limit_gb = None
+                    else:
+                        used_gb = await provider.get_traffic(server.provider_server_id)
                     ok = await billing.update_traffic(server, used_gb)
 
                     if not ok:

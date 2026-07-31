@@ -1004,6 +1004,39 @@ async def _traffic_account(session: AsyncSession, server: Server):
     return await session.get(ProviderAccount, server.provider_account_id)
 
 
+def _next_reset_date(server: Server) -> str:
+    """سالگردِ ماهانه‌ی VM (لنگر = تاریخ ساخت) در ماه بعد — همان روزی که ماژول
+    WHMCS سقف را «سقف منهای مصرف دوره» می‌کند."""
+    created = server.created_at
+    if not created:
+        return "—"
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    year, month = now.year, now.month
+    if now.day >= created.day:      # سالگردِ این ماه گذشته → ماه بعد
+        month += 1
+        if month > 12:
+            month, year = 1, year + 1
+    # ماه‌های کوتاه‌تر: روز به آخرین روزِ آن ماه محدود می‌شود
+    import calendar as _cal
+    day = min(created.day, _cal.monthrange(year, month)[1])
+    return f"{year}-{month:02d}-{day:02d}"
+
+
+async def _live_traffic(session: AsyncSession, server: Server) -> tuple[int, float] | None:
+    """(سهمیه، مصرف) زنده از پنل. None = در دسترس نبود."""
+    account = await _traffic_account(session, server)
+    if not account or not server.provider_server_id:
+        return None
+    try:
+        import asyncio as _ai
+        prov = get_provider(account)
+        return await _ai.wait_for(prov.bandwidth_info(server.provider_server_id), timeout=15)
+    except Exception:
+        return None
+
+
 @router.callback_query(F.data.startswith("srv_buytraffic:"))
 async def cb_srv_buy_traffic(cb: CallbackQuery, user: User, session: AsyncSession):
     from bot.services.traffic_tariffs import get_tariffs, price_toman
@@ -1045,10 +1078,22 @@ async def cb_srv_buy_traffic(cb: CallbackQuery, user: User, session: AsyncSessio
     await cb.answer()
     rows.append([InlineKeyboardButton(text="بازگشت", callback_data=f"server:{server.id}",
                                       **{"icon_custom_emoji_id": "5258236805890710909"})])
-    used = server.traffic_used_gb or 0
+    # وضعیت همیشه زنده از پنل خوانده می‌شود (باقی‌مانده = سهمیه − مصرف)؛
+    # کپیِ دیتابیس ملاک نیست چون سقف سرِ سالگرد ماهانه توسط ماژول کاهش می‌یابد
+    live = await _live_traffic(session, server)
+    if live:
+        quota, used = live
+        remain = max(0.0, quota - used)
+        status_line = (f"سهمیه فعلی: {quota:,} گیگابایت\n"
+                       f"مصرف‌شده: {used:,.2f} گیگابایت\n"
+                       f"<b>باقی‌مانده: {remain:,.2f} گیگابایت</b>\n"
+                       f"کسر مصرف دوره: {_next_reset_date(server)}\n\n")
+    else:
+        status_line = ""
     await cb.message.edit_text(
         f"<b>خرید ترافیک — {server.name}</b>\n\n"
-        f"مصرف فعلی: {used:.2f} از {server.traffic_limit_gb:.0f} گیگابایت\n\n"
+        f"{status_line}"
+        "ترافیک خریداری‌شده یک‌باره به سهمیه اضافه می‌شود.\n\n"
         "یک بسته را انتخاب کنید:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
@@ -1194,11 +1239,21 @@ async def cb_traffic_do(cb: CallbackQuery, user: User, session: AsyncSession):
     #    می‌کند و ترافیک مجانی تحویل داده می‌شود.
     # trf_lock_at عمداً باقی می‌ماند (کامیت می‌شود) تا تپ دومِ همین دکمه رد شود
     try:
-        if server.traffic_limit_gb is not None:
+        # سهمیه از مقدارِ **تأییدشده‌ی پنل** سینک می‌شود، نه جمعِ محلی: ماژول
+        # WHMCS سرِ سالگرد ماهانه سقف را کاهش می‌دهد و هر شمارنده‌ی مستقلی
+        # بلافاصله کهنه و باعث تعلیقِ اشتباه می‌شود (منبع حقیقت = پنل)
+        _verified = getattr(svc, "last_bandwidth_quota", None)
+        _quota = _verified if isinstance(_verified, int) and _verified > 0 else None
+        if _quota is None:
+            live = await _live_traffic(session, server)
+            _quota = live[0] if live and live[0] > 0 else None
+        if _quota:
+            server.traffic_limit_gb = float(_quota)
+        elif server.traffic_limit_gb is not None:
             server.traffic_limit_gb = float(server.traffic_limit_gb) + gb
         await session.flush()
     except Exception:
-        logger.exception("traffic purchase: limit bump failed for server %s", server_id)
+        logger.exception("traffic purchase: limit sync failed for server %s", server_id)
 
     # ترافیکِ تمام‌شده باعث تعلیق شده بود → با خرید ترافیک آزاد شود.
     # شکستِ این مرحله نباید «موفقیت کامل» گزارش شود (سرور خاموش می‌ماند).
@@ -1236,7 +1291,11 @@ async def cb_traffic_do(cb: CallbackQuery, user: User, session: AsyncSession):
         cb.message,
         f"کاربر گرامی مبلغ {toman:,.0f} تومان از کیف پول شما کاسته شد و "
         f"{gb} گیگابایت ترافیک به سرویس {server.name} با آدرس آیپی "
-        f"{server.ip_address or '—'} اضافه شد." + tail + _RENEW_SIGN, kb)
+        f"{server.ip_address or '—'} اضافه شد.\n"
+        # قولِ «تمدید ماهانه‌ی سهمیه» داده نمی‌شود: سرِ سالگرد ماهانه، مصرفِ
+        # دوره از سهمیه کسر می‌شود و افزایش فقط با خرید ممکن است
+        f"<i>در تاریخ {_next_reset_date(server)} مصرف این دوره از سهمیه کسر می‌شود.</i>"
+        + tail + _RENEW_SIGN, kb)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -3219,7 +3278,13 @@ async def cb_server_usage(cb: CallbackQuery, user: User, session: AsyncSession):
     if account and server.provider_server_id:
         try:
             prov = get_provider(account)
-            used = await prov.get_traffic(server.provider_server_id)
+            if hasattr(prov, "bandwidth_info"):
+                # سقف هم زنده خوانده می‌شود: ماژول WHMCS سرِ سالگرد ماهانه سقف
+                # را کاهش می‌دهد و کپیِ دیتابیس کهنه است (منبع حقیقت = پنل)
+                _q, used = await prov.bandwidth_info(server.provider_server_id)
+                server.traffic_limit_gb = float(_q) if _q > 0 else None
+            else:
+                used = await prov.get_traffic(server.provider_server_id)
             server.traffic_used_gb = used
             await session.flush()
         except Exception:

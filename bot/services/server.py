@@ -322,6 +322,8 @@ class ServerService:
             # هشدار می‌دهد تا دستی بررسی شود
             self.last_add_traffic_unverified = bool(
                 getattr(provider, "last_add_traffic_unverified", False))
+            # سهمیه‌ی تأییدشده‌ی پنل (منبع حقیقت برای سینک کپی دیتابیس)
+            self.last_bandwidth_quota = getattr(provider, "last_bandwidth_quota", None)
             return ok
         if action == "change_password":
             new_pass = kwargs["password"]

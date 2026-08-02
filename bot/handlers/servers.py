@@ -39,6 +39,20 @@ def _esc(v) -> str:
     """HTML-escape متن exception قبل از قرارگیری در پیام parse_mode=HTML."""
     return _html.escape(str(v))
 
+
+async def _edit_ignore_same(msg, text: str, reply_markup=None) -> None:
+    """ادیت پیام با تحمل «message is not modified».
+
+    وقتی صفحه دوباره با همان محتوا رندر می‌شود (بررسی وضعیت، بازگشت، یا عملیاتی
+    که وضعیت نمایشی را تغییر نداده) تلگرام ادیت را رد می‌کند؛ بدون این محافظ
+    کاربر پاپ‌آپ خطا می‌گیرد. خطاهای واقعی همچنان بالا می‌روند."""
+    from aiogram.exceptions import TelegramBadRequest
+    try:
+        await msg.edit_text(text, parse_mode="HTML", reply_markup=reply_markup)
+    except TelegramBadRequest as e:
+        if "not modified" not in str(e).lower():
+            raise
+
 logger = logging.getLogger(__name__)
 router = Router(name="servers")
 
@@ -272,7 +286,10 @@ async def _render_server_detail(cb: CallbackQuery, user: User, session: AsyncSes
     _extra_ips = (server.extra_data or {}).get("extra_ips") or []
     extra_ip_line = "".join(f"آیپی اضافه: <code>{ip}</code>\n" for ip in _extra_ips)
 
-    await cb.message.edit_text(
+    # ادیتِ امن: «بررسی وضعیت» یا بازگشت به همین صفحه وقتی چیزی عوض نشده باشد،
+    # خطای «message is not modified» می‌دهد و کاربر پاپ‌آپ خطا می‌گیرد
+    await _edit_ignore_same(
+        cb.message,
         f'<tg-emoji emoji-id="5348332751470739727">📃</tg-emoji> <b>نام سرور:</b> {server.name}\n\n'
         f"آیپی: <code>{server.ip_address or 'در حال تخصیص'}</code>\n"
         f"{extra_ip_line}"
@@ -284,8 +301,7 @@ async def _render_server_detail(cb: CallbackQuery, user: User, session: AsyncSes
         f"• {billing_label} — {price:,.0f} {price_unit}\n"
         f"{monthly_line}"
         f"• ساخته شده: {server.created_at.strftime('%Y/%m/%d')}",
-        parse_mode="HTML",
-        reply_markup=server_actions_kb(server),
+        server_actions_kb(server),
     )
     try:
         await cb.answer()

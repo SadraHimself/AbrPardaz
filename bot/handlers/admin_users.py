@@ -27,6 +27,20 @@ from bot.services.log_service import LogService
 router = Router(name="admin_users")
 
 
+async def _safe_edit(msg, text: str, reply_markup=None) -> None:
+    """ادیت پیام با تحمل «message is not modified».
+
+    وقتی یک عملیات (ریبوت/روشن/خاموش) وضعیتِ نمایشی را تغییر نمی‌دهد، تلگرام
+    ادیتِ محتوای یکسان را رد می‌کند؛ بدون این محافظ، آن خطا به‌عنوان «❌ خطا»
+    به ادمین نشان داده می‌شد در حالی که عملیات موفق بوده است."""
+    from aiogram.exceptions import TelegramBadRequest
+    try:
+        await msg.edit_text(text, parse_mode="HTML", reply_markup=reply_markup)
+    except TelegramBadRequest as e:
+        if "not modified" not in str(e).lower():
+            raise
+
+
 class AdminFilter(Filter):
     # user برای آپدیت‌های گروهی (سرویس‌پیام‌ها/تاپیک‌ها) ست نمی‌شود — پیش‌فرض None
     # تا فیلتر به‌جای TypeError، فقط False برگرداند
@@ -181,7 +195,9 @@ async def _show_user_detail(msg, session: AsyncSession, user: User, edit: bool =
     )
     kb = user_detail_kb(user.id, is_banned, user.is_kyc_verified, hourly_limit)
     if edit:
-        await msg.edit_text(text, parse_mode="HTML", reply_markup=kb)
+        # اکشن‌هایی که متن را عوض نمی‌کنند (مثلاً تنظیم همان مقدار قبلی) نباید
+        # با «message is not modified» به‌عنوان خطا گزارش شوند
+        await _safe_edit(msg, text, kb)
     else:
         await msg.answer(text, parse_mode="HTML", reply_markup=kb)
 
@@ -811,7 +827,11 @@ async def _render_admin_server(msg, session: AsyncSession, server: Server):
     _rows.append([InlineKeyboardButton(text="بازگشت", callback_data=f"admin:user_servers:{server.user_id}")])
     kb = InlineKeyboardMarkup(inline_keyboard=_rows)
 
-    await msg.edit_text(
+    # ⚠️ ادیتِ امن: اگر بعد از عملیات (مثلاً ریبوت) هیچ‌کدام از مقادیر نمایشی
+    # عوض نشده باشد، تلگرام «message is not modified» می‌دهد؛ این خطا به‌عنوان
+    # شکستِ عملیات به ادمین نمایش داده می‌شد در حالی که کار انجام شده بود.
+    await _safe_edit(
+        msg,
         f"<b>نام سرور:</b> {server.name}\n\n"
         f"آیپی: <code>{server.ip_address or 'در حال تخصیص'}</code>\n"
         f"{extra_ip_line}"
@@ -821,8 +841,7 @@ async def _render_admin_server(msg, session: AsyncSession, server: Server):
         f"{traffic_text}\n"
         f"• {billing_label} — {price:,.0f} تومان\n"
         f"• ساخته شده: {server.created_at.strftime('%Y/%m/%d')}",
-        parse_mode="HTML",
-        reply_markup=kb,
+        kb,
     )
 
 

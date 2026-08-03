@@ -108,6 +108,10 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
         # سرویس با ترافیک نامحدود دکمه نمی‌گیرد (چیزی برای خریدن ندارد)
         if is_virt and server.traffic_limit_gb is not None:
             rows.append([_btn("خرید ترافیک", f"srv_buytraffic:{sid}", icon="5454074580010295588")])
+        # ویرچولایزور: ارتقاء پلن (ساعتی و ماهانه) — فقط منابع بالا می‌رود،
+        # ترافیک دست نمی‌خورد
+        if is_virt:
+            rows.append([_btn("ارتقاء پلن", f"srv_upg:{sid}", icon="5346012979504626416")])
         if is_hourly:
             # ویرچولایزور: تبدیل چرخه به ماهانه با پرداخت یک ماه
             if is_virt:

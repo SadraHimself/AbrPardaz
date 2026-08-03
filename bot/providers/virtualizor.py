@@ -615,6 +615,187 @@ class VirtualizorProvider(BaseProvider):
         done_val = data.get("done")
         return bool(done_val) if not isinstance(done_val, dict) else bool(done_val.get("done"))
 
+    async def apply_resources(self, server_id: str, ram: Optional[int] = None,
+                              cores: Optional[int] = None,
+                              disk: Optional[int] = None) -> dict:
+        """ارتقاء منابعِ یک VPS موجود — **بدون هیچ تغییری در ترافیک**.
+
+        ⚠️ چرا «اعمال پلن» (plid) ممنوع است: اگر پلن روی VPS اعمال شود،
+        ویرچولایزور سهمیه و مصرفِ ترافیک را هم از نو می‌نویسد، یعنی مشتری‌ای که
+        ۱۵ ترابایت مصرف کرده ناگهان دوباره ۲۰ ترابایتِ دست‌نخورده می‌گیرد.
+        پس فقط فیلدهای منابع فرستاده می‌شوند و `plid`/`bandwidth` هرگز.
+
+        محافظ‌ها:
+          • دیسک فقط بزرگ می‌شود؛ کوچک‌کردن = نابودی داده → نادیده گرفته می‌شود.
+          • آرایه‌ی `space` فقط وقتی ارسال می‌شود که بتوان **همه‌ی** دیسک‌های
+            موجود را شمرد (مستند: هر دیسکی که در آرایه نباشد حذف می‌شود).
+            اگر شمردن قطعی نبود، دیسک دست‌نخورده می‌ماند و در خروجی گزارش می‌شود.
+          • بعد از اعمال، سهمیه‌ی ترافیک بازخوانی و اگر عوض شده بود برگردانده
+            می‌شود (پنل ممکن است بی‌خبر آن را تغییر دهد).
+
+        خروجی: {"ram":int|None, "cores":int|None, "disk":int|None,
+                 "disk_skipped":bool, "bandwidth_restored":bool}
+        """
+        def _i(v) -> int:
+            try:
+                return int(float(v or 0))
+            except (TypeError, ValueError):
+                return 0
+
+        before = await self._vs_row(server_id)
+        if not before:
+            # قبل از هر نوشتنی خطا بده تا caller بتواند تمیز وجه را برگرداند —
+            # «خوانده نشد» هرگز نباید با «اعمال شد» اشتباه گرفته شود
+            raise RuntimeError("خواندن وضعیت فعلی سرویس از پنل ممکن نشد.")
+        bw_before = _i(before.get("bandwidth"))
+        used_before = float(before.get("used_bandwidth") or 0)
+        cur_ram, cur_cores = _i(before.get("ram")), _i(before.get("cores"))
+
+        payload: dict = {"vpsid": server_id, "editvps": 1}
+        want: dict = {}
+        # فقط-افزایشی: منابع واقعیِ VM ممکن است از پلن بیشتر باشد (ویرایش دستیِ
+        # ادمین) — نوشتن کورکورانه‌ی مقدار پلن آن VM را «تنزل» می‌داد
+        if ram and int(ram) > cur_ram:
+            payload["ram"] = want["ram"] = int(ram)
+        if cores and int(cores) > cur_cores:
+            payload["cores"] = want["cores"] = int(cores)
+
+        disk_skipped = False
+        disk_req = 0
+        if disk:
+            entries = await self._vps_disks(server_id, before)
+            if not entries:
+                # شمارشِ قطعیِ دیسک‌ها ممکن نشد → آرایه‌ی space فرستاده نمی‌شود
+                # (هر دیسکی که در آرایه نباشد توسط پنل حذف می‌شود = نابودی داده)
+                disk_skipped = True
+                logger.warning("apply_resources: disks not enumerable for vps %s — "
+                               "disk untouched", server_id)
+            else:
+                prim_idx = next((i for i, d in enumerate(entries) if d["primary"]), 0)
+                prim_size = entries[prim_idx]["size"]
+                if int(disk) > prim_size:
+                    disk_req = int(disk)
+                    for idx, d in enumerate(entries):
+                        # فقط دیسکِ اصلی بزرگ می‌شود؛ بقیه عیناً بازفرستاده
+                        # می‌شوند تا حذف نشوند
+                        payload[f"space[{idx}][size]"] = disk_req if idx == prim_idx else d["size"]
+                        if d["st_uuid"]:
+                            payload[f"space[{idx}][st_uuid]"] = d["st_uuid"]
+                        if d["bus_driver"]:
+                            payload[f"space[{idx}][bus_driver]"] = d["bus_driver"]
+                            payload[f"space[{idx}][bus_driver_num]"] = d["bus_driver_num"]
+
+        if len(payload) <= 2:      # فقط vpsid+editvps ⇒ چیزی برای تغییر نیست
+            return {"ram": cur_ram, "cores": cur_cores, "disk": _i(before.get("space")),
+                    "disk_req": 0, "disk_skipped": disk_skipped, "changed": False,
+                    "unverified": [], "traffic_alert": ""}
+
+        await self._request("managevps", payload, query={"vpsid": server_id})
+
+        # ── از این نقطه به بعد نوشتن روی پنل انجام شده: هیچ استثنایی نباید بالا
+        #    برود، وگرنه caller وجه را برمی‌گرداند در حالی که منابع اعمال شده‌اند
+        result = {"ram": cur_ram, "cores": cur_cores, "disk": _i(before.get("space")),
+                  "disk_req": disk_req, "disk_skipped": disk_skipped, "changed": True,
+                  "unverified": list(want.keys()), "traffic_alert": ""}
+        after: dict = {}
+        for attempt in range(3):
+            if attempt:
+                await asyncio.sleep(2)
+            try:
+                after = await self._vs_row(server_id)
+            except Exception:
+                after = {}
+                continue
+            if after:
+                break
+        if not after:
+            logger.warning("apply_resources: verify read failed for vps %s", server_id)
+            return result
+
+        a_ram, a_cores = _i(after.get("ram")), _i(after.get("cores"))
+        result["ram"], result["cores"] = a_ram or cur_ram, a_cores or cur_cores
+        result["disk"] = _i(after.get("space")) or result["disk"]
+        result["unverified"] = [
+            k for k, v in want.items()
+            if (a_ram if k == "ram" else a_cores) < v
+        ]
+
+        # ── ترافیک: نه سهمیه نه مصرف نباید عوض شده باشد ──
+        bw_after = _i(after.get("bandwidth"))
+        used_after = float(after.get("used_bandwidth") or 0)
+        if bw_after != bw_before:
+            # شامل حالت «نامحدود» (صفر) هم می‌شود: اگر VMِ نامحدود ناگهان سقف
+            # گرفت باید برگردانده شود
+            try:
+                await self._request(
+                    "managevps",
+                    {"vpsid": server_id, "editvps": 1, "bandwidth": bw_before},
+                    query={"vpsid": server_id})
+                logger.warning("apply_resources: bandwidth %s→%s on vps %s — restored",
+                               bw_before, bw_after, server_id)
+            except Exception:
+                logger.exception("apply_resources: bandwidth restore FAILED vps %s", server_id)
+                result["traffic_alert"] = (
+                    f"سهمیه‌ی ترافیک از {bw_before} به {bw_after} تغییر کرد و "
+                    "بازگرداندن آن ناموفق بود")
+        if used_before > 0 and used_after < used_before * 0.9:
+            # شمارنده‌ی مصرف عقب رفته = ریستِ ناخواسته (قابل بازگرداندن نیست)
+            logger.error("apply_resources: used_bandwidth dropped %.2f→%.2f on vps %s",
+                         used_before, used_after, server_id)
+            result["traffic_alert"] = (
+                f"شمارنده‌ی مصرف ترافیک از {used_before:.0f} به {used_after:.0f} "
+                "گیگ افت کرد")
+        return result
+
+    async def _vps_disks(self, server_id: str, vs_row: dict | None = None) -> list[dict]:
+        """همه‌ی دیسک‌های یک VPS با اندازه/استوریج. لیست خالی = شمارش قطعی نشد
+        (در آن حالت نباید آرایه‌ی space فرستاده شود، وگرنه دیسک حذف می‌شود)."""
+        raw = None
+        for src in (vs_row or {}, ):
+            if isinstance(src.get("disks"), (list, dict)):
+                raw = src["disks"]
+                break
+        if raw is None:
+            try:
+                mv = await self._request("managevps", {}, query={"vpsid": server_id})
+                if isinstance(mv.get("disks"), (list, dict)):
+                    raw = mv["disks"]
+            except Exception:
+                raw = None
+        if raw is None:
+            return []
+        items = list(raw.values()) if isinstance(raw, dict) else list(raw)
+        out: list[dict] = []
+        for i, d in enumerate(items):
+            if not isinstance(d, dict):
+                return []          # شکل ناشناخته → ریسک نکن
+            try:
+                size = int(float(d.get("size") or 0))
+            except (TypeError, ValueError):
+                return []
+            if size <= 0:
+                return []
+            out.append({
+                "size": size,
+                "primary": str(d.get("primary", "1" if i == 0 else "0")) in ("1", "True", "true"),
+                "st_uuid": d.get("st_uuid") or d.get("uuid") or "",
+                "bus_driver": d.get("bus_driver") or "",
+                "bus_driver_num": d.get("bus_driver_num") if d.get("bus_driver_num") is not None else i,
+            })
+        if not out:
+            return []          # ظرفِ خالی = شمارش قطعی نشد
+        # دقیقاً یک دیسکِ اصلی: نبودش → اولی؛ بیش از یکی → فقط اولی
+        # (وگرنه همه‌ی دیسک‌های primary تا اندازه‌ی کاملِ پلن بزرگ می‌شوند)
+        _seen = False
+        for d in out:
+            if d["primary"] and not _seen:
+                _seen = True
+            elif d["primary"]:
+                d["primary"] = False
+        if not _seen:
+            out[0]["primary"] = True
+        return out
+
     async def change_ip(self, server_id: str) -> str:
         """Assign a new free IP taken ONLY from this VPS's allowed pool.
 

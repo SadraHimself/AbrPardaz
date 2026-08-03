@@ -140,6 +140,23 @@ class LogService:
             f"{await self._origin_line(server)}",
         )
 
+    async def log_plan_upgrade(self, user: User, server: Server, old_plan: str,
+                               new_plan: str, amount: float) -> None:
+        """ارتقاء پلن سرویس — تاپیک «لاگ سرور»."""
+        _amt = (f"\n💵 مابه‌التفاوت: {amount:,.0f} تومان" if amount > 0
+                else "\n💵 بدون کسر فوری (ساعتی — نرخ جدید از ساعت بعد)")
+        await self._send(
+            "server",
+            f"⬆️ <b>ارتقاء پلن</b>\n\n"
+            f"{self._user_line(user)}\n"
+            f"🖥 سرور: {server.name}\n"
+            f"🌐 آیپی: <code>{server.ip_address or '—'}</code>\n"
+            f"📦 پلن: {old_plan} ← <b>{new_plan}</b>\n"
+            f"⚙️ منابع: {server.cpu} هسته | {server.ram} MB | {server.disk} GB"
+            f"{_amt}"
+            f"{await self._origin_line(server)}",
+        )
+
     async def log_traffic_purchase(self, user: User, server: Server,
                                    gb: float, amount: float) -> None:
         """خرید ترافیک اضافه — هم‌قالبِ لاگ خرید."""

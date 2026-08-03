@@ -880,6 +880,384 @@ async def msg_renew_discount(message: Message, user: User, state: FSMContext, se
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  UPGRADE PLAN (فقط ویرچولایزور)
+#
+#  قاعده‌ی حیاتی: ارتقاء فقط منابع (رم/سی‌پی‌یو/دیسک) را بالا می‌برد. سهمیه و
+#  مصرفِ ترافیک هرگز دست نمی‌خورد — «اعمال پلن» در ویرچولایزور شمارنده‌ی ترافیک
+#  را ریست می‌کند و مشتریِ ۱۵ترابایت‌مصرف‌کرده دوباره سهمیه‌ی کامل می‌گرفت.
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def _plan_toman(session: AsyncSession, plan, hourly: bool) -> float:
+    """قیمت پلن به تومان با نرخ روز. صفر = قیمت/نرخ در دسترس نیست."""
+    amount = plan.price_hourly if hourly else plan.price_monthly
+    if not amount:
+        return 0.0
+    cur = obj_currency(plan)
+    if cur == "irt":
+        return float(amount)
+    return await to_toman(session, amount, cur)
+
+
+async def _upgrade_candidates(session: AsyncSession, server: Server, plan) -> list:
+    """پلن‌هایی که ارتقاء واقعی محسوب می‌شوند.
+
+    شرط‌ها: همان اکانتِ سرویس‌دهنده (همان نود/پنل)، فعال، هیچ منبعی کمتر نشود،
+    حداقل یک منبع بیشتر شود، و قیمتش بالاتر از پلن فعلی باشد (جلوی «ارتقاء» به
+    پلن ارزان‌تر یا هم‌قیمت را می‌گیرد)."""
+    hourly = server.billing_type == BillingType.HOURLY
+    cur_price = await _plan_toman(session, plan, hourly)
+    if cur_price <= 0:
+        # مبنای قیمت نامعلوم (قیمت خالی یا نرخ ارز نیامده) → هیچ ارتقائی مجاز
+        # نیست؛ وگرنه مابه‌التفاوت = کلِ قیمت پلن جدید محاسبه می‌شد
+        return []
+    rows = (await session.execute(
+        select(ServerPlan).where(
+            ServerPlan.provider_type == ProviderType.VIRTUALIZOR,
+            ServerPlan.provider_account_id == server.provider_account_id,
+            ServerPlan.is_active == True,
+            ServerPlan.id != plan.id,
+            # همان نود/گروه: ارتقاء VM را جابه‌جا نمی‌کند، پس پلنِ مقصد باید
+            # به همان لوکیشن و همان گروه تعلق داشته باشد
+            ServerPlan.location == plan.location,
+            ServerPlan.category == plan.category,
+        )
+    )).scalars().all()
+    # منابعِ واقعیِ VM ممکن است از پلن بیشتر باشد (ویرایش دستی) — مبنا بیشترینِ
+    # این دو تا هیچ منبعی کم نشود
+    base_ram = max(plan.ram or 0, server.ram or 0)
+    base_cpu = max(plan.cpu or 0, server.cpu or 0)
+    base_disk = max(plan.disk or 0, server.disk or 0)
+    out = []
+    for p in rows:
+        if (p.ram or 0) < base_ram or (p.cpu or 0) < base_cpu or (p.disk or 0) < base_disk:
+            continue
+        if not ((p.ram or 0) > base_ram or (p.cpu or 0) > base_cpu
+                or (p.disk or 0) > base_disk):
+            continue
+        # سهمیه‌ی ترافیک با ارتقاء دست نمی‌خورد؛ پس پلنِ مقصد باید همان سهمیه را
+        # داشته باشد، وگرنه یا مشتری سهمیه‌ی بزرگ‌تر را با قیمت پلنِ کم‌ترافیک
+        # نگه می‌دارد، یا پول ترافیکی را می‌دهد که هرگز دریافت نمی‌کند
+        if (p.bandwidth or 0) != (plan.bandwidth or 0):
+            continue
+        price = await _plan_toman(session, p, hourly)
+        if price <= 0 or price <= cur_price:
+            continue
+        out.append((p, price))
+    out.sort(key=lambda x: x[1])
+    return out
+
+
+async def _current_plan(session: AsyncSession, server: Server):
+    pid = (server.extra_data or {}).get("plan_id")
+    return await session.get(ServerPlan, int(pid)) if pid else None
+
+
+def _upg_guard(server: Server, user: User) -> str:
+    """پیام خطا اگر سرویس قابل ارتقاء نیست؛ رشته‌ی خالی = مجاز."""
+    if not server or server.user_id != user.id:
+        return "سرور یافت نشد."
+    if server.provider_type != ProviderType.VIRTUALIZOR:
+        return "ارتقاء پلن فعلاً فقط برای سرورهای ویرچولایزور فعال است."
+    if server.status != ServerStatus.ACTIVE:
+        return "فقط سرویس فعال قابل ارتقاء است."
+    return ""
+
+
+@router.callback_query(F.data.startswith("srv_upg:"))
+async def cb_srv_upgrade(cb: CallbackQuery, user: User, session: AsyncSession):
+    server = await session.get(Server, int(cb.data.split(":")[1]))
+    _err = _upg_guard(server, user)
+    if _err:
+        await cb.answer(_err, show_alert=True)
+        return
+    plan = await _current_plan(session, server)
+    if not plan:
+        await cb.answer("پلن این سرویس مشخص نیست — با پشتیبانی تماس بگیرید.",
+                        show_alert=True)
+        return
+    cands = await _upgrade_candidates(session, server, plan)
+    if not cands:
+        await cb.answer("پلن بالاتری برای این سرویس موجود نیست.", show_alert=True)
+        return
+    hourly = server.billing_type == BillingType.HOURLY
+    cur_price = await _plan_toman(session, plan, hourly)
+    rows = []
+    for p, price in cands:
+        _ram = (p.ram // 1024) if p.ram >= 1024 else p.ram
+        _spec = f"{p.cpu}هسته | {_ram}رم | {p.disk}گیگ".translate(_FA_DIGITS)
+        # ساعتی: نرخ جدید | ماهانه: مابه‌التفاوتی که همین حالا پرداخت می‌شود
+        _amount = price if hourly else max(0.0, price - cur_price)
+        _tag = "ساعتی" if hourly else "پرداخت"
+        # کدِ پلن (AF01) داخل ایزوله‌ی LTR می‌ماند و ارقامش لاتین — فقط بخش
+        # فارسیِ لیبل به رقم فارسی تبدیل می‌شود
+        _tail = f" | {_spec} | {_amount:,.0f} تومان {_tag}".translate(_FA_DIGITS)
+        rows.append([InlineKeyboardButton(
+            text=f"‏⁦{p.display_name or p.name}⁩{_tail}",
+            callback_data=f"srv_upgp:{server.id}:{p.id}")])
+    rows.append([InlineKeyboardButton(text="بازگشت", callback_data=f"server:{server.id}",
+                                      **{"icon_custom_emoji_id": "5258236805890710909"})])
+    await cb.answer()
+    _cur_ram = (plan.ram // 1024) if plan.ram >= 1024 else plan.ram
+    await _edit_ignore_same(
+        cb.message,
+        f"<b>ارتقاء پلن — {server.name}</b>\n\n"
+        f"پلن فعلی: {plan.display_name or plan.name} — "
+        f"{f'{plan.cpu}هسته | {_cur_ram}رم | {plan.disk}گیگ'.translate(_FA_DIGITS)}\n\n"
+        "<i>با ارتقاء، فقط منابع سرویس بیشتر می‌شود؛ ترافیک مصرف‌شده و سهمیه‌ی "
+        "ترافیک شما دست‌نخورده باقی می‌ماند.</i>\n\n"
+        "پلن جدید را انتخاب کنید:",
+        InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+@router.callback_query(F.data.startswith("srv_upgp:"))
+async def cb_srv_upgrade_pick(cb: CallbackQuery, user: User, session: AsyncSession):
+    _, sid, pid = cb.data.split(":")
+    server = await session.get(Server, int(sid))
+    _err = _upg_guard(server, user)
+    if _err:
+        await cb.answer(_err, show_alert=True)
+        return
+    plan = await _current_plan(session, server)
+    new_plan = await session.get(ServerPlan, int(pid))
+    if not plan or not new_plan:
+        await cb.answer("پلن یافت نشد.", show_alert=True)
+        return
+    # بازچکِ واجد شرایط بودن (کیبورد کهنه / callback دستکاری‌شده)
+    if not any(p.id == new_plan.id for p, _ in await _upgrade_candidates(session, server, plan)):
+        await cb.answer("این پلن برای ارتقاء این سرویس معتبر نیست.", show_alert=True)
+        return
+
+    hourly = server.billing_type == BillingType.HOURLY
+    new_price = await _plan_toman(session, new_plan, hourly)
+    cur_price = await _plan_toman(session, plan, hourly)
+    pay_now = 0.0 if hourly else max(0.0, new_price - cur_price)
+    if new_price <= 0 or (not hourly and pay_now <= 0):
+        await cb.answer("محاسبه‌ی هزینه‌ی ارتقاء ممکن نیست — کمی بعد تلاش کنید.",
+                        show_alert=True)
+        return
+
+    _nram = (new_plan.ram // 1024) if new_plan.ram >= 1024 else new_plan.ram
+    _cram = (plan.ram // 1024) if plan.ram >= 1024 else plan.ram
+    _diff = (f"سی‌پی‌یو: {plan.cpu} ← {new_plan.cpu} هسته\n"
+             f"رم: {_cram} ← {_nram} گیگ\n"
+             f"دیسک: {plan.disk} ← {new_plan.disk} گیگ").translate(_FA_DIGITS)
+    if hourly:
+        _cost = (f"نرخ فعلی: {cur_price:,.0f} تومان/ساعت\n"
+                 f"<b>نرخ جدید: {new_price:,.0f} تومان/ساعت</b>\n\n"
+                 "<i>هزینه‌ای همین حالا کسر نمی‌شود؛ از ساعت بعد با نرخ جدید "
+                 "محاسبه می‌شوید.</i>").translate(_FA_DIGITS)
+    else:
+        _cost = (f"هزینه‌ی ماهانه: {cur_price:,.0f} ← {new_price:,.0f} تومان\n"
+                 f"<b>مابه‌التفاوت قابل پرداخت: {pay_now:,.0f} تومان</b>\n\n"
+                 "<i>این مبلغ همین حالا از کیف پول کسر می‌شود. تاریخ تمدید سرویس "
+                 "تغییری نمی‌کند.</i>").translate(_FA_DIGITS)
+    await cb.answer()
+    await _edit_ignore_same(
+        cb.message,
+        f"<b>تأیید ارتقاء — {server.name}</b>\n\n"
+        f"{plan.display_name or plan.name} ← <b>{new_plan.display_name or new_plan.name}</b>\n\n"
+        f"{_diff}\n\n{_cost}\n\n"
+        f"{WARN} این عملیات <b>قابل بازگشت نیست</b> و امکان بازگشت به پلن پایین‌تر "
+        "وجود ندارد.\n"
+        "ترافیک مصرف‌شده و سهمیه‌ی ترافیک شما تغییر نمی‌کند.",
+        InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="تأیید ارتقاء",
+                                 callback_data=f"srv_upgdo:{server.id}:{new_plan.id}",
+                                 **{"style": "success",
+                                    "icon_custom_emoji_id": "5206607081334906820"}),
+            InlineKeyboardButton(text="انصراف", callback_data=f"server:{server.id}",
+                                 **{"style": "danger",
+                                    "icon_custom_emoji_id": "5240241223632954241"}),
+        ]]),
+    )
+
+
+@router.callback_query(F.data.startswith("srv_upgdo:"))
+async def cb_srv_upgrade_do(cb: CallbackQuery, user: User, session: AsyncSession):
+    _, sid, pid = cb.data.split(":")
+    server_id, plan_id = int(sid), int(pid)
+    await cb.answer()
+    kb = _renew_back_kb(server_id)
+    # قفل ردیف — ضد دابل‌کلیک (دو بار کسر / دو بار اعمال)
+    server = (await session.execute(
+        select(Server).where(Server.id == server_id).with_for_update()
+    )).scalar_one_or_none()
+    _err = _upg_guard(server, user)
+    if _err:
+        await _safe_edit(cb.message, f"{ERR} {_err}", kb)
+        return
+    plan = await _current_plan(session, server)
+    new_plan = await session.get(ServerPlan, plan_id)
+    if not plan or not new_plan:
+        await _safe_edit(cb.message, f"{ERR} پلن یافت نشد.", kb)
+        return
+    # بازچک زیر قفل: پلن ممکن است بین دو صفحه غیرفعال/حذف شده باشد
+    if not any(p.id == plan_id for p, _ in await _upgrade_candidates(session, server, plan)):
+        await _safe_edit(cb.message, f"{ERR} این پلن دیگر برای ارتقاء معتبر نیست.", kb)
+        return
+
+    hourly = server.billing_type == BillingType.HOURLY
+    new_price = await _plan_toman(session, new_plan, hourly)
+    cur_price = await _plan_toman(session, plan, hourly)
+    pay_now = 0.0 if hourly else max(0.0, new_price - cur_price)
+    if new_price <= 0 or (not hourly and pay_now <= 0):
+        await _safe_edit(cb.message,
+                         f"{ERR} محاسبه‌ی هزینه‌ی ارتقاء ممکن نیست — کمی بعد تلاش کنید.", kb)
+        return
+
+    billing = BillingService(session)
+    if hourly:
+        # ⚠️ ساعتی کسر فوری ندارد → بدون گارد می‌شد با اعتبارِ یک ساعت، همه‌ی
+        # سرویس‌ها را به بزرگ‌ترین پلن برد و ساعت‌ها منابع مجانی گرفت.
+        # (الف) در مهلتِ «موجودی تمام شد» ارتقاء ممنوع
+        _uex = user.extra_data or {}
+        if _uex.get("balance_empty_at") is not None:
+            await _safe_edit(
+                cb.message,
+                f"{ERR} کیف پول شما در وضعیت هشدارِ اتمام موجودی است — "
+                "ابتدا کیف پول را شارژ کنید.", kb)
+            return
+        # (ب) اعتبار باید یک ساعتِ «همه‌ی» سرویس‌های ساعتیِ فعال را پوشش دهد
+        # (با نرخ جدید برای همین سرویس)
+        _rows = (await session.execute(
+            select(Server).where(
+                Server.user_id == user.id,
+                Server.status == ServerStatus.ACTIVE,
+                Server.billing_type == BillingType.HOURLY,
+            )
+        )).scalars().all()
+        _need = new_price
+        for _s in _rows:
+            if _s.id == server.id:
+                continue
+            try:
+                _a, _c = await server_live_price(session, _s, hourly=True)
+                _a = float(_a or 0)
+                if _a > 0:
+                    _need += _a if _c == "irt" else await to_toman(session, _a, _c)
+            except Exception:
+                pass
+        if user.balance < _need:
+            await _safe_edit(
+                cb.message,
+                f"{ERR} برای ارتقاء باید اعتبار یک ساعتِ همه‌ی سرویس‌های ساعتی "
+                f"شما موجود باشد.\nمبلغ لازم: <b>{_need:,.0f} تومان</b>\n"
+                f"موجودی شما: {user.balance:,.0f} تومان", kb)
+            return
+    else:
+        if not await billing.debit(user.id, pay_now, server_id=server.id,
+                                   description=f"ارتقاء پلن — {server.name}"):
+            await _safe_edit(
+                cb.message,
+                f"{ERR} موجودی کیف پول کافی نیست.\n"
+                f"مبلغ لازم: <b>{pay_now:,.0f} تومان</b>", kb)
+            return
+
+    # ── اعمال روی پنل ──
+    try:
+        account = await session.get(ProviderAccount, server.provider_account_id)
+        if not account or not server.provider_server_id:
+            raise RuntimeError("اطلاعات سرویس‌دهنده یافت نشد.")
+        prov = get_provider(account)
+        import asyncio as _ai
+        # سقف زمانی: قفلِ ردیف سرور تا پایان هندلر باز نمی‌شود، پس تماس با پنل
+        # نباید دقیقه‌ها طول بکشد و بیلینگ همان سرور را بلاک کند
+        applied = await _ai.wait_for(
+            prov.apply_resources(server.provider_server_id,
+                                 ram=new_plan.ram, cores=new_plan.cpu,
+                                 disk=new_plan.disk),
+            timeout=90)
+        # هیچ‌کدام از تغییرات درخواستی تأیید نشد → مثل شکست رفتار کن (برگشت وجه)
+        if applied.get("changed") and len(applied.get("unverified") or []) >= 2:
+            raise RuntimeError("پنل تغییر منابع را اعمال نکرد.")
+    except Exception as e:
+        if not hourly and pay_now > 0:
+            await billing.credit(user.id, pay_now,
+                                 description=f"برگشت وجه ارتقاء پلن — {server.name}")
+        await session.flush()
+        await _safe_edit(
+            cb.message,
+            f"{ERR} ارتقاء انجام نشد: {_esc(e)}"
+            + ("\nمبلغ به‌طور کامل به کیف پول برگشت داده شد." if not hourly else ""), kb)
+        return
+
+    # ── از اینجا تغییر روی پنل انجام شده: هیچ استثنایی نباید بالا برود ──
+    old_name = plan.display_name or plan.name
+    try:
+        # فقط مقادیرِ تأییدشده‌ی پنل نوشته می‌شوند (نه آرزوی پلن) تا رکورد ربات
+        # چیزی را ادعا نکند که روی VM نیست
+        if applied.get("ram"):
+            server.ram = applied["ram"]
+        if applied.get("cores"):
+            server.cpu = applied["cores"]
+        # دیسک در ویرچولایزور async بزرگ می‌شود و بلافاصله مقدار قدیمی را
+        # برمی‌گرداند؛ فقط وقتی بنویس که واقعاً رشد کرده باشد
+        if applied.get("disk") and applied["disk"] >= (applied.get("disk_req") or 0):
+            server.disk = applied["disk"]
+        elif applied.get("disk_req"):
+            server.disk = applied["disk_req"]
+        extra = dict(server.extra_data or {})
+        extra["plan_id"] = new_plan.id          # بیلینگ از این لحظه با پلن جدید
+        extra["currency"] = obj_currency(new_plan)
+        server.extra_data = extra
+        # کپی قیمت روی رکورد سرور (fallback در صورت حذف پلن) — بدون شرط، وگرنه
+        # قیمتِ پلن قبلی به‌عنوان fallback کهنه باقی می‌ماند
+        server.price_hourly = new_plan.price_hourly
+        server.price_monthly = new_plan.price_monthly
+        # ⚠️ عمداً دست‌نخورده: traffic_limit_gb / traffic_used_gb / expires_at /
+        #    last_billed_at / created_at
+        await session.flush()
+    except Exception:
+        logger.exception("plan upgrade: post-steps failed for server %s", server_id)
+
+    _alert = applied.get("traffic_alert") or ""
+    _unver = applied.get("unverified") or []
+    try:
+        from bot.services.log_service import LogService
+        _log = LogService(cb.bot, session)
+        await _log.log_plan_upgrade(
+            user, server, old_name, new_plan.display_name or new_plan.name, pay_now)
+        if _alert or _unver or applied.get("disk_skipped"):
+            _parts = []
+            if _alert:
+                _parts.append(f"⛔ ترافیک: {_alert}")
+            if _unver:
+                _parts.append(f"⚠️ تأیید نشد: {', '.join(_unver)}")
+            if applied.get("disk_skipped"):
+                _parts.append("⚠️ دیسک اعمال نشد (شمارش دیسک‌ها ممکن نشد)")
+            await _log._send(
+                "server",
+                f"⚠️ <b>ارتقاء پلن — بررسی دستی لازم است</b>\n\n"
+                f"سرور: {server.name} (vps {server.provider_server_id})\n"
+                + "\n".join(_parts))
+    except Exception:
+        pass
+
+    _tail = ""
+    if _alert:
+        _tail += ("\n\n" + WARN + " وضعیت ترافیک سرویس شما توسط پشتیبانی بررسی "
+                  "می‌شود.")
+    if _unver:
+        _tail += ("\n\n" + WARN + " اعمال بخشی از منابع تأیید نشد و در حال بررسی "
+                  "است.")
+    if applied.get("disk_skipped"):
+        _tail += ("\n\n" + WARN + " افزایش دیسک به‌صورت خودکار اعمال نشد و توسط "
+                  "پشتیبانی بررسی می‌شود؛ بقیه‌ی منابع ارتقا یافت.")
+    if hourly:
+        _tail += (f"\n<i>از ساعت بعد با نرخ {new_price:,.0f} تومان در ساعت محاسبه "
+                  "می‌شوید.</i>").translate(_FA_DIGITS)
+    await _safe_edit(
+        cb.message,
+        f"کاربر گرامی سرویس {server.name} با موفقیت به پلن "
+        f"<b>{new_plan.display_name or new_plan.name}</b> ارتقا یافت."
+        + (f"\nمبلغ {pay_now:,.0f} تومان بابت مابه‌التفاوت از کیف پول شما کسر شد."
+           .translate(_FA_DIGITS) if pay_now > 0 else "")
+        + ("" if _alert else "\nترافیک مصرف‌شده و سهمیه‌ی شما تغییری نکرده است.")
+        + _tail + _RENEW_SIGN, kb)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  CONVERT hourly → monthly (فقط ویرچولایزور)
 # ══════════════════════════════════════════════════════════════════════════════
 

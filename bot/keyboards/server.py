@@ -107,7 +107,7 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
         # ویرچولایزور: خرید ترافیک اضافه (ساعتی و ماهانه) — تعرفه‌ها per-account.
         # سرویس با ترافیک نامحدود دکمه نمی‌گیرد (چیزی برای خریدن ندارد)
         if is_virt and server.traffic_limit_gb is not None:
-            rows.append([_btn("خرید ترافیک", f"srv_buytraffic:{sid}", icon="5936143551854285132")])
+            rows.append([_btn("خرید ترافیک", f"srv_buytraffic:{sid}", icon="5454074580010295588")])
         if is_hourly:
             # ویرچولایزور: تبدیل چرخه به ماهانه با پرداخت یک ماه
             if is_virt:
@@ -129,7 +129,7 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
         if (is_virt and server.suspend_reason == SuspendReason.TRAFFIC_EXCEEDED
                 and server.traffic_limit_gb is not None):
             rows.append([_btn("خرید ترافیک", f"srv_buytraffic:{sid}", "primary",
-                              "5936143551854285132")])
+                              "5454074580010295588")])
 
     elif server.status != ServerStatus.DELETED:
         off_row = [_btn("روشن کردن", f"srv_action:{sid}:start", "success", "5913241115489734452")]

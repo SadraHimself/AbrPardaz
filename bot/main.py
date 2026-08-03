@@ -199,6 +199,7 @@ async def main() -> None:
 
     # Start the webhook/callback server alongside the bot when any gateway needs it
     # (NOWPayments IPN and/or Zarinpal return callback).
+    runner = None
     if settings.NP_API_KEY or settings.ZARINPAL_MERCHANT_ID:
         from aiohttp import web
         from bot.webhook_server import create_webhook_app
@@ -210,12 +211,38 @@ async def main() -> None:
         webhook_app = create_webhook_app(bot)
         runner = web.AppRunner(webhook_app)
         await runner.setup()
-        site = web.TCPSite(runner, "0.0.0.0", settings.NP_WEBHOOK_PORT)
-        await site.start()
+        # ⚠️ ری‌استارت سرویس: پروسه‌ی قبلی ممکن است هنوز سوکت را نبسته باشد و
+        # bind با «address already in use» کل ربات را از کار می‌انداخت.
+        # reuse_address سوکتِ TIME_WAIT را قابل‌استفاده می‌کند و چند تلاش،
+        # فاصله‌ی خاموش‌شدنِ پروسه‌ی قبلی را پوشش می‌دهد.
+        site = web.TCPSite(runner, "0.0.0.0", settings.NP_WEBHOOK_PORT,
+                           reuse_address=True)
+        for _attempt in range(6):
+            try:
+                await site.start()
+                break
+            except OSError as e:
+                if _attempt == 5:
+                    logger.error("Webhook port %d busy after retries: %s",
+                                 settings.NP_WEBHOOK_PORT, e)
+                    raise
+                logger.warning("Webhook port %d busy (%s) — retrying in 2s...",
+                               settings.NP_WEBHOOK_PORT, e)
+                await asyncio.sleep(2)
+        else:
+            runner = None
         logger.info("Webhook/callback server listening on port %d", settings.NP_WEBHOOK_PORT)
 
-    logger.info("Starting polling...")
-    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+    try:
+        logger.info("Starting polling...")
+        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+    finally:
+        # سوکت باید صریح بسته شود تا ری‌استارتِ بعدی به همان خطا نخورد
+        if runner is not None:
+            try:
+                await runner.cleanup()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

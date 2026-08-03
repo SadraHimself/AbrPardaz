@@ -1563,31 +1563,6 @@ async def _select_category(cb: CallbackQuery, user: User, state: FSMContext,
     await _render_plan_list(cb, state, session, category, plans, back_cb="buy_server")
 
 
-# Braille Pattern Blank — نامرئی ولی «عرض‌دار» و whitespace حساب نمی‌شود، پس
-# تلگرام مثل فاصله‌ی معمولی trimش نمی‌کند. تنها اهرمِ پهن‌کردن دکمه‌ی اینلاین.
-_PAD_CH = "⠀"
-
-
-def _pad_uniform(labels: list[str]) -> list[str]:
-    """همه‌ی لیبل‌ها را تا طولِ بلندترینشان با کاراکتر نامرئی هم‌عرض می‌کند.
-
-    مرجعْ خودِ بلندترین لیبل است (نه یک عدد ثابت) → هیچ دکمه‌ای از چیزی که
-    از قبل در پیام جا می‌شده پهن‌تر نمی‌شود، پس ریسک بریده‌شدن اضافه نمی‌شود.
-    پد متقارن است تا متنِ دیده‌شده وسط‌چین بماند."""
-    if not labels:
-        return labels
-    target = max(len(x) for x in labels)
-    out = []
-    for x in labels:
-        extra = target - len(x)
-        if extra <= 0:
-            out.append(x)
-            continue
-        left = extra // 2
-        out.append(_PAD_CH * left + x + _PAD_CH * (extra - left))
-    return out
-
-
 async def _plan_price_toman(session: AsyncSession, plan, rates: dict) -> tuple[float, str]:
     """(مبلغ تومان، واحد) برای نمایش قیمت پلن روی دکمه.
 
@@ -1621,6 +1596,9 @@ async def _render_plan_list(cb: CallbackQuery, state: FSMContext, session: Async
     _units = {u for _t, u in _prices.values() if _t > 0}
     _inline_unit = len(_units) > 1
     _caption_unit = next(iter(_units)) if len(_units) == 1 else ""
+    # آیا در همین لیست، سرویسِ ساعتی هم قابل خرید است؟ (تا کاربر فکر نکند فقط
+    # ماهانه می‌فروشیم — قیمتِ روی دکمه ماهانه است و تعرفه‌ی ساعتی فرق دارد)
+    _also_hourly = any(p.price_hourly and p.price_monthly for p in plans)
 
     _labels: list[str] = []
     _btn_meta: list[tuple[int, dict]] = []
@@ -1662,20 +1640,24 @@ async def _render_plan_list(cb: CallbackQuery, state: FSMContext, session: Async
         _labels.append(label)
         _btn_meta.append((plan.id, {"icon_custom_emoji_id": _pe} if _pe else {}))
 
-    # هم‌عرض‌سازی: دکمه‌های کوتاه‌تر (و «بازگشت») با کاراکتر نامرئی تا عرضِ
-    # بلندترین دکمه پر می‌شوند → کل کیبورد یک بلوکِ مرتب و کشیده می‌شود
-    _padded = _pad_uniform(_labels + ["بازگشت"])
-    for _lbl, (_pid, _kw) in zip(_padded, _btn_meta):
+    # هر ردیف یک دکمه ⇒ همه‌ی دکمه‌ها از قبل تمام‌عرضِ کیبوردند؛ پد کردنِ متن
+    # چیزی پهن‌تر نمی‌کند و فقط باعث بریده‌شدن («…») دکمه‌های کوتاه می‌شود.
+    # پهنای کل بلوک از عرضِ حبابِ پیامِ بالای آن می‌آید (کپشن پایین).
+    for _lbl, (_pid, _kw) in zip(_labels, _btn_meta):
         builder.button(text=_lbl, callback_data=f"buyplan:{_pid}", **_kw)
-    builder.button(text=_padded[-1], callback_data=back_cb,
+    builder.button(text="بازگشت", callback_data=back_cb,
                    **{"icon_custom_emoji_id": "5258236805890710909"})
     builder.adjust(1)
 
     await state.update_data(category=category)
     await state.set_state(BuyServerStates.selecting_plan)
     _cap = ""
-    if _caption_unit:
-        _cap = (f"\n<i>قیمت‌ها {_caption_unit} است؛ مشخصات کامل و مبلغ نهایی در "
+    if _caption_unit == "ماهانه":
+        _cap = "\n<i>قیمت درج‌شده، تعرفه‌ی ماهانه‌ی سرویس است"
+        _cap += (" و تعرفه‌ی ساعتی متفاوت است؛ نوع صورتحساب را در مرحله‌ی بعد "
+                 "انتخاب می‌کنید.</i>") if _also_hourly else ".</i>"
+    elif _caption_unit == "ساعتی":
+        _cap = ("\n<i>قیمت درج‌شده، تعرفه‌ی ساعتی سرویس است و مبلغ نهایی در "
                 "مرحله‌ی تأیید نمایش داده می‌شود.</i>")
     await _edit_ignore_same(
         cb.message,

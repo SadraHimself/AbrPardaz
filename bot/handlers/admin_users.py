@@ -1,7 +1,10 @@
 """Admin user management — ban, wallet, discount, KYC, messages."""
 from __future__ import annotations
 
+import asyncio
+import html as _html
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 
 from aiogram import F, Router
@@ -24,6 +27,7 @@ from bot.keyboards.admin import (
 from bot.services.billing import BillingService
 from bot.services.log_service import LogService
 
+logger = logging.getLogger(__name__)
 router = Router(name="admin_users")
 
 
@@ -68,6 +72,7 @@ class UserManageFSM(StatesGroup):
     ban_reason = State()
     edit_national_id = State()
     edit_phone = State()
+    edit_vpsid = State()
 
 
 # ── User list ─────────────────────────────────────────────────────────────────
@@ -823,6 +828,11 @@ async def _render_admin_server(msg, session: AsyncSession, server: Server):
             InlineKeyboardButton(text="آیپی اضافه", callback_data=f"admin:usrva:{sid}:add_ip"),
         ])
     _rows.append([InlineKeyboardButton(text="آمار مصرف", callback_data=f"admin:usrv_usage:{sid}")])
+    # بعد از مهاجرت نود، vpsid عوض می‌شود و رکورد ربات باید دستی اصلاح شود
+    if server.provider_type == ProviderType.VIRTUALIZOR:
+        _rows.append([InlineKeyboardButton(
+            text=f"ویرایش vpsid ({server.provider_server_id or '—'})",
+            callback_data=f"admin:usrv_vpsid:{sid}")])
     _rows.append([InlineKeyboardButton(text="حذف سرور", callback_data=f"admin:usrva:{sid}:delete_confirm")])
     _rows.append([InlineKeyboardButton(text="بازگشت", callback_data=f"admin:user_servers:{server.user_id}")])
     kb = InlineKeyboardMarkup(inline_keyboard=_rows)
@@ -1018,6 +1028,170 @@ async def cb_admin_usrv_action(cb: CallbackQuery, session: AsyncSession):
             f'‏<tg-emoji emoji-id="4956612582816351459">❌</tg-emoji> خطا: {e}',
             parse_mode="HTML",
         )
+
+
+@router.callback_query(F.data.startswith("admin:usrv_vpsid:"))
+async def cb_admin_usrv_vpsid(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
+    """اصلاح دستی vpsid یک سرور (بعد از مهاجرت نود که آیدی عوض می‌شود)."""
+    server = await session.get(Server, int(cb.data.split(":")[2]))
+    if not server:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    await state.update_data(vpsid_server_id=server.id)
+    await state.set_state(UserManageFSM.edit_vpsid)
+    await cb.answer()
+    await cb.message.edit_text(
+        f"<b>ویرایش vpsid — {server.name}</b>\n\n"
+        f"مقدار فعلی: <code>{server.provider_server_id or '—'}</code>\n"
+        f"هاست‌نیم: <code>{server.hostname or server.name}</code>\n\n"
+        "vpsid جدید را وارد کنید (فقط عدد):\n"
+        "<i>قبل از ذخیره با پنل چک می‌شود؛ آیدی ناموجود یا متعلق به سرور دیگر "
+        "پذیرفته نمی‌شود.</i>",
+        parse_mode="HTML", reply_markup=cancel_admin_kb(),
+    )
+
+
+@router.message(UserManageFSM.edit_vpsid, F.text.regexp(r"^\d+$"))
+async def usrv_vpsid_save(message: Message, state: FSMContext, session: AsyncSession):
+    from bot.providers.virtualizor import VirtualizorProvider
+    data = await state.get_data()
+    await state.clear()
+    server = await session.get(Server, int(data.get("vpsid_server_id") or 0))
+    if not server:
+        await message.answer("سرور یافت نشد.")
+        return
+    new_id = message.text.strip()
+    account = await session.get(ProviderAccount, server.provider_account_id) \
+        if server.provider_account_id else None
+    if not account or account.provider_type != ProviderType.VIRTUALIZOR:
+        await message.answer("این قابلیت فقط برای سرورهای ویرچولایزور است.")
+        return
+    # هیچ سرور دیگری نباید همین vpsid را داشته باشد (کنترلِ ماشین اشتباه)
+    clash = (await session.execute(
+        select(Server).where(
+            Server.provider_account_id == account.id,
+            Server.provider_server_id == new_id,
+            Server.id != server.id,
+            Server.status != ServerStatus.DELETED,
+        )
+    )).scalars().first()
+    if clash:
+        await message.answer(
+            f"⛔ vpsid {new_id} هم‌اکنون متعلق به «{clash.name}» است.",
+            reply_markup=back_to_admin_kb(f"admin:usrv:{server.id}"))
+        return
+    wait = await message.answer("در حال بررسی با پنل...")
+    try:
+        prov = VirtualizorProvider(
+            panel_url=account.api_endpoint or "", api_key=account.api_key or "",
+            api_pass=account.api_secret or "")
+        vms = {v["vpsid"]: v for v in await asyncio.wait_for(prov.list_all_vps(), timeout=60)}
+    except Exception as e:
+        await wait.edit_text(f"خطا در خواندن پنل: {_html.escape(str(e)[:200])}")
+        return
+    vm = vms.get(new_id)
+    if not vm:
+        await wait.edit_text(
+            f"⛔ vpsid {new_id} در پنل وجود ندارد — ذخیره نشد.",
+            reply_markup=back_to_admin_kb(f"admin:usrv:{server.id}"))
+        return
+    # مالکیت: VM باید متعلق به همین کاربر باشد
+    try:
+        _u = await session.get(User, server.user_id)
+        _own = str(((_u.extra_data or {}).get("virt_uids") or {}).get(str(account.id)) or "")
+    except Exception:
+        _own = ""
+    if _own and vm.get("uid") and _own != vm["uid"]:
+        await wait.edit_text(
+            f"⛔ vpsid {new_id} در پنل متعلق به کاربر دیگری است "
+            f"(uid {vm['uid']} ≠ {_own}) — ذخیره نشد.",
+            reply_markup=back_to_admin_kb(f"admin:usrv:{server.id}"))
+        return
+    _host = (vm.get("hostname") or vm.get("name") or "—").strip()
+    _match = _host.lower() in ((server.hostname or "").strip().lower(),
+                               (server.name or "").strip().lower())
+    if not _match:
+        # ⚠️ قبل از نوشتن تأیید بگیر: یک رقم اشتباه یعنی کنترلِ VMِ مشتری دیگر
+        await wait.edit_text(
+            f"⚠️ <b>هاست‌نیم نمی‌خواند</b>\n\n"
+            f"سرور ربات: <code>{_html.escape(server.hostname or server.name)}</code>\n"
+            f"هاست‌نیم vpsid {new_id} در پنل: <code>{_html.escape(_host)}</code>\n\n"
+            "اگر مطمئنی، تأیید کن:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="بله، ذخیره کن",
+                    callback_data=f"admin:usrv_vpsidf:{server.id}:{new_id}"),
+                InlineKeyboardButton(text="انصراف",
+                                     callback_data=f"admin:usrv:{server.id}"),
+            ]]))
+        return
+    _old = await _apply_vpsid(session, server, new_id, vm, message.from_user.id)
+    await wait.edit_text(
+        f"✅ vpsid سرور «{_html.escape(server.name)}» از <code>{_old or '—'}</code>"
+        f" به <code>{new_id}</code> تغییر کرد.\n"
+        f"آیپی: <code>{server.ip_address or '—'}</code>",
+        parse_mode="HTML",
+        reply_markup=back_to_admin_kb(f"admin:usrv:{server.id}"))
+
+
+async def _apply_vpsid(session: AsyncSession, server: Server, new_id: str,
+                       vm: dict, admin_id: int) -> str | None:
+    """نوشتن vpsid جدید + IP (فقط اگر IP فعلی روی همان VM نباشد) + لاگ.
+    خروجی: vpsid قبلی."""
+    old = server.provider_server_id
+    server.provider_server_id = new_id
+    ips = vm.get("ips") or []
+    cur = (server.ip_address or "").strip()
+    if ips and cur not in ips:
+        server.ip_address = ips[0]
+    await session.flush()
+    logger.warning("vpsid edit: server %s (%s) %s → %s by admin %s",
+                   server.id, server.name, old, new_id, admin_id)
+    return old
+
+
+@router.callback_query(F.data.startswith("admin:usrv_vpsidf:"))
+async def cb_admin_usrv_vpsid_force(cb: CallbackQuery, session: AsyncSession):
+    """تأیید ذخیره با وجود ناهماهنگیِ هاست‌نیم."""
+    from bot.providers.virtualizor import VirtualizorProvider
+    parts = cb.data.split(":")
+    server = await session.get(Server, int(parts[2]))
+    new_id = parts[3]
+    if not server:
+        await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    account = await session.get(ProviderAccount, server.provider_account_id) \
+        if server.provider_account_id else None
+    if not account:
+        await cb.answer("اطلاعات سرویس‌دهنده یافت نشد.", show_alert=True)
+        return
+    await cb.answer("در حال ذخیره...")
+    try:
+        prov = VirtualizorProvider(
+            panel_url=account.api_endpoint or "", api_key=account.api_key or "",
+            api_pass=account.api_secret or "")
+        vms = {v["vpsid"]: v for v in await asyncio.wait_for(prov.list_all_vps(), timeout=60)}
+    except Exception as e:
+        await cb.message.answer(f"خطا در خواندن پنل: {_html.escape(str(e)[:200])}")
+        return
+    vm = vms.get(new_id)
+    if not vm:
+        await cb.message.answer(f"⛔ vpsid {new_id} دیگر در پنل نیست — ذخیره نشد.")
+        return
+    await _apply_vpsid(session, server, new_id, vm, cb.from_user.id)
+    await _safe_edit(
+        cb.message,
+        f"✅ vpsid سرور «{_html.escape(server.name)}» روی <code>{new_id}</code> ثبت شد.\n"
+        f"آیپی: <code>{server.ip_address or '—'}</code>",
+        back_to_admin_kb(f"admin:usrv:{server.id}"))
+
+
+@router.message(UserManageFSM.edit_vpsid)
+async def usrv_vpsid_invalid(message: Message):
+    """ورودی غیرعددی: به‌جای سکوت، دوباره راهنمایی کن (state حفظ می‌شود)."""
+    await message.answer("فقط عدد وارد کنید (مثال: 204).",
+                         reply_markup=cancel_admin_kb())
 
 
 @router.callback_query(F.data.startswith("admin:usrv_usage:"))

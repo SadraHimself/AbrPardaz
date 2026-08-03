@@ -945,10 +945,18 @@ class VirtualizorProvider(BaseProvider):
         out: list[dict] = []
         seen: set[str] = set()
         page = 1
-        while page <= 20:                       # سقف ایمنی
-            data = await self._request("vs", query={"reslen": 200, "page": page})
+        _RESLEN = 200
+        while True:
+            if page > 20:
+                # لیست ناقص خطرناک‌تر از خطاست: با نبودِ یک VM، گاردِ «چند VM
+                # هم‌نام» دور زده می‌شود و رکورد به VMِ اشتباه وصل می‌شود
+                raise RuntimeError("لیست VMهای پنل بیش از حد انتظار بزرگ است — "
+                                   "بازنگاشت خودکار انجام نشد.")
+            data = await self._request("vs", query={"reslen": _RESLEN, "page": page})
             rows = data.get("vs") or {}
             if not rows:
+                if page == 1:
+                    raise RuntimeError("پنل هیچ VMی برنگرداند — بازنگاشت انجام نشد.")
                 break
             items = rows.values() if isinstance(rows, dict) else rows
             fresh = 0
@@ -960,25 +968,32 @@ class VirtualizorProvider(BaseProvider):
                     continue
                 seen.add(vid)
                 fresh += 1
-                ips = vs.get("ips") or {}
-                first_ip = None
-                if isinstance(ips, dict):
-                    first_ip = next(iter(ips.values()), None)
-                elif isinstance(ips, list) and ips:
-                    first_ip = ips[0]
                 out.append({
                     "vpsid": vid,
                     "hostname": (vs.get("hostname") or "").strip(),
                     "name": (vs.get("vps_name") or "").strip(),
-                    "ip": first_ip,
+                    "ips": self._ips_of(vs),
+                    "uid": str(vs.get("uid") or ""),
                     "serid": vs.get("serid"),
                     "bandwidth": vs.get("bandwidth"),
                     "used_bandwidth": vs.get("used_bandwidth"),
                 })
             if fresh == 0:
+                # پنل پارامتر page را نادیده گرفته (همان صفحه دوباره) — اگر صفحه‌ی
+                # اول پر بوده، یعنی احتمالاً VMهایی جا مانده‌اند
+                if len(out) >= _RESLEN:
+                    raise RuntimeError("پنل صفحه‌بندی را پشتیبانی نمی‌کند و لیست "
+                                       "ممکن است ناقص باشد — بازنگاشت انجام نشد.")
                 break
             page += 1
         return out
+
+    @staticmethod
+    def _ips_of(vs: dict) -> list[str]:
+        """همه‌ی IPv4های یک رکورد VPS (فیلد ips نگاشت ipid→ip است)."""
+        raw = vs.get("ips") or {}
+        vals = list(raw.values()) if isinstance(raw, dict) else list(raw)
+        return [str(v) for v in vals if isinstance(v, str) and v.count(".") == 3]
 
     async def _vs_row(self, server_id: str) -> dict:
         """رکورد خام یک VPS از act=vs (کلید = vpsid)."""

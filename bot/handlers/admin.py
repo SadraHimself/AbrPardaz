@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -48,6 +49,7 @@ def _currency_pick_kb():
         [_Btn(text="انصراف", callback_data="admin_panel")],
     ])
 
+logger = logging.getLogger(__name__)
 router = Router(name="admin")
 
 
@@ -72,6 +74,10 @@ class ProviderFSM(StatesGroup):
     add_key = State()
     add_pass = State()
     edit_value = State()
+
+
+class RemapFSM(StatesGroup):
+    paste = State()
 
 
 class TrafficTariffFSM(StatesGroup):
@@ -1744,18 +1750,49 @@ def _remap_key(v: str | None) -> str:
     return (v or "").strip().lower()
 
 
+def _cap_msg(text: str, limit: int = 3800) -> str:
+    """سقف طول پیام تلگرام (۴۰۹۶) — لیست بلندِ سرورها نباید ارسال را بشکند."""
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit("\n", 1)[0]
+    return cut + "\n\n<i>… فهرست طولانی بود و بریده شد (اعمال روی همه انجام می‌شود).</i>"
+
+
+def _pick_ip(server: Server, vm: dict) -> str | None:
+    """IP جدید فقط وقتی نوشته می‌شود که IP فعلی روی همان VM نباشد.
+
+    ⚠️ سرورهایی که «آیپی اضافه» خریده‌اند چند IP دارند و انتخاب دلخواهِ اولین
+    مورد، IP اصلیِ مشتری را نابود می‌کند."""
+    ips = vm.get("ips") or []
+    cur = (server.ip_address or "").strip()
+    if cur and cur in ips:
+        return None                      # IP فعلی هنوز معتبر است — دست نزن
+    return ips[0] if ips else None
+
+
+async def _owner_uid(session: AsyncSession, server: Server, account_id: int) -> str:
+    """uidِ ویرچولایزورِ صاحبِ سرور (از extra_data کاربر)."""
+    try:
+        u = await session.get(User, server.user_id)
+        return str(((u.extra_data or {}).get("virt_uids") or {}).get(str(account_id)) or "")
+    except Exception:
+        return ""
+
+
 async def _remap_plan(session: AsyncSession, account: ProviderAccount) -> dict:
     """نقشه‌ی تغییرات را بدون نوشتن چیزی محاسبه می‌کند."""
     from bot.database.models import ServerStatus as _SS
+    if account.provider_type != ProviderType.VIRTUALIZOR:
+        raise RuntimeError("بازنگاشت فقط برای ویرچولایزور است.")
     prov = VirtualizorProvider(
         panel_url=account.api_endpoint or "", api_key=account.api_key or "",
         api_pass=account.api_secret or "")
     panel = await prov.list_all_vps()
-    by_host: dict[str, list[dict]] = {}
+    by_host: dict[str, dict[str, dict]] = {}
     for v in panel:
         for k in (_remap_key(v.get("hostname")), _remap_key(v.get("name"))):
             if k:
-                by_host.setdefault(k, []).append(v)
+                by_host.setdefault(k, {})[v["vpsid"]] = v
 
     servers = (await session.execute(
         select(Server).where(
@@ -1763,25 +1800,55 @@ async def _remap_plan(session: AsyncSession, account: ProviderAccount) -> dict:
             Server.status != _SS.DELETED,
         ).order_by(Server.id)
     )).scalars().all()
+    # vpsidهایی که هم‌اکنون در اختیار رکوردهای دیگرند (شامل حذف‌شده‌ها: VM ممکن
+    # است هنوز زنده باشد چون حذفِ ناموفق هم رکورد را DELETED می‌کند)
+    all_rows = (await session.execute(
+        select(Server).where(Server.provider_account_id == account.id)
+    )).scalars().all()
 
-    changes, same, missing, ambiguous = [], [], [], []
+    changes, same, missing, ambiguous, conflicts = [], [], [], [], []
     for s in servers:
-        cands = by_host.get(_remap_key(s.hostname)) or by_host.get(_remap_key(s.name)) or []
-        # اگر چند VM هم‌نام بود (VMِ قدیمی هنوز حذف نشده)، جدیدترین vpsid برنده
-        uniq = {v["vpsid"]: v for v in cands}
-        if not uniq:
+        cands = dict(by_host.get(_remap_key(s.hostname)) or {})
+        cands.update(by_host.get(_remap_key(s.name)) or {})
+        if not cands:
             missing.append(s)
             continue
-        if len(uniq) > 1:
-            ambiguous.append((s, sorted(uniq)))
+        if len(cands) > 1:
+            # چند VM هم‌نام → **رد می‌شود** و برای ورود دستی کنار گذاشته می‌شود.
+            # VMِ مبدأِ رهاشده معمولاً با همین هاست‌نیم هنوز روی پنل هست؛ حدس‌زدنِ
+            # «جدیدترین» یعنی ریسکِ وصل‌کردن مشتری به ماشین اشتباه.
+            ambiguous.append((s, sorted(cands)))
             continue
-        v = next(iter(uniq.values()))
-        if str(s.provider_server_id or "") == v["vpsid"] and (s.ip_address or "") == (v["ip"] or ""):
+        v = next(iter(cands.values()))
+        # مالکیت: uid پنل باید با uidِ ذخیره‌شده‌ی صاحبِ سرور بخواند
+        own = await _owner_uid(session, s, account.id)
+        if own and v.get("uid") and own != v["uid"]:
+            conflicts.append((s, v, f"uid پنل {v['uid']} ≠ uid کاربر {own}"))
+            continue
+        _new_ip = _pick_ip(s, v)
+        if str(s.provider_server_id or "") == v["vpsid"] and _new_ip is None:
             same.append(s)
         else:
             changes.append((s, v))
-    return {"changes": changes, "same": same, "missing": missing,
-            "ambiguous": ambiguous, "panel_count": len(panel)}
+
+    # تزریق‌پذیری: هیچ vpsid نباید به دو رکورد بخورد، و نباید vpsidی را بگیریم
+    # که رکورد دیگری (حتی حذف‌شده) صاحبش است
+    taken = {str(o.provider_server_id or ""): o for o in all_rows}
+    claimed: dict[str, Server] = {}
+    safe = []
+    for s, v in changes:
+        vid = v["vpsid"]
+        if vid in claimed:
+            conflicts.append((s, v, f"vpsid {vid} به «{claimed[vid].name}» هم داده شد"))
+            continue
+        owner = taken.get(vid)
+        if owner is not None and owner.id != s.id:
+            conflicts.append((s, v, f"vpsid {vid} متعلق به «{owner.name}» است"))
+            continue
+        claimed[vid] = s
+        safe.append((s, v))
+    return {"changes": safe, "same": same, "missing": missing,
+            "ambiguous": ambiguous, "conflicts": conflicts, "panel_count": len(panel)}
 
 
 async def _render_remap(msg, session: AsyncSession, provider_id: int):
@@ -1798,50 +1865,304 @@ async def _render_remap(msg, session: AsyncSession, provider_id: int):
             reply_markup=back_to_admin_kb(f"admin:prov:{provider_id}"))
         return
 
-    lines = [f"<b>بازنگاشت سرورها — {account.name}</b>", ""]
+    _e = _html.escape
+    lines = [f"<b>بازنگاشت سرورها — {_e(account.name)}</b>", ""]
     lines.append(f"VMهای پنل: {plan['panel_count']} | بدون تغییر: {len(plan['same'])}")
     if plan["changes"]:
         lines.append(f"\n<b>نیازمند اصلاح ({len(plan['changes'])}):</b>")
         for s, v in plan["changes"][:25]:
-            _old_ip, _new_ip = s.ip_address or "—", v["ip"] or "—"
-            _ipl = f" | IP {_old_ip} ← {_new_ip}" if _old_ip != _new_ip else ""
-            lines.append(f"• {s.name}: vpsid <code>{s.provider_server_id}</code> ← "
+            _new_ip = _pick_ip(s, v)
+            _ipl = f" | IP {_e(s.ip_address or '—')} ← {_e(_new_ip)}" if _new_ip else ""
+            lines.append(f"• {_e(s.name)}: vpsid <code>{s.provider_server_id}</code> ← "
                          f"<code>{v['vpsid']}</code>{_ipl}")
         if len(plan["changes"]) > 25:
             lines.append(f"<i>… و {len(plan['changes']) - 25} مورد دیگر</i>")
+    if plan["conflicts"]:
+        lines.append(f"\n⛔ <b>تداخل ({len(plan['conflicts'])}) — اعمال نمی‌شود:</b>")
+        for s, v, why in plan["conflicts"][:10]:
+            lines.append(f"• {_e(s.name)}: {_e(why)}")
     if plan["ambiguous"]:
         lines.append(f"\n⚠️ <b>چند VM هم‌نام ({len(plan['ambiguous'])}) — دستی بررسی شود:</b>")
         for s, vids in plan["ambiguous"][:10]:
-            lines.append(f"• {s.name}: {', '.join(vids)}")
+            lines.append(f"• {_e(s.name)}: {', '.join(vids)}")
     if plan["missing"]:
         lines.append(f"\n⛔ <b>در پنل پیدا نشد ({len(plan['missing'])}):</b>")
         for s in plan["missing"][:10]:
-            lines.append(f"• {s.name} (vpsid {s.provider_server_id})")
+            lines.append(f"• {_e(s.name)} (vpsid {s.provider_server_id})")
     if not plan["changes"]:
-        lines.append("\n✅ همه‌چیز مطابق است — کاری لازم نیست.")
+        lines.append("\n✅ موردی برای اصلاح نیست.")
 
     rows = []
     if plan["changes"]:
+        # امضای مجموعه‌ی تأییدشده در callback: لحظه‌ی اعمال فقط همین‌ها نوشته
+        # می‌شوند، نه نقشه‌ای که ادمین ندیده
+        import hashlib as _hl
+        _sig = _hl.sha1(
+            ";".join(f"{s.id}:{v['vpsid']}" for s, v in sorted(
+                plan["changes"], key=lambda x: x[0].id)).encode()
+        ).hexdigest()[:12]
         rows.append([InlineKeyboardButton(
             text=f"اعمال {len(plan['changes'])} تغییر",
-            callback_data=f"admin:remap_do:{provider_id}")])
+            callback_data=f"admin:remap_do:{provider_id}:{_sig}")])
+    rows.append([InlineKeyboardButton(text="ورود دستی vpsid",
+                                      callback_data=f"admin:remap_man:{provider_id}")])
     rows.append([InlineKeyboardButton(text="بازخوانی",
                                       callback_data=f"admin:remap:{provider_id}")])
     rows.append([InlineKeyboardButton(text="بازگشت",
                                       callback_data=f"admin:prov:{provider_id}")])
-    await msg.edit_text("\n".join(lines), parse_mode="HTML",
-                        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    try:
+        await msg.edit_text(_cap_msg("\n".join(lines)), parse_mode="HTML",
+                            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    except Exception as e:
+        if "not modified" not in str(e).lower():
+            raise
 
 
 @router.callback_query(F.data.startswith("admin:remap:"))
-async def cb_remap(cb: CallbackQuery, session: AsyncSession):
+async def cb_remap(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
+    # خروج از حالت «ورود دستی» تا پیام‌های بعدیِ ادمین به‌عنوان لیست پارس نشوند
+    await state.clear()
     await cb.answer("در حال خواندن پنل...")
     await _render_remap(cb.message, session, int(cb.data.split(":")[2]))
 
 
+# ── ورود دستی vpsid ───────────────────────────────────────────────────────────
+
+def _parse_remap_lines(text: str) -> tuple[list[tuple[str, str]], list[str]]:
+    """هر خط: «کلید vpsid» (ترتیب آزاد). کلید = هاست‌نیم یا #آیدیِ سرور در ربات.
+    خروجی: (زوج‌های معتبر، خطاهای فرمت)."""
+    import re as _re
+    pairs, errs = [], []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        toks = [t for t in _re.split(r"[\s,;:|]+", line) if t]
+        if len(toks) != 2:
+            errs.append(f"«{line}» — هر خط باید دقیقاً دو مقدار داشته باشد")
+            continue
+        nums = [t for t in toks if t.isdigit()]
+        keys = [t for t in toks if not t.isdigit()]
+        if len(nums) == 1 and len(keys) == 1:
+            pairs.append((keys[0], nums[0]))
+        elif len(nums) == 2:
+            errs.append(f"«{line}» — مبهم است؛ برای آیدیِ ربات از # استفاده کنید "
+                        "(مثال: #7 204)")
+        else:
+            errs.append(f"«{line}» — vpsid پیدا نشد")
+    return pairs, errs
+
+
+async def _remap_manual_plan(session: AsyncSession, account: ProviderAccount,
+                             pairs: list[tuple[str, str]]) -> dict:
+    """اعتبارسنجی زوج‌های دستی مقابل پنل. هیچ نوشتنی انجام نمی‌دهد."""
+    from bot.database.models import ServerStatus as _SS
+    if account.provider_type != ProviderType.VIRTUALIZOR:
+        raise RuntimeError("بازنگاشت فقط برای ویرچولایزور است.")
+    prov = VirtualizorProvider(
+        panel_url=account.api_endpoint or "", api_key=account.api_key or "",
+        api_pass=account.api_secret or "")
+    panel = {v["vpsid"]: v for v in await prov.list_all_vps()}
+
+    servers = (await session.execute(
+        select(Server).where(
+            Server.provider_account_id == account.id,
+            Server.status != _SS.DELETED,
+        )
+    )).scalars().all()
+    all_rows = (await session.execute(
+        select(Server).where(Server.provider_account_id == account.id)
+    )).scalars().all()
+    by_id = {s.id: s for s in servers}
+    # ⚠️ کلید dict به‌ازای هر سرور: create_server مقدار name و hostname را یکی
+    # می‌گذارد، پس افزودن به لیست باعث می‌شد هر سرور دوبار ثبت و «تکراری» تلقی شود
+    by_host: dict[str, dict[int, Server]] = {}
+    for s in servers:
+        for k in (_remap_key(s.hostname), _remap_key(s.name)):
+            if k:
+                by_host.setdefault(k, {})[s.id] = s
+
+    ok, warn, bad = [], [], []
+    used_vpsid: dict[str, str] = {}
+    seen_server: set[int] = set()
+    for key, vpsid in pairs:
+        # ۱) سرور مقصد در ربات
+        srv = None
+        if key.startswith("#") and key[1:].isdigit():
+            srv = by_id.get(int(key[1:]))
+        else:
+            cands = list((by_host.get(_remap_key(key)) or {}).values())
+            if len(cands) == 1:
+                srv = cands[0]
+            elif len(cands) > 1:
+                bad.append(f"{key} → چند سرور با این نام در ربات هست؛ از #آیدی استفاده کنید")
+                continue
+        if not srv:
+            bad.append(f"{key} → در سرورهای این سرویس‌دهنده پیدا نشد")
+            continue
+        if srv.id in seen_server:
+            bad.append(f"{key} → این سرور دو بار در لیست آمده است")
+            continue
+        # ۲) vpsid باید واقعاً در پنل باشد
+        vm = panel.get(str(vpsid))
+        if not vm:
+            bad.append(f"{key} → vpsid {vpsid} در پنل وجود ندارد")
+            continue
+        # ۳) یک vpsid نباید به دو سرور بخورد (نه در این لیست، نه با بقیه‌ی رکوردها)
+        if vpsid in used_vpsid:
+            bad.append(f"{key} → vpsid {vpsid} قبلاً به {used_vpsid[vpsid]} داده شده")
+            continue
+        # شامل رکوردهای حذف‌شده هم می‌شود: حذفِ ناموفق رکورد را DELETED می‌کند
+        # در حالی که VM ممکن است هنوز زنده باشد
+        _clash = next((o for o in all_rows
+                       if o.id != srv.id and str(o.provider_server_id or "") == str(vpsid)), None)
+        if _clash:
+            bad.append(f"{key} → vpsid {vpsid} هم‌اکنون متعلق به «{_clash.name}» است")
+            continue
+        # ۴) مالکیت: uid پنل باید با uidِ ذخیره‌شده‌ی صاحبِ سرور بخواند
+        _own = await _owner_uid(session, srv, account.id)
+        if _own and vm.get("uid") and _own != vm["uid"]:
+            bad.append(f"{key} → vpsid {vpsid} در پنل متعلق به کاربر دیگری است "
+                       f"(uid {vm['uid']} ≠ {_own})")
+            continue
+        used_vpsid[vpsid] = srv.name
+        seen_server.add(srv.id)
+        row = {"server_id": srv.id, "name": srv.name, "vpsid": str(vpsid),
+               "old_vpsid": str(srv.provider_server_id or "—"),
+               "ip": _pick_ip(srv, vm), "old_ip": srv.ip_address or "—",
+               "panel_host": vm.get("hostname") or vm.get("name") or "—"}
+        # ۵) هاست‌نیم پنل با رکورد ربات بخواند (وگرنه هشدار، نه رد)
+        if _remap_key(row["panel_host"]) in (_remap_key(srv.hostname), _remap_key(srv.name)):
+            ok.append(row)
+        else:
+            warn.append(row)
+    return {"ok": ok, "warn": warn, "bad": bad}
+
+
+def _remap_manual_text(plan: dict, errs: list[str]) -> str:
+    _e = _html.escape
+    lines = ["<b>بررسی ورود دستی vpsid</b>", ""]
+    for r in plan["ok"]:
+        _ip = f" | IP {_e(r['old_ip'])} ← {_e(r['ip'])}" if r["ip"] else ""
+        lines.append(f"✅ {_e(r['name'])}: <code>{r['old_vpsid']}</code> ← "
+                     f"<code>{r['vpsid']}</code>{_ip}")
+    for r in plan["warn"]:
+        lines.append(f"⚠️ {_e(r['name'])}: <code>{r['old_vpsid']}</code> ← "
+                     f"<code>{r['vpsid']}</code> — هاست‌نیم پنل «{_e(r['panel_host'])}» است")
+    for b in plan["bad"] + errs:
+        lines.append(f"⛔ {_e(b)}")
+    if not plan["ok"] and not plan["warn"]:
+        lines.append("\nهیچ خط قابل‌اعمالی پیدا نشد.")
+    return _cap_msg("\n".join(lines))
+
+
+@router.callback_query(F.data.startswith("admin:remap_man:"))
+async def cb_remap_manual(cb: CallbackQuery, state: FSMContext):
+    provider_id = int(cb.data.split(":")[2])
+    await state.update_data(remap_provider_id=provider_id)
+    await state.set_state(RemapFSM.paste)
+    await cb.answer()
+    await cb.message.edit_text(
+        "<b>ورود دستی vpsid</b>\n\n"
+        "هر خط یک سرور — نام سرور و vpsid جدید (ترتیب آزاد):\n"
+        "<code>srv-a0eztf 204\nsrv-fldcnd 205</code>\n\n"
+        "به‌جای نام می‌توانید آیدیِ سرور در ربات را با # بدهید: <code>#7 204</code>\n\n"
+        "<i>قبل از ذخیره، هر خط با پنل چک می‌شود؛ vpsid ناموجود یا تکراری "
+        "اعمال نمی‌شود.</i>",
+        parse_mode="HTML", reply_markup=cancel_admin_kb(),
+    )
+
+
+@router.message(RemapFSM.paste)
+async def remap_manual_input(message: Message, state: FSMContext, session: AsyncSession):
+    data = await state.get_data()
+    provider_id = int(data.get("remap_provider_id") or 0)
+    account = await session.get(ProviderAccount, provider_id)
+    if not account:
+        await state.clear()
+        await message.answer("سرویس‌دهنده یافت نشد.")
+        return
+    if not (message.text or "").strip():
+        await message.answer("لیست را به‌صورت متن بفرستید.", reply_markup=cancel_admin_kb())
+        return
+    pairs, errs = _parse_remap_lines(message.text or "")
+    if not pairs:
+        await message.answer(
+            _cap_msg("\n".join(f"⛔ {_html.escape(e)}" for e in errs[:15])
+                     or "هیچ خط معتبری پیدا نشد."),
+            parse_mode="HTML", reply_markup=cancel_admin_kb())
+        return
+    wait = await message.answer("در حال بررسی با پنل...")
+    try:
+        plan = await asyncio.wait_for(_remap_manual_plan(session, account, pairs), timeout=90)
+    except Exception as e:
+        await state.clear()
+        await wait.edit_text(f"خطا در خواندن پنل: {_html.escape(str(e)[:200])}")
+        return
+    # زوج‌ها همراه با اکانتِ صاحبشان ذخیره می‌شوند تا دکمه‌ی کهنه‌ی یک اکانت،
+    # لیستِ اکانت دیگر را اعمال نکند
+    await state.update_data(remap_pairs=pairs, remap_pairs_provider=provider_id)
+    rows = []
+    if plan["ok"]:
+        rows.append([InlineKeyboardButton(
+            text=f"اعمال {len(plan['ok'])} مورد",
+            callback_data=f"admin:remap_mdo:{provider_id}:0")])
+    if plan["warn"]:
+        rows.append([InlineKeyboardButton(
+            text=f"اعمال با هشدار ({len(plan['ok']) + len(plan['warn'])} مورد)",
+            callback_data=f"admin:remap_mdo:{provider_id}:1")])
+    rows.append([InlineKeyboardButton(text="انصراف",
+                                      callback_data=f"admin:remap:{provider_id}")])
+    await wait.edit_text(_remap_manual_text(plan, errs), parse_mode="HTML",
+                         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+@router.callback_query(F.data.startswith("admin:remap_mdo:"))
+async def cb_remap_manual_do(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
+    parts = cb.data.split(":")
+    provider_id, force = int(parts[2]), parts[3] == "1"
+    data = await state.get_data()
+    pairs = data.get("remap_pairs") or []
+    owner_pid = data.get("remap_pairs_provider")
+    await state.clear()
+    account = await session.get(ProviderAccount, provider_id)
+    if not account or not pairs:
+        await cb.answer("اطلاعات ناقص است — دوباره تلاش کنید.", show_alert=True)
+        return
+    if owner_pid != provider_id:
+        await cb.answer("این لیست مربوط به سرویس‌دهنده‌ی دیگری است — دوباره وارد کنید.",
+                        show_alert=True)
+        return
+    await cb.answer("در حال اعمال...")
+    try:
+        # اعتبارسنجیِ تازه: پنل ممکن است بین پیش‌نمایش و تأیید عوض شده باشد
+        plan = await asyncio.wait_for(
+            _remap_manual_plan(session, account, [tuple(p) for p in pairs]), timeout=90)
+    except Exception as e:
+        await cb.message.answer(f"خطا: {_html.escape(str(e)[:200])}")
+        return
+    rows = plan["ok"] + (plan["warn"] if force else [])
+    n = 0
+    for r in rows:
+        srv = await session.get(Server, r["server_id"])
+        if not srv:
+            continue
+        _old = srv.provider_server_id
+        srv.provider_server_id = r["vpsid"]
+        if r["ip"]:
+            srv.ip_address = r["ip"]
+        logger.warning("remap(manual): server %s (%s) vpsid %s → %s by admin %s",
+                       srv.id, srv.name, _old, r["vpsid"], cb.from_user.id)
+        n += 1
+    await session.flush()
+    await cb.message.answer(f"✅ {n} سرور بازنگاشت شد.")
+    await _render_remap(cb.message, session, provider_id)
+
+
 @router.callback_query(F.data.startswith("admin:remap_do:"))
 async def cb_remap_do(cb: CallbackQuery, session: AsyncSession):
-    provider_id = int(cb.data.split(":")[2])
+    parts = cb.data.split(":")
+    provider_id, sig = int(parts[2]), (parts[3] if len(parts) > 3 else "")
     account = await session.get(ProviderAccount, provider_id)
     if not account:
         await cb.answer("سرویس‌دهنده یافت نشد.", show_alert=True)
@@ -1853,15 +2174,28 @@ async def cb_remap_do(cb: CallbackQuery, session: AsyncSession):
     except Exception as e:
         await cb.message.answer(f"خطا: {_html.escape(str(e)[:250])}")
         return
+    import hashlib as _hl
+    _now_sig = _hl.sha1(
+        ";".join(f"{s.id}:{v['vpsid']}" for s, v in sorted(
+            plan["changes"], key=lambda x: x[0].id)).encode()
+    ).hexdigest()[:12]
+    if sig and _now_sig != sig:
+        # وضعیت پنل بین پیش‌نمایش و تأیید عوض شده — چیزی که ادمین ندیده نوشته نشود
+        await cb.message.answer(
+            "⚠️ وضعیت پنل نسبت به پیش‌نمایش تغییر کرده — دوباره بررسی کنید.")
+        await _render_remap(cb.message, session, provider_id)
+        return
     n = 0
     for s, v in plan["changes"]:
+        _old = s.provider_server_id
         s.provider_server_id = v["vpsid"]
-        if v["ip"]:
-            s.ip_address = v["ip"]
+        _ip = _pick_ip(s, v)
+        if _ip:
+            s.ip_address = _ip
+        logger.warning("remap: server %s (%s) vpsid %s → %s by admin %s",
+                       s.id, s.name, _old, v["vpsid"], cb.from_user.id)
         n += 1
     await session.flush()
-    logger.warning("remap: rewrote provider_server_id/ip for %s servers (account %s)",
-                   n, account.id)
     await cb.message.answer(f"✅ {n} سرور بازنگاشت شد.")
     await _render_remap(cb.message, session, provider_id)
 

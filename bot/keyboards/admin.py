@@ -62,6 +62,7 @@ def provider_detail_kb(provider_id: int, is_active: bool = True, strict_kyc: boo
     extra_fee_label = f"هزینه IP اضافه: {extra_ip_fee:,.0f}T" if extra_ip_fee else "هزینه IP اضافه: رایگان"
     builder.button(text=extra_fee_label, callback_data=f"admin:prov_edit:{provider_id}:extra_ip_fee")
     builder.button(text="تعرفه ترافیک", callback_data=f"admin:trf:{provider_id}")
+    # بازنگاشت مخصوص ویرچولایزور است (این کیبورد فقط برای همان استفاده می‌شود)
     builder.button(text="بازنگاشت سرورها", callback_data=f"admin:remap:{provider_id}")
     builder.button(text="تست اتصال", callback_data=f"admin:prov_test:{provider_id}")
     builder.button(text="مانیتور سرور", callback_data=f"admin:prov_monitor:{provider_id}")

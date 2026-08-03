@@ -936,6 +936,50 @@ class VirtualizorProvider(BaseProvider):
         await _revert()
         raise RuntimeError("افزودن آی‌پی دوم برای این سرور توسط پنل انجام نشد")
 
+    async def list_all_vps(self) -> list[dict]:
+        """همه‌ی VPSهای پنل: [{vpsid, hostname, ip, serid, bandwidth, used_bandwidth}].
+
+        برای بازنگاشتِ بعد از مهاجرت لازم است — مهاجرت در ویرچولایزور vpsid جدید
+        می‌دهد، پس رکوردهای ربات باید با hostname دوباره به VM واقعی وصل شوند.
+        صفحه‌بندی: reslen بزرگ گرفته می‌شود و تا خالی‌شدن صفحه ادامه می‌یابد."""
+        out: list[dict] = []
+        seen: set[str] = set()
+        page = 1
+        while page <= 20:                       # سقف ایمنی
+            data = await self._request("vs", query={"reslen": 200, "page": page})
+            rows = data.get("vs") or {}
+            if not rows:
+                break
+            items = rows.values() if isinstance(rows, dict) else rows
+            fresh = 0
+            for vs in items:
+                if not isinstance(vs, dict):
+                    continue
+                vid = str(vs.get("vpsid") or "")
+                if not vid or vid in seen:
+                    continue
+                seen.add(vid)
+                fresh += 1
+                ips = vs.get("ips") or {}
+                first_ip = None
+                if isinstance(ips, dict):
+                    first_ip = next(iter(ips.values()), None)
+                elif isinstance(ips, list) and ips:
+                    first_ip = ips[0]
+                out.append({
+                    "vpsid": vid,
+                    "hostname": (vs.get("hostname") or "").strip(),
+                    "name": (vs.get("vps_name") or "").strip(),
+                    "ip": first_ip,
+                    "serid": vs.get("serid"),
+                    "bandwidth": vs.get("bandwidth"),
+                    "used_bandwidth": vs.get("used_bandwidth"),
+                })
+            if fresh == 0:
+                break
+            page += 1
+        return out
+
     async def _vs_row(self, server_id: str) -> dict:
         """رکورد خام یک VPS از act=vs (کلید = vpsid)."""
         data = await self._request("vs", query={"vpsid": server_id})

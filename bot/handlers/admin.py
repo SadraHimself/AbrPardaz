@@ -1731,6 +1731,142 @@ async def cb_plan_del_do(cb: CallbackQuery, session: AsyncSession):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  REMAP (بازنگاشت بعد از مهاجرت نود)
+#
+#  مهاجرت VPS در ویرچولایزور vpsid **جدید** می‌دهد (تأییدشده توسط دیتاسنتر)، پس
+#  رکوردهای ربات به VMِ قدیمیِ رهاشده اشاره می‌کنند: کنترل‌ها روی ماشین اشتباه
+#  کار می‌کنند و دکمه‌ی حذف خطرناک می‌شود. این ابزار با hostname تطبیق می‌دهد و
+#  فقط `provider_server_id` و `ip_address` را اصلاح می‌کند — هیچ‌چیز دیگری
+#  (ترافیک، قیمت، تاریخ‌ها) دست نمی‌خورد.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _remap_key(v: str | None) -> str:
+    return (v or "").strip().lower()
+
+
+async def _remap_plan(session: AsyncSession, account: ProviderAccount) -> dict:
+    """نقشه‌ی تغییرات را بدون نوشتن چیزی محاسبه می‌کند."""
+    from bot.database.models import ServerStatus as _SS
+    prov = VirtualizorProvider(
+        panel_url=account.api_endpoint or "", api_key=account.api_key or "",
+        api_pass=account.api_secret or "")
+    panel = await prov.list_all_vps()
+    by_host: dict[str, list[dict]] = {}
+    for v in panel:
+        for k in (_remap_key(v.get("hostname")), _remap_key(v.get("name"))):
+            if k:
+                by_host.setdefault(k, []).append(v)
+
+    servers = (await session.execute(
+        select(Server).where(
+            Server.provider_account_id == account.id,
+            Server.status != _SS.DELETED,
+        ).order_by(Server.id)
+    )).scalars().all()
+
+    changes, same, missing, ambiguous = [], [], [], []
+    for s in servers:
+        cands = by_host.get(_remap_key(s.hostname)) or by_host.get(_remap_key(s.name)) or []
+        # اگر چند VM هم‌نام بود (VMِ قدیمی هنوز حذف نشده)، جدیدترین vpsid برنده
+        uniq = {v["vpsid"]: v for v in cands}
+        if not uniq:
+            missing.append(s)
+            continue
+        if len(uniq) > 1:
+            ambiguous.append((s, sorted(uniq)))
+            continue
+        v = next(iter(uniq.values()))
+        if str(s.provider_server_id or "") == v["vpsid"] and (s.ip_address or "") == (v["ip"] or ""):
+            same.append(s)
+        else:
+            changes.append((s, v))
+    return {"changes": changes, "same": same, "missing": missing,
+            "ambiguous": ambiguous, "panel_count": len(panel)}
+
+
+async def _render_remap(msg, session: AsyncSession, provider_id: int):
+    account = await session.get(ProviderAccount, provider_id)
+    if not account:
+        await msg.edit_text("سرویس‌دهنده یافت نشد.")
+        return
+    try:
+        plan = await asyncio.wait_for(_remap_plan(session, account), timeout=90)
+    except Exception as e:
+        await msg.edit_text(
+            f"خطا در خواندن لیست VMها از پنل:\n<code>{_html.escape(str(e)[:250])}</code>",
+            parse_mode="HTML",
+            reply_markup=back_to_admin_kb(f"admin:prov:{provider_id}"))
+        return
+
+    lines = [f"<b>بازنگاشت سرورها — {account.name}</b>", ""]
+    lines.append(f"VMهای پنل: {plan['panel_count']} | بدون تغییر: {len(plan['same'])}")
+    if plan["changes"]:
+        lines.append(f"\n<b>نیازمند اصلاح ({len(plan['changes'])}):</b>")
+        for s, v in plan["changes"][:25]:
+            _old_ip, _new_ip = s.ip_address or "—", v["ip"] or "—"
+            _ipl = f" | IP {_old_ip} ← {_new_ip}" if _old_ip != _new_ip else ""
+            lines.append(f"• {s.name}: vpsid <code>{s.provider_server_id}</code> ← "
+                         f"<code>{v['vpsid']}</code>{_ipl}")
+        if len(plan["changes"]) > 25:
+            lines.append(f"<i>… و {len(plan['changes']) - 25} مورد دیگر</i>")
+    if plan["ambiguous"]:
+        lines.append(f"\n⚠️ <b>چند VM هم‌نام ({len(plan['ambiguous'])}) — دستی بررسی شود:</b>")
+        for s, vids in plan["ambiguous"][:10]:
+            lines.append(f"• {s.name}: {', '.join(vids)}")
+    if plan["missing"]:
+        lines.append(f"\n⛔ <b>در پنل پیدا نشد ({len(plan['missing'])}):</b>")
+        for s in plan["missing"][:10]:
+            lines.append(f"• {s.name} (vpsid {s.provider_server_id})")
+    if not plan["changes"]:
+        lines.append("\n✅ همه‌چیز مطابق است — کاری لازم نیست.")
+
+    rows = []
+    if plan["changes"]:
+        rows.append([InlineKeyboardButton(
+            text=f"اعمال {len(plan['changes'])} تغییر",
+            callback_data=f"admin:remap_do:{provider_id}")])
+    rows.append([InlineKeyboardButton(text="بازخوانی",
+                                      callback_data=f"admin:remap:{provider_id}")])
+    rows.append([InlineKeyboardButton(text="بازگشت",
+                                      callback_data=f"admin:prov:{provider_id}")])
+    await msg.edit_text("\n".join(lines), parse_mode="HTML",
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+@router.callback_query(F.data.startswith("admin:remap:"))
+async def cb_remap(cb: CallbackQuery, session: AsyncSession):
+    await cb.answer("در حال خواندن پنل...")
+    await _render_remap(cb.message, session, int(cb.data.split(":")[2]))
+
+
+@router.callback_query(F.data.startswith("admin:remap_do:"))
+async def cb_remap_do(cb: CallbackQuery, session: AsyncSession):
+    provider_id = int(cb.data.split(":")[2])
+    account = await session.get(ProviderAccount, provider_id)
+    if not account:
+        await cb.answer("سرویس‌دهنده یافت نشد.", show_alert=True)
+        return
+    await cb.answer("در حال اعمال...")
+    try:
+        # نقشه دوباره و تازه محاسبه می‌شود (پنل ممکن است بین دو صفحه عوض شده باشد)
+        plan = await asyncio.wait_for(_remap_plan(session, account), timeout=90)
+    except Exception as e:
+        await cb.message.answer(f"خطا: {_html.escape(str(e)[:250])}")
+        return
+    n = 0
+    for s, v in plan["changes"]:
+        s.provider_server_id = v["vpsid"]
+        if v["ip"]:
+            s.ip_address = v["ip"]
+        n += 1
+    await session.flush()
+    logger.warning("remap: rewrote provider_server_id/ip for %s servers (account %s)",
+                   n, account.id)
+    await cb.message.answer(f"✅ {n} سرور بازنگاشت شد.")
+    await _render_remap(cb.message, session, provider_id)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  TRAFFIC TARIFFS (per Virtualizor account — بسته‌های ترافیک اضافه)
 # ══════════════════════════════════════════════════════════════════════════════
 

@@ -1563,9 +1563,40 @@ async def _select_category(cb: CallbackQuery, user: User, state: FSMContext,
     await _render_plan_list(cb, state, session, category, plans, back_cb="buy_server")
 
 
+async def _plan_price_toman(session: AsyncSession, plan, rates: dict) -> tuple[float, str]:
+    """(مبلغ تومان، واحد) برای نمایش قیمت پلن روی دکمه.
+
+    ماهانه اولویت دارد (چیزی که مشتری برای مقایسه می‌خواهد)؛ پلن‌های فقط-ساعتی
+    قیمت ساعتی می‌گیرند. صفر = نرخ ارز در دسترس نیست → قیمت اصلاً نمایش داده
+    نمی‌شود (به‌جای «۰ تومان»). نرخ‌ها در `rates` کش می‌شوند تا لیستِ چندپلنی
+    یک کوئری بزند، نه یکی به‌ازای هر پلن (و لاگ هم اسپم نشود)."""
+    from bot.services.currency import get_rate
+    _cur = obj_currency(plan)
+    if _cur not in rates:
+        rates[_cur] = await get_rate(session, _cur)
+    _rate = rates[_cur]
+    for _amount, _unit in ((plan.price_monthly, "ماهانه"), (plan.price_hourly, "ساعتی")):
+        if not _amount:
+            continue
+        _t = float(_amount) * _rate
+        return (_t if _t > 0 else 0.0), _unit
+    return 0.0, ""
+
+
 async def _render_plan_list(cb: CallbackQuery, state: FSMContext, session: AsyncSession,
                             category: str, plans: list, back_cb: str):
     builder = InlineKeyboardBuilder()
+    # قیمت‌ها یک‌بار محاسبه می‌شوند تا بدانیم واحدشان یکسان است یا نه:
+    # واحد مشترک → یک‌بار در متن پیام (دکمه کوتاه می‌ماند و قیمت بریده نمی‌شود)،
+    # واحدهای مخلوط → واحد کنار خودِ هر قیمت
+    _rates: dict[str, float] = {}
+    _prices = {}
+    for plan in plans:
+        _prices[plan.id] = await _plan_price_toman(session, plan, _rates)
+    _units = {u for _t, u in _prices.values() if _t > 0}
+    _inline_unit = len(_units) > 1
+    _caption_unit = next(iter(_units)) if len(_units) == 1 else ""
+
     for plan in plans:
         ram_gb = plan.ram // 1024 if plan.ram >= 1024 else plan.ram
         _mbit = (plan.extra_data or {}).get("bandwidth_mbit")
@@ -1584,7 +1615,19 @@ async def _render_plan_list(cb: CallbackQuery, state: FSMContext, session: Async
         # را راست‌به‌چپ می‌کند و ⁦…⁩ (LTR isolate) کد لاتین را جدا نگه
         # می‌دارد تا با متن فارسی تداخل نکند.
         _code = plan.display_name or plan.name
-        label = f"‏⁦{_code}⁩ | {specs}"
+        # قیمت روی خودِ دکمه تا مشتری قبل از ورود به فلوی خرید مقایسه کند.
+        # ⚠️ متن دکمه همیشه تک‌خطی رندر می‌شود: همه‌ی کلاینت‌های تلگرام «\n» را
+        # به فاصله تبدیل می‌کنند و ارتفاع دکمه ثابت است (۴۲pt iOS / ۴۴dp اندروید)
+        # — هیچ فیلدی برای اندازه‌ی دکمه در Bot API وجود ندارد. پس متن باید کوتاه
+        # بماند وگرنه انتهای آن (همین قیمت) روی موبایل بریده می‌شود.
+        _toman, _unit = _prices[plan.id]
+        _price = ""
+        if _toman > 0:
+            # جیکور: قیمت پایه است و با ویندوز/دیسکِ بزرگ‌تر بالاتر می‌رود → «از»
+            _pfx = "از " if plan.provider_type == ProviderType.GCORE else ""
+            _suffix = f" {_unit}" if _inline_unit else ""
+            _price = f" | {_pfx}{_toman:,.0f} تومان{_suffix}".translate(_FA_DIGITS)
+        label = f"‏⁦{_code}⁩ | {specs}{_price}"
         # اموجی پریمیوم اختصاصی محصول؛ وگرنه پرچمِ لوکیشن (هتزنر/تایم‌وب/جیکور)
         _pe = (plan.extra_data or {}).get("emoji_id") \
             or _loc_flag(plan.location,
@@ -1596,10 +1639,15 @@ async def _render_plan_list(cb: CallbackQuery, state: FSMContext, session: Async
 
     await state.update_data(category=category)
     await state.set_state(BuyServerStates.selecting_plan)
-    await cb.message.edit_text(
-        '<tg-emoji emoji-id="5926980668624998964">🟡</tg-emoji> یک محصول انتخاب کنید:',
-        parse_mode="HTML",
-        reply_markup=builder.as_markup(),
+    _cap = ""
+    if _caption_unit:
+        _cap = (f"\n<i>قیمت‌ها {_caption_unit} است؛ مشخصات کامل و مبلغ نهایی در "
+                "مرحله‌ی تأیید نمایش داده می‌شود.</i>")
+    await _edit_ignore_same(
+        cb.message,
+        '<tg-emoji emoji-id="5926980668624998964">🟡</tg-emoji> یک محصول انتخاب کنید:'
+        + _cap,
+        builder.as_markup(),
     )
     await cb.answer()
 
@@ -2507,6 +2555,12 @@ async def _show_confirm(msg, state: FSMContext, session, from_message=False, use
     _cur = obj_currency(plan)
     if _cur != "irt" and base_price:
         base_price = await to_toman(session, base_price, _cur)
+        if base_price <= 0:
+            # نرخ ارز نیامده — صفحه‌ی تأیید نباید «۰ تومان» نشان دهد (مسیر
+            # فقط-ماهانه‌ی تایم‌وب گاردِ مرحله‌ی بیلینگ را رد می‌کرد)
+            _t = "نرخ ارز هنوز تنظیم نشده. کمی بعد دوباره تلاش کنید."
+            await (msg.answer(_t) if from_message else msg.edit_text(_t))
+            return
     discount_pct = data.get("discount_percent", 0)
     final_price = base_price * (1 - discount_pct / 100) if discount_pct else base_price
     price_unit = "تومان/ساعت" if billing == "hourly" else "تومان/ماه"

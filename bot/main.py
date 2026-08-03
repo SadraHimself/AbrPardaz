@@ -217,21 +217,34 @@ async def main() -> None:
         # فاصله‌ی خاموش‌شدنِ پروسه‌ی قبلی را پوشش می‌دهد.
         site = web.TCPSite(runner, "0.0.0.0", settings.NP_WEBHOOK_PORT,
                            reuse_address=True)
+        _bound = False
         for _attempt in range(6):
             try:
                 await site.start()
+                _bound = True
                 break
             except OSError as e:
-                if _attempt == 5:
-                    logger.error("Webhook port %d busy after retries: %s",
-                                 settings.NP_WEBHOOK_PORT, e)
-                    raise
                 logger.warning("Webhook port %d busy (%s) — retrying in 2s...",
                                settings.NP_WEBHOOK_PORT, e)
                 await asyncio.sleep(2)
+        if _bound:
+            logger.info("Webhook/callback server listening on port %d",
+                        settings.NP_WEBHOOK_PORT)
         else:
+            # ⚠️ پورت را کسِ دیگری گرفته. قبلاً همین‌جا کل ربات می‌مرد و مشتری
+            # هیچ کاری نمی‌توانست بکند. حالا ربات بالا می‌ماند و فقط کال‌بکِ
+            # درگاه کار نمی‌کند (شارژ کیف پول با زرین‌پال تا رفع مشکل معلق است).
+            logger.error(
+                "CRITICAL: webhook port %d is occupied by another process — the bot "
+                "is running WITHOUT the payment callback server. Free the port "
+                "(`ss -lntp | grep :%d`, `fuser -k %d/tcp`) and restart.",
+                settings.NP_WEBHOOK_PORT, settings.NP_WEBHOOK_PORT,
+                settings.NP_WEBHOOK_PORT)
+            try:
+                await runner.cleanup()
+            except Exception:
+                pass
             runner = None
-        logger.info("Webhook/callback server listening on port %d", settings.NP_WEBHOOK_PORT)
 
     try:
         logger.info("Starting polling...")

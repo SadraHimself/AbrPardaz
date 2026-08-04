@@ -26,10 +26,13 @@ def _encode_form(params: dict) -> str:
 
 class VirtualizorProvider(BaseProvider):
 
-    def __init__(self, panel_url: str, api_key: str, api_pass: str):
+    def __init__(self, panel_url: str, api_key: str, api_pass: str,
+                 virt_type: str = "kvm"):
         self.panel_url = panel_url.rstrip("/")
         self.api_key = api_key
         self.api_pass = api_pass
+        # نوع مجازی‌سازی این پنل — قالب‌های OS بر همین اساس فیلتر می‌شوند
+        self.virt_type = (virt_type or "kvm").strip().lower()
 
     async def _request(
         self,
@@ -571,9 +574,42 @@ class VirtualizorProvider(BaseProvider):
         return plans
 
     async def list_os_templates(self) -> list[dict]:
+        """قالب‌های OS قابل استفاده روی این پنل.
+
+        ⚠️ دو نکته‌ای که قبلاً لیست را خالی/نامعتبر می‌کرد:
+          • کلیدِ پاسخ در این نسخه‌ها `oses` است نه `ostemplates` (هر دو + `oslist`
+            پشتیبانی می‌شود). با کلید اشتباه لیست خالی می‌شد و ساختِ سرور با
+            osid خالی خطا می‌داد.
+          • هر سیستم‌عامل به‌ازای هر نوع مجازی‌سازی osid جدا دارد (`type`: kvm،
+            proxk، vzk، …). فرستادن osidِ نوعِ دیگر = خطای ساخت. پس فقط قالب‌های
+            هم‌نوع با مجازی‌سازیِ این اکانت برگردانده می‌شوند.
+        """
         data = await self._request("ostemplates")
-        os_list = data.get("ostemplates", {})
-        return [{"id": oid, "name": tmpl.get("name", "")} for oid, tmpl in os_list.items()]
+        os_list = {}
+        for key in ("oses", "ostemplates", "oslist"):
+            val = data.get(key)
+            if isinstance(val, dict) and val:
+                os_list = val
+                break
+        want = (self.virt_type or "kvm").strip().lower()
+        out, fallback = [], []
+        for oid, tmpl in os_list.items():
+            if not isinstance(tmpl, dict):
+                continue
+            if str(tmpl.get("active", "1")) == "0":
+                continue
+            row = {
+                "id": str(tmpl.get("osid") or oid),
+                "name": tmpl.get("name") or tmpl.get("filename") or "",
+                "type": str(tmpl.get("type") or tmpl.get("Nvirt") or "").lower(),
+                "distro": tmpl.get("distro") or "",
+            }
+            if not row["name"]:
+                continue
+            (out if row["type"] == want else fallback).append(row)
+        # اگر هیچ قالبی دقیقاً هم‌نوع نبود، به‌جای لیست خالی همه را بده تا
+        # فلوی خرید قفل نشود (پنل خودش نامعتبر بودن را گزارش می‌دهد)
+        return out or fallback
 
     async def list_users(self) -> list[dict]:
         data = await self._request("users")

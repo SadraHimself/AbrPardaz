@@ -47,7 +47,8 @@ def sync_virtualizor_os(self):
                         prov = VirtualizorProvider(
                             panel_url=account.api_endpoint or "",
                             api_key=account.api_key or "",
-                            api_pass=account.api_secret or "")
+                            api_pass=account.api_secret or "",
+                            virt_type=(account.extra_config or {}).get("virt_type") or "kvm")
                         live = await prov.list_os_templates()
                     except Exception:
                         continue          # خطای گذرا — دور بعد جبران می‌کند

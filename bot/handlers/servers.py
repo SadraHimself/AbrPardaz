@@ -390,7 +390,8 @@ async def cb_server_action(cb: CallbackQuery, user: User, session: AsyncSession)
         _os_rows = [2] * (len(os_shown) // 2) + ([1] if len(os_shown) % 2 else [])
         builder.adjust(*_os_rows, 1)
         await cb.message.edit_text(
-            f"🔁 <b>ریبیلد — {server.name}</b>\n\nسیستم‌عامل جدید را انتخاب کنید:",
+            '‏<tg-emoji emoji-id="5346269127059196142">🔄</tg-emoji> '
+            f"<b>ریبیلد — {server.name}</b>\n\nسیستم‌عامل جدید را انتخاب کنید:",
             parse_mode="HTML",
             reply_markup=builder.as_markup(),
         )
@@ -502,7 +503,7 @@ async def cb_server_rebuild_confirm(cb: CallbackQuery, user: User, session: Asyn
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
     await cb.message.edit_text(
-        f"🔁 <b>تأیید ریبیلد</b>\n\n"
+        '‏<tg-emoji emoji-id="5346269127059196142">🔄</tg-emoji> <b>تأیید ریبیلد</b>\n\n'
         f"سرور: <b>{server.name}</b>\n\n"
         f"{WARN} <b>ریبیلد تمام اطلاعات دیسک را پاک می‌کند!</b>\n"
         "این عمل قابل بازگشت نیست. آیا مطمئن هستید؟",

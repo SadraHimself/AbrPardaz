@@ -176,6 +176,10 @@ class ServerService:
             server.ip_address = info.ip_address
         if info.ipv6_address:
             server.ipv6_address = info.ipv6_address
+        # نام سیستم‌عامل هم زنده به‌روز می‌شود: قالب‌های OS روی پنل حذف/اضافه/
+        # تغییرنام می‌شوند و مقدارِ ثبت‌شده‌ی لحظه‌ی ساخت کهنه می‌ماند
+        if info.os_name and info.os_name != server.os_name:
+            server.os_name = info.os_name
 
         # Merge live machine state from Virtualizor so the detail page label and the
         # keyboard dot reflect the real state (running / off / locked).

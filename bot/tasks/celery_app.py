@@ -38,6 +38,11 @@ app.conf.update(
             "task": "bot.tasks.billing.run_snapshot_billing",
             "schedule": crontab(minute="*/1"),
         },
+        # هر ۳۰ دقیقه: قالب‌های OS ویرچولایزور با پنل تطبیق داده می‌شوند
+        "virtualizor-os-sync": {
+            "task": "bot.tasks.server.sync_virtualizor_os",
+            "schedule": crontab(minute="25,55"),
+        },
         # هر 15 دقیقه ترافیک سرورها آپدیت می‌شود
         "traffic-sync": {
             "task": "bot.tasks.server.sync_all_traffic",

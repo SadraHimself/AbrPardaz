@@ -206,6 +206,18 @@ class VirtualizorProvider(BaseProvider):
         os_id_val = params.os_id
         if not str(os_id_val).strip().isdigit():
             os_id_val = params.extra.get("osid", os_id_val)
+        # قالب‌های OS روی پنل حذف/جایگزین می‌شوند و osidِ پین‌شده‌ی پلن کهنه
+        # می‌ماند → خطای مبهم موقع ساخت. اینجا با لیست زنده اعتبارسنجی می‌شود.
+        try:
+            _live = {str(o.get("id")) for o in await self.list_os_templates()}
+            if _live and str(os_id_val).strip() not in _live:
+                raise RuntimeError(
+                    "سیستم‌عامل انتخاب‌شده روی سرور موجود نیست — لطفاً دوباره از "
+                    "لیست انتخاب کنید یا با پشتیبانی تماس بگیرید.")
+        except RuntimeError:
+            raise
+        except Exception:
+            pass          # خطای شبکه در اعتبارسنجی نباید جلوی ساخت را بگیرد
 
         payload: dict = {
             # Submit trigger: the documented field is `addvps=1` ("If set the vps will

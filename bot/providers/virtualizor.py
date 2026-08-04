@@ -1009,6 +1009,10 @@ class VirtualizorProvider(BaseProvider):
         سالگردِ ماهانه‌ی هر VM سقف را «سقف منهای مصرف دوره» می‌کند و هر کپیِ
         محلی بلافاصله کهنه می‌شود."""
         vs = await self._vs_row(server_id)
+        if not vs:
+            # VM روی پنل نیست (حذف‌شده/نامعتبر). اگر اینجا صفر برگردانیم، caller
+            # آن را «نامحدود» تعبیر می‌کند و سقف ترافیک سرور پاک می‌شود
+            raise RuntimeError(f"VPS {server_id} در پنل یافت نشد")
         try:
             quota = int(float(vs.get("bandwidth") or 0))
         except (TypeError, ValueError):

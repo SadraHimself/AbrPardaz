@@ -78,6 +78,7 @@ class ProviderFSM(StatesGroup):
 
 class RemapFSM(StatesGroup):
     paste = State()
+    whois = State()
 
 
 class TrafficTariffFSM(StatesGroup):
@@ -1779,6 +1780,23 @@ async def _owner_uid(session: AsyncSession, server: Server, account_id: int) -> 
         return ""
 
 
+async def _uid_directory(session: AsyncSession, account_id: int) -> dict[str, str]:
+    """نگاشت «uid ویرچولایزور → مشتریِ ربات».
+
+    هر مشتری روی هر پنل یک کاربر اختصاصی دارد و ربات آن را در
+    `user.extra_data['virt_uids'][account_id]` نگه می‌دارد — تنها راهِ قابل‌اتکا
+    برای فهمیدن اینکه یک VM دستِ کیست (آیپی مدام عوض می‌شود و ایمیل هم نیست)."""
+    out: dict[str, str] = {}
+    rows = (await session.execute(
+        select(User).where(User.extra_data.isnot(None))
+    )).scalars().all()
+    for u in rows:
+        uid = ((u.extra_data or {}).get("virt_uids") or {}).get(str(account_id))
+        if uid:
+            out[str(uid)] = f"@{u.username}" if u.username else f"tg:{u.telegram_id}"
+    return out
+
+
 async def _remap_plan(session: AsyncSession, account: ProviderAccount) -> dict:
     """نقشه‌ی تغییرات را بدون نوشتن چیزی محاسبه می‌کند."""
     from bot.database.models import ServerStatus as _SS
@@ -1813,20 +1831,23 @@ async def _remap_plan(session: AsyncSession, account: ProviderAccount) -> dict:
         if not cands:
             missing.append(s)
             continue
+        own = await _owner_uid(session, s, account.id)
         if len(cands) > 1:
-            # چند VM هم‌نام → **رد می‌شود** و برای ورود دستی کنار گذاشته می‌شود.
-            # (هاست‌نیم تکراری طبیعی است: یک VM مال مشتریِ ربات و یکی مال مشتریِ
-            # سایت/WHMCS. حدس‌زدن یعنی ریسکِ وصل‌کردن مشتری به ماشین اشتباه.)
-            # ⚠️ ولی اگر vpsidِ فعلیِ رکورد خودش یکی از همین کاندیداهاست، یعنی
-            # ادمین قبلاً دستی تعیین تکلیف کرده — دیگر هشدار داده نمی‌شود.
+            # هاست‌نیم تکراری طبیعی است (یک VM مال مشتریِ ربات، یکی مال مشتریِ
+            # سایت/WHMCS). ولی مالکیت قابل تشخیص است: هر مشتری روی پنل کاربر
+            # اختصاصی خودش را دارد → با uid ابهام برطرف می‌شود.
             if str(s.provider_server_id or "") in cands:
-                same.append(s)
+                same.append(s)     # ادمین قبلاً دستی تعیین تکلیف کرده
+                continue
+            _mine = [v for v in cands.values() if own and v.get("uid") == own]
+            if len(_mine) == 1:
+                cands = {_mine[0]["vpsid"]: _mine[0]}   # ابهام با مالکیت حل شد
             else:
-                ambiguous.append((s, sorted(cands)))
-            continue
+                ambiguous.append((s, sorted(cands.values(),
+                                            key=lambda v: int(v["vpsid"]))))
+                continue
         v = next(iter(cands.values()))
         # مالکیت: uid پنل باید با uidِ ذخیره‌شده‌ی صاحبِ سرور بخواند
-        own = await _owner_uid(session, s, account.id)
         if own and v.get("uid") and own != v["uid"]:
             conflicts.append((s, v, f"uid پنل {v['uid']} ≠ uid کاربر {own}"))
             continue
@@ -1853,7 +1874,8 @@ async def _remap_plan(session: AsyncSession, account: ProviderAccount) -> dict:
         claimed[vid] = s
         safe.append((s, v))
     return {"changes": safe, "same": same, "missing": missing,
-            "ambiguous": ambiguous, "conflicts": conflicts, "panel_count": len(panel)}
+            "ambiguous": ambiguous, "conflicts": conflicts, "panel_count": len(panel),
+            "uid_dir": await _uid_directory(session, account.id)}
 
 
 async def _render_remap(msg, session: AsyncSession, provider_id: int):
@@ -1887,13 +1909,25 @@ async def _render_remap(msg, session: AsyncSession, provider_id: int):
         for s, v, why in plan["conflicts"][:10]:
             lines.append(f"• {_e(s.name)}: {_e(why)}")
     if plan["ambiguous"]:
+        _dir = plan.get("uid_dir") or {}
         lines.append(f"\n⚠️ <b>چند VM هم‌نام ({len(plan['ambiguous'])}) — دستی بررسی شود:</b>")
-        for s, vids in plan["ambiguous"][:10]:
-            lines.append(f"• {_e(s.name)}: {', '.join(vids)}")
+        for s, vms in plan["ambiguous"][:10]:
+            # صاحبِ هر کاندید از uid پنل استخراج می‌شود تا ادمین بفهمد کدام VM
+            # مال مشتریِ ربات است (آیپی مدام عوض می‌شود و قابل‌اتکا نیست)
+            _parts = []
+            for v in vms:
+                _uid = str(v.get("uid") or "")
+                _who = _dir.get(_uid) or (f"uid {_uid}" if _uid else "نامشخص")
+                _parts.append(f"<code>{v['vpsid']}</code> ({_e(_who)})")
+            lines.append(f"• {_e(s.name)} → " + " | ".join(_parts))
     if plan["missing"]:
         lines.append(f"\n⛔ <b>در پنل پیدا نشد ({len(plan['missing'])}):</b>")
         for s in plan["missing"][:10]:
-            lines.append(f"• {_e(s.name)} (vpsid {s.provider_server_id})")
+            _u = await session.get(User, s.user_id)
+            _who = (f"@{_u.username}" if _u and _u.username
+                    else (f"tg:{_u.telegram_id}" if _u else "—"))
+            lines.append(f"• {_e(s.name)} (vpsid {s.provider_server_id}) — "
+                         f"{_e(_who)} — {s.status.value}")
     if not plan["changes"]:
         lines.append("\n✅ موردی برای اصلاح نیست.")
 
@@ -1911,6 +1945,8 @@ async def _render_remap(msg, session: AsyncSession, provider_id: int):
             callback_data=f"admin:remap_do:{provider_id}:{_sig}")])
     rows.append([InlineKeyboardButton(text="ورود دستی vpsid",
                                       callback_data=f"admin:remap_man:{provider_id}")])
+    rows.append([InlineKeyboardButton(text="این vpsid دست کیست؟",
+                                      callback_data=f"admin:whois:{provider_id}")])
     rows.append([InlineKeyboardButton(text="بازخوانی",
                                       callback_data=f"admin:remap:{provider_id}")])
     rows.append([InlineKeyboardButton(text="بازگشت",
@@ -1929,6 +1965,80 @@ async def cb_remap(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
     await state.clear()
     await cb.answer("در حال خواندن پنل...")
     await _render_remap(cb.message, session, int(cb.data.split(":")[2]))
+
+
+# ── «این vpsid دست کیست؟» ────────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("admin:whois:"))
+async def cb_whois(cb: CallbackQuery, state: FSMContext):
+    provider_id = int(cb.data.split(":")[2])
+    await state.update_data(whois_provider_id=provider_id)
+    await state.set_state(RemapFSM.whois)
+    await cb.answer()
+    await cb.message.edit_text(
+        "<b>این vpsid دست کیست؟</b>\n\n"
+        "یک یا چند vpsid بفرست (هر خط یکی، یا با فاصله):\n"
+        "<code>111 36 40</code>\n\n"
+        "<i>مالک از روی کاربرِ ویرچولایزورِ آن VM تشخیص داده می‌شود — "
+        "آیپی برای این کار قابل‌اتکا نیست.</i>",
+        parse_mode="HTML", reply_markup=cancel_admin_kb(),
+    )
+
+
+@router.message(RemapFSM.whois)
+async def whois_input(message: Message, state: FSMContext, session: AsyncSession):
+    import re as _re
+    data = await state.get_data()
+    provider_id = int(data.get("whois_provider_id") or 0)
+    account = await session.get(ProviderAccount, provider_id)
+    if not account:
+        await state.clear()
+        await message.answer("سرویس‌دهنده یافت نشد.")
+        return
+    ids = [t for t in _re.split(r"[\s,;:|]+", (message.text or "").strip()) if t.isdigit()]
+    if not ids:
+        await message.answer("فقط عدد (vpsid) بفرست.", reply_markup=cancel_admin_kb())
+        return
+    wait = await message.answer("در حال خواندن پنل...")
+    try:
+        prov = VirtualizorProvider(
+            panel_url=account.api_endpoint or "", api_key=account.api_key or "",
+            api_pass=account.api_secret or "")
+        panel = {v["vpsid"]: v for v in
+                 await asyncio.wait_for(prov.list_all_vps(), timeout=90)}
+        uid_dir = await _uid_directory(session, account.id)
+    except Exception as e:
+        await state.clear()
+        await wait.edit_text(f"خطا: {_html.escape(str(e)[:200])}")
+        return
+    _e = _html.escape
+    out = ["<b>مالکِ vpsidها</b>", ""]
+    for vid in ids:
+        vm = panel.get(vid)
+        if not vm:
+            out.append(f"⛔ <code>{vid}</code> — در پنل نیست")
+            continue
+        # رکورد ربات (اگر این vpsid به سروری وصل باشد)
+        srv = (await session.execute(
+            select(Server).where(
+                Server.provider_account_id == account.id,
+                Server.provider_server_id == vid,
+            )
+        )).scalars().first()
+        _uid = str(vm.get("uid") or "")
+        _who = uid_dir.get(_uid)
+        out.append(
+            f"• <code>{vid}</code> — {_e(vm.get('hostname') or '—')}\n"
+            f"   پنل: uid {_uid or '—'}"
+            + (f" → {_e(_who)}" if _who else " → خارج از ربات (مشتری سایت/دستی)")
+            + (f"\n   در ربات: «{_e(srv.name)}» ({srv.status.value})"
+               if srv else "\n   در ربات: ثبت نشده")
+            + (f"\n   IP: <code>{', '.join(vm.get('ips') or []) or '—'}</code>")
+        )
+    await state.clear()
+    await wait.edit_text(
+        _cap_msg("\n".join(out)), parse_mode="HTML",
+        reply_markup=back_to_admin_kb(f"admin:remap:{provider_id}"))
 
 
 # ── ورود دستی vpsid ───────────────────────────────────────────────────────────

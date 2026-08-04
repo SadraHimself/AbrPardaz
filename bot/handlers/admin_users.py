@@ -1257,7 +1257,10 @@ async def cb_admin_usrv_rebuild(cb: CallbackQuery, session: AsyncSession):
     await cb.answer()
     try:
         prov = get_provider(account)
-        os_list = await _ai.wait_for(prov.list_os_templates(), timeout=15)
+        # ویرچولایزور: قالب‌های همان VPS (نصب‌شده روی نودش)، نه کاتالوگ کامل
+        _kw = ({"server_id": server.provider_server_id}
+               if account.provider_type == ProviderType.VIRTUALIZOR else {})
+        os_list = await _ai.wait_for(prov.list_os_templates(**_kw), timeout=15)
     except Exception as e:
         await cb.message.answer(f"خطا در دریافت لیست OS: {e}")
         return

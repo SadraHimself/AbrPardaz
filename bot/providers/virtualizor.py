@@ -573,43 +573,60 @@ class VirtualizorProvider(BaseProvider):
             ))
         return plans
 
-    async def list_os_templates(self) -> list[dict]:
-        """قالب‌های OS قابل استفاده روی این پنل.
+    @staticmethod
+    def _collect_os_rows(val, out: list[dict]) -> None:
+        """استخراج (osid، نام) از هر شکلی که پنل برمی‌گرداند.
 
-        ⚠️ دو نکته‌ای که قبلاً لیست را خالی/نامعتبر می‌کرد:
-          • کلیدِ پاسخ در این نسخه‌ها `oses` است نه `ostemplates` (هر دو + `oslist`
-            پشتیبانی می‌شود). با کلید اشتباه لیست خالی می‌شد و ساختِ سرور با
-            osid خالی خطا می‌داد.
-          • هر سیستم‌عامل به‌ازای هر نوع مجازی‌سازی osid جدا دارد (`type`: kvm،
-            proxk، vzk، …). فرستادن osidِ نوعِ دیگر = خطای ساخت. پس فقط قالب‌های
-            هم‌نوع با مجازی‌سازیِ این اکانت برگردانده می‌شوند.
+        ساختارها بین نسخه‌ها فرق دارد: dictِ osid→آبجکت، dictِ distro→زیرگروه،
+        یا dictِ osid→نامِ رشته‌ای. مثل پارس IPها دفاعی برخورد می‌شود."""
+        if isinstance(val, dict):
+            for k, v in val.items():
+                if isinstance(v, dict):
+                    if v.get("osid") or v.get("name") or v.get("filename"):
+                        _id = str(v.get("osid") or k)
+                        _nm = v.get("name") or v.get("filename") or ""
+                        if str(_id).isdigit() and _nm:
+                            out.append({"id": str(_id), "name": str(_nm),
+                                        "distro": v.get("distro") or ""})
+                    else:
+                        VirtualizorProvider._collect_os_rows(v, out)   # زیرگروه
+                elif isinstance(v, list):
+                    VirtualizorProvider._collect_os_rows(v, out)
+                elif isinstance(v, str) and str(k).isdigit() and v:
+                    out.append({"id": str(k), "name": v, "distro": ""})
+        elif isinstance(val, list):
+            for v in val:
+                VirtualizorProvider._collect_os_rows(v, out)
+
+    async def list_os_templates(self, server_id: Optional[str] = None) -> list[dict]:
+        """فقط OSهایی که واقعاً روی نود نصب و قابل استفاده‌اند.
+
+        ⚠️ `act=ostemplates` کاتالوگِ کاملِ قابل‌دانلودِ مستر است (صدها قالبِ
+        نصب‌نشده) — استفاده از آن یعنی نمایش OSهایی که ساختشان خطا می‌دهد.
+        منبع درست همان فرمی است که خود پنل رندر می‌کند (دقیقاً مثل الگوی IPها
+        که از `managevps` خوانده می‌شوند):
+          • با server_id → فرم Manage VPS همان سرور (برای ریبیلد)
+          • بدون آن → فرم Add VPS (قالب‌های نصب‌شده روی نود، برای خرید)
+
+        فرم چند کلید هم‌زمان دارد (`oslist`/`ostemplates`/`oses`)؛ زیرمجموعه‌ی
+        نصب‌شده همیشه کوچک‌ترینِ آن‌هاست، پس کوچک‌ترین لیستِ غیرخالی انتخاب
+        می‌شود و هرگز کاتالوگ کامل.
         """
-        data = await self._request("ostemplates")
-        os_list = {}
-        for key in ("oses", "ostemplates", "oslist"):
-            val = data.get(key)
-            if isinstance(val, dict) and val:
-                os_list = val
-                break
-        want = (self.virt_type or "kvm").strip().lower()
-        out, fallback = [], []
-        for oid, tmpl in os_list.items():
-            if not isinstance(tmpl, dict):
-                continue
-            if str(tmpl.get("active", "1")) == "0":
-                continue
-            row = {
-                "id": str(tmpl.get("osid") or oid),
-                "name": tmpl.get("name") or tmpl.get("filename") or "",
-                "type": str(tmpl.get("type") or tmpl.get("Nvirt") or "").lower(),
-                "distro": tmpl.get("distro") or "",
-            }
-            if not row["name"]:
-                continue
-            (out if row["type"] == want else fallback).append(row)
-        # اگر هیچ قالبی دقیقاً هم‌نوع نبود، به‌جای لیست خالی همه را بده تا
-        # فلوی خرید قفل نشود (پنل خودش نامعتبر بودن را گزارش می‌دهد)
-        return out or fallback
+        if server_id:
+            data = await self._request("managevps", {}, query={"vpsid": server_id})
+        else:
+            data = await self._request("addvs")
+
+        best: list[dict] | None = None
+        for key in ("oslist", "ostemplates", "oses"):
+            rows: list[dict] = []
+            self._collect_os_rows(data.get(key), rows)
+            # حذف تکراری‌ها (همان osid ممکن است چند بار بیاید)
+            uniq = {r["id"]: r for r in rows}
+            rows = list(uniq.values())
+            if rows and (best is None or len(rows) < len(best)):
+                best = rows
+        return best or []
 
     async def list_users(self) -> list[dict]:
         data = await self._request("users")

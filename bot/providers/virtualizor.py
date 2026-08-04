@@ -26,13 +26,10 @@ def _encode_form(params: dict) -> str:
 
 class VirtualizorProvider(BaseProvider):
 
-    def __init__(self, panel_url: str, api_key: str, api_pass: str,
-                 virt_type: str = "kvm"):
+    def __init__(self, panel_url: str, api_key: str, api_pass: str):
         self.panel_url = panel_url.rstrip("/")
         self.api_key = api_key
         self.api_pass = api_pass
-        # نوع مجازی‌سازی این پنل — قالب‌های OS بر همین اساس فیلتر می‌شوند
-        self.virt_type = (virt_type or "kvm").strip().lower()
 
     async def _request(
         self,
@@ -209,18 +206,6 @@ class VirtualizorProvider(BaseProvider):
         os_id_val = params.os_id
         if not str(os_id_val).strip().isdigit():
             os_id_val = params.extra.get("osid", os_id_val)
-        # قالب‌های OS روی پنل حذف/جایگزین می‌شوند و osidِ پین‌شده‌ی پلن کهنه
-        # می‌ماند → خطای مبهم موقع ساخت. اینجا با لیست زنده اعتبارسنجی می‌شود.
-        try:
-            _live = {str(o.get("id")) for o in await self.list_os_templates()}
-            if _live and str(os_id_val).strip() not in _live:
-                raise RuntimeError(
-                    "سیستم‌عامل انتخاب‌شده روی سرور موجود نیست — لطفاً دوباره از "
-                    "لیست انتخاب کنید یا با پشتیبانی تماس بگیرید.")
-        except RuntimeError:
-            raise
-        except Exception:
-            pass          # خطای شبکه در اعتبارسنجی نباید جلوی ساخت را بگیرد
 
         payload: dict = {
             # Submit trigger: the documented field is `addvps=1` ("If set the vps will
@@ -573,60 +558,10 @@ class VirtualizorProvider(BaseProvider):
             ))
         return plans
 
-    @staticmethod
-    def _collect_os_rows(val, out: list[dict]) -> None:
-        """استخراج (osid، نام) از هر شکلی که پنل برمی‌گرداند.
-
-        ساختارها بین نسخه‌ها فرق دارد: dictِ osid→آبجکت، dictِ distro→زیرگروه،
-        یا dictِ osid→نامِ رشته‌ای. مثل پارس IPها دفاعی برخورد می‌شود."""
-        if isinstance(val, dict):
-            for k, v in val.items():
-                if isinstance(v, dict):
-                    if v.get("osid") or v.get("name") or v.get("filename"):
-                        _id = str(v.get("osid") or k)
-                        _nm = v.get("name") or v.get("filename") or ""
-                        if str(_id).isdigit() and _nm:
-                            out.append({"id": str(_id), "name": str(_nm),
-                                        "distro": v.get("distro") or ""})
-                    else:
-                        VirtualizorProvider._collect_os_rows(v, out)   # زیرگروه
-                elif isinstance(v, list):
-                    VirtualizorProvider._collect_os_rows(v, out)
-                elif isinstance(v, str) and str(k).isdigit() and v:
-                    out.append({"id": str(k), "name": v, "distro": ""})
-        elif isinstance(val, list):
-            for v in val:
-                VirtualizorProvider._collect_os_rows(v, out)
-
-    async def list_os_templates(self, server_id: Optional[str] = None) -> list[dict]:
-        """فقط OSهایی که واقعاً روی نود نصب و قابل استفاده‌اند.
-
-        ⚠️ `act=ostemplates` کاتالوگِ کاملِ قابل‌دانلودِ مستر است (صدها قالبِ
-        نصب‌نشده) — استفاده از آن یعنی نمایش OSهایی که ساختشان خطا می‌دهد.
-        منبع درست همان فرمی است که خود پنل رندر می‌کند (دقیقاً مثل الگوی IPها
-        که از `managevps` خوانده می‌شوند):
-          • با server_id → فرم Manage VPS همان سرور (برای ریبیلد)
-          • بدون آن → فرم Add VPS (قالب‌های نصب‌شده روی نود، برای خرید)
-
-        فرم چند کلید هم‌زمان دارد (`oslist`/`ostemplates`/`oses`)؛ زیرمجموعه‌ی
-        نصب‌شده همیشه کوچک‌ترینِ آن‌هاست، پس کوچک‌ترین لیستِ غیرخالی انتخاب
-        می‌شود و هرگز کاتالوگ کامل.
-        """
-        if server_id:
-            data = await self._request("managevps", {}, query={"vpsid": server_id})
-        else:
-            data = await self._request("addvs")
-
-        best: list[dict] | None = None
-        for key in ("oslist", "ostemplates", "oses"):
-            rows: list[dict] = []
-            self._collect_os_rows(data.get(key), rows)
-            # حذف تکراری‌ها (همان osid ممکن است چند بار بیاید)
-            uniq = {r["id"]: r for r in rows}
-            rows = list(uniq.values())
-            if rows and (best is None or len(rows) < len(best)):
-                best = rows
-        return best or []
+    async def list_os_templates(self) -> list[dict]:
+        data = await self._request("ostemplates")
+        os_list = data.get("ostemplates", {})
+        return [{"id": oid, "name": tmpl.get("name", "")} for oid, tmpl in os_list.items()]
 
     async def list_users(self) -> list[dict]:
         data = await self._request("users")

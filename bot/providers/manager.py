@@ -16,8 +16,6 @@ def get_provider(account: ProviderAccount) -> BaseProvider:
             panel_url=account.api_endpoint or "",
             api_key=account.api_key or "",
             api_pass=account.api_secret or "",
-            # قالب‌های OS per-virt هستند؛ نوع اشتباه = خطای ساخت
-            virt_type=(account.extra_config or {}).get("virt_type") or "kvm",
         )
     if account.provider_type == ProviderType.HETZNER:
         return HetznerProvider(api_token=account.api_key or "")

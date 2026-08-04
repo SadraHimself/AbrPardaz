@@ -376,11 +376,7 @@ async def cb_server_action(cb: CallbackQuery, user: User, session: AsyncSession)
         try:
             import asyncio as _ai
             prov = get_provider(account)
-            # ویرچولایزور: لیست OS را از فرمِ همان VPS بگیر (مثل الگوی IPها) تا
-            # فقط قالب‌های نصب‌شده و قابل استفاده روی آن نود بیایند
-            _kw = ({"server_id": server.provider_server_id}
-                   if account.provider_type == ProviderType.VIRTUALIZOR else {})
-            os_list = await _ai.wait_for(prov.list_os_templates(**_kw), timeout=15)
+            os_list = await _ai.wait_for(prov.list_os_templates(), timeout=15)
         except Exception as e:
             await cb.message.answer(f"{ERR} خطا در دریافت لیست OS: {_esc(e)}", parse_mode="HTML")
             await cb.answer()

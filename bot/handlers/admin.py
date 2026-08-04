@@ -1815,9 +1815,14 @@ async def _remap_plan(session: AsyncSession, account: ProviderAccount) -> dict:
             continue
         if len(cands) > 1:
             # چند VM هم‌نام → **رد می‌شود** و برای ورود دستی کنار گذاشته می‌شود.
-            # VMِ مبدأِ رهاشده معمولاً با همین هاست‌نیم هنوز روی پنل هست؛ حدس‌زدنِ
-            # «جدیدترین» یعنی ریسکِ وصل‌کردن مشتری به ماشین اشتباه.
-            ambiguous.append((s, sorted(cands)))
+            # (هاست‌نیم تکراری طبیعی است: یک VM مال مشتریِ ربات و یکی مال مشتریِ
+            # سایت/WHMCS. حدس‌زدن یعنی ریسکِ وصل‌کردن مشتری به ماشین اشتباه.)
+            # ⚠️ ولی اگر vpsidِ فعلیِ رکورد خودش یکی از همین کاندیداهاست، یعنی
+            # ادمین قبلاً دستی تعیین تکلیف کرده — دیگر هشدار داده نمی‌شود.
+            if str(s.provider_server_id or "") in cands:
+                same.append(s)
+            else:
+                ambiguous.append((s, sorted(cands)))
             continue
         v = next(iter(cands.values()))
         # مالکیت: uid پنل باید با uidِ ذخیره‌شده‌ی صاحبِ سرور بخواند

@@ -265,14 +265,16 @@ def check_providers_health():
                         cfg["health_fail_streak"] = 0
                         if prev_ok is False:
                             cfg["health_ok"] = True
-                            await log.log_provider_up(account.name)
+                            await log.log_provider_up(account.name,
+                                                      account.provider_type)
                     else:
                         fail_streak += 1
                         cfg["health_fail_streak"] = fail_streak
                         if fail_streak >= 2 and prev_ok is not False:
                             cfg["health_ok"] = False
                             changed = True
-                            await log.log_provider_down(account.name, reason)
+                            await log.log_provider_down(account.name, reason,
+                                                        account.provider_type)
 
                     account.extra_config = cfg
                 await session.commit()

@@ -357,18 +357,30 @@ class LogService:
             "برای ادامه‌ی فروش، حساب rootvds.ru را شارژ کن.",
         )
 
-    async def log_provider_down(self, name: str, reason: str = "") -> None:
+    # نامِ نمایشیِ هر سرویس‌دهنده برای پیام‌های قطعی/وصل
+    _PROVIDER_LABEL = {
+        "virtualizor": "ویرچولایزور", "hetzner": "هتزنر", "gcore": "جیکور",
+        "timeweb": "تایم‌وب", "rootvds": "روت",
+    }
+
+    @classmethod
+    def _provider_label(cls, provider_type=None) -> str:
+        val = getattr(provider_type, "value", provider_type)
+        return cls._PROVIDER_LABEL.get(str(val or "").lower(), "سرویس‌دهنده")
+
+    async def log_provider_down(self, name: str, reason: str = "",
+                                provider_type=None) -> None:
         await self._send(
             "server",
-            f"🔴 <b>قطعی سرور ویرچولایزور</b>\n\n"
+            f"🔴 <b>قطعی {self._provider_label(provider_type)}</b>\n\n"
             f"🖥 سرور: <b>{name}</b>\n"
             f"وضعیت: ارتباط برقرار نشد (سرور خاموش است یا اتصال قطع است)\n"
             f"دلیل احتمالی: <code>{reason or 'نامشخص'}</code>",
         )
 
-    async def log_provider_up(self, name: str) -> None:
+    async def log_provider_up(self, name: str, provider_type=None) -> None:
         await self._send(
             "server",
-            f"🟢 <b>سرور ویرچولایزور دوباره وصل شد</b>\n\n"
+            f"🟢 <b>{self._provider_label(provider_type)} دوباره وصل شد</b>\n\n"
             f"🖥 سرور: <b>{name}</b>",
         )

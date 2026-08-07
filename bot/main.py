@@ -211,22 +211,39 @@ async def main() -> None:
         webhook_app = create_webhook_app(bot)
         runner = web.AppRunner(webhook_app)
         await runner.setup()
-        # ⚠️ ری‌استارت سرویس: پروسه‌ی قبلی ممکن است هنوز سوکت را نبسته باشد و
-        # bind با «address already in use» کل ربات را از کار می‌انداخت.
-        # reuse_address سوکتِ TIME_WAIT را قابل‌استفاده می‌کند و چند تلاش،
-        # فاصله‌ی خاموش‌شدنِ پروسه‌ی قبلی را پوشش می‌دهد.
+        # ⚠️ ری‌استارت سرویس: پروسه‌ی قبلی ممکن است هنوز سوکت را نبسته باشد.
+        # آزادبودنِ پورت با یک سوکت آزمایشی چک می‌شود و site.start() فقط **یک
+        # بار** صدا زده می‌شود — تلاشِ مجددِ همان site خطای
+        # «Site is already registered in runner» می‌دهد چون aiohttp سایت را قبل
+        # از bind در runner ثبت می‌کند.
+        def _port_free() -> bool:
+            import socket
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s.bind(("0.0.0.0", settings.NP_WEBHOOK_PORT))
+                return True
+            except OSError:
+                return False
+            finally:
+                s.close()
+
+        for _attempt in range(6):
+            if _port_free():
+                break
+            logger.warning("Webhook port %d busy — retrying in 2s...",
+                           settings.NP_WEBHOOK_PORT)
+            await asyncio.sleep(2)
+
         site = web.TCPSite(runner, "0.0.0.0", settings.NP_WEBHOOK_PORT,
                            reuse_address=True)
         _bound = False
-        for _attempt in range(6):
-            try:
-                await site.start()
-                _bound = True
-                break
-            except OSError as e:
-                logger.warning("Webhook port %d busy (%s) — retrying in 2s...",
-                               settings.NP_WEBHOOK_PORT, e)
-                await asyncio.sleep(2)
+        try:
+            await site.start()
+            _bound = True
+        except OSError as e:
+            logger.warning("Webhook bind failed on port %d: %s",
+                           settings.NP_WEBHOOK_PORT, e)
         if _bound:
             logger.info("Webhook/callback server listening on port %d",
                         settings.NP_WEBHOOK_PORT)

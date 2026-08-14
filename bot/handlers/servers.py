@@ -3225,7 +3225,14 @@ async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: 
             if not user or not plan:
                 return
             billing = BillingService(session)
-            ok = await billing.debit(user.id, final_price,
+            # ⚠️ کپیِ اسکالرِ مقادیرِ لازمِ مسیرِ شکست — session.rollback() همه‌ی
+            # آبجکت‌های ORM را expire می‌کند و خواندنِ user.id/plan.* بعد از آن در
+            # SQLAlchemyِ async کرش می‌کند (MissingGreenlet) → برگشتِ وجه می‌مُرد.
+            _uid = user.id
+            _ptype = plan.provider_type
+            _plan_pid = str(plan.provider_plan_id or "")
+            _plan_disp = plan.display_name or plan.name or ""
+            ok = await billing.debit(_uid, final_price,
                                      description=f"خرید سرور {hostname}")
             if not ok:
                 await session.commit()
@@ -3306,7 +3313,7 @@ async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: 
                     await session.rollback()
                 except Exception:
                     pass
-                await billing.credit(user.id, final_price,
+                await billing.credit(_uid, final_price,
                                      description=f"برگشت وجه — شکست ساخت {hostname}")
                 # نکته: پلن را خودکار «ناموجود» نمی‌کنیم (API تایم‌وب سیگنالِ ظرفیت
                 # ندارد). موجود/ناموجود کردن فقط دستی از پنل ادمین است.
@@ -3316,7 +3323,7 @@ async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: 
                 # سالم — این باگِ کد نیست، حالتِ پرداختِ اکانتِ تایم‌وب است و تا
                 # درست نشود همه‌ی ساخت‌ها شکست می‌خورند.
                 _emsg = str(e)
-                if plan.provider_type == ProviderType.TIMEWEB and "__TW_IP_LIMIT__" in _emsg:
+                if _ptype == ProviderType.TIMEWEB and "__TW_IP_LIMIT__" in _emsg:
                     # سهمیه‌ی روزانه‌ی IP تایم‌وب تمام شده — سرور بی‌IP حذف و
                     # refund شد؛ تا ۱ ساعت دسته برای کاربران «ظرفیت تکمیل» شود
                     try:
@@ -3336,25 +3343,22 @@ async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: 
                         await session.commit()
                     except Exception:
                         pass
-                elif plan.provider_type == ProviderType.TIMEWEB and "__TW_FUNDS__" in _emsg:
+                elif _ptype == ProviderType.TIMEWEB and "__TW_FUNDS__" in _emsg:
                     # موجودیِ اکانت کفافِ یک سرورِ هم‌زمانِ بیشتر را نمی‌دهد
                     try:
                         await LogService(bot, session).log_timeweb_funds(hostname)
                     except Exception:
                         pass
-                elif plan.provider_type == ProviderType.ROOTVDS and "__RV_FUNDS__" in _emsg:
+                elif _ptype == ProviderType.ROOTVDS and "__RV_FUNDS__" in _emsg:
                     # موجودیِ اکانتِ RootVDS ته کشیده — ادمین شارژ کند
                     try:
                         await LogService(bot, session).log_rootvds_funds(hostname)
                     except Exception:
                         pass
-                elif plan.provider_type == ProviderType.TIMEWEB \
-                        and "no_paid" in _emsg.lower():
+                elif _ptype == ProviderType.TIMEWEB and "no_paid" in _emsg.lower():
                     try:
-                        _specs = plan.display_name or plan.name or ""
                         await LogService(bot, session).log_timeweb_unpaid(
-                            hostname, preset_id=str(plan.provider_plan_id or ""),
-                            specs=_specs)
+                            hostname, preset_id=_plan_pid, specs=_plan_disp)
                     except Exception:
                         pass
                 await bot.send_message(

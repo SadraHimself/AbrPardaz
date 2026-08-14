@@ -35,9 +35,34 @@ from bot.utils.loading import ERR, WARN, answer_loading, edit_loading
 import html as _html
 
 
+# برندپوشی: نامِ providerها هرگز نباید در پیام‌های رو به مشتری دیده شود
+# (مشتری فقط برندِ خودِ ما را می‌بیند). _esc در این فایل روی متنِ خطا/پیامِ
+# مشتری صدا زده می‌شود → یک نقطه‌ی مرکزی برای پاک‌سازی.
+_BRAND_HIDE = (
+    ("RootVDS API", "خطای سرویس‌دهنده"),
+    ("RootVDS", "سرویس‌دهنده"),
+    ("rootvds", "سرویس‌دهنده"),
+    ("Timeweb API", "خطای سرویس‌دهنده"),
+    ("Timeweb", "سرویس‌دهنده"),
+    ("تایم‌وب", "سرویس‌دهنده"),
+    ("Gcore API", "خطای سرویس‌دهنده"),
+    ("Gcore", "سرویس‌دهنده"),
+    ("جیکور", "سرویس‌دهنده"),
+    ("Hetzner API", "خطای سرویس‌دهنده"),
+    ("Hetzner", "سرویس‌دهنده"),
+    ("هتزنر", "سرویس‌دهنده"),
+    ("Virtualizor", "سرویس‌دهنده"),
+    ("ویرچولایزور", "سرویس‌دهنده"),
+)
+
+
 def _esc(v) -> str:
-    """HTML-escape متن exception قبل از قرارگیری در پیام parse_mode=HTML."""
-    return _html.escape(str(v))
+    """HTML-escape متن exception قبل از قرارگیری در پیام parse_mode=HTML
+    + پاک‌سازیِ نامِ providerها (برندپوشی)."""
+    s = str(v)
+    for _brand, _repl in _BRAND_HIDE:
+        s = s.replace(_brand, _repl)
+    return _html.escape(s)
 
 
 async def _edit_ignore_same(msg, text: str, reply_markup=None) -> None:
@@ -3136,7 +3161,8 @@ def _friendly_fail_reason(err: str) -> str:
     if "مهلت انتظار" in e or "timeout" in e.lower():
         return ("زمان آماده‌سازی و تحویل سرویس بیش از حد مجاز طول کشید و سفارش "
                 "به‌صورت خودکار لغو شد")
-    if e.startswith(("Timeweb API", "Gcore API", "Hetzner API")) or "retry limit" in e:
+    if e.startswith(("Timeweb API", "Gcore API", "Hetzner API", "RootVDS API")) \
+            or "retry limit" in e:
         return "بروز مشکل موقت در سرویس‌دهنده"
     return e[:200] if e else "بروز مشکل موقت در سرویس‌دهنده"
 

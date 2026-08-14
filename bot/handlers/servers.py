@@ -3217,6 +3217,8 @@ async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: 
     _log = _logging.getLogger(__name__)
     billing_type = BillingType.HOURLY if billing_str == "hourly" else BillingType.MONTHLY
     async with AsyncSessionFactory() as session:
+        # پرچم‌های تضمینِ مالی: پولِ مشتری هرگز نباید بی‌صدا گیر بماند
+        _debited = _refunded = _delivered = False
         try:
             user = await session.get(User, user_db_id)
             plan = await session.get(ServerPlan, plan_db_id)
@@ -3232,6 +3234,7 @@ async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: 
                     parse_mode="HTML")
                 return
             await session.commit()   # کسر قطعی شود قبل از عملیات طولانی
+            _debited = True
             try:
                 svc = ServerService(session)
                 _create_extra: dict = {"root_password": root_password}
@@ -3245,10 +3248,17 @@ async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: 
                 if software_id:
                     # برنامه مارکت‌پلیس تایم‌وب — نصب خودکار هنگام ساخت
                     _create_extra["software_id"] = software_id
-                server = await svc.create_server(
-                    user=user, plan=plan, os_id=os_id, billing_type=billing_type,
-                    hostname=hostname, extra=_create_extra,
-                )
+                # سقفِ سختِ ۱۵ دقیقه دورِ کلِ ساخت — همان قولِ «۱۰ تا ۱۵ دقیقه» به
+                # مشتری. هر جا هر چیزی هنگ کند (شبکه/poll/حذفِ گیرکرده)، بعد از
+                # این سقف سفارش لغو و پول کامل برمی‌گردد با پیامِ استانداردِ کنسلی.
+                import asyncio as _aio_wf
+                try:
+                    server = await _aio_wf.wait_for(svc.create_server(
+                        user=user, plan=plan, os_id=os_id, billing_type=billing_type,
+                        hostname=hostname, extra=_create_extra,
+                    ), timeout=900)
+                except _aio_wf.TimeoutError:
+                    raise RuntimeError("مهلت انتظار ساخت سرویس تمام شد")
                 real_password = (server.extra_data or {}).get("root_password") or root_password
                 _extra = dict(server.extra_data or {})
                 _extra["root_password"] = real_password
@@ -3275,6 +3285,7 @@ async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: 
                 await session.flush()
                 plan_name = plan.display_name or plan.name
                 await session.commit()
+                _delivered = True
                 await bot.send_message(
                     chat_id, _delivery_text(server, plan_name, real_password),
                     parse_mode="HTML")
@@ -3300,6 +3311,7 @@ async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: 
                 # نکته: پلن را خودکار «ناموجود» نمی‌کنیم (API تایم‌وب سیگنالِ ظرفیت
                 # ندارد). موجود/ناموجود کردن فقط دستی از پنل ادمین است.
                 await session.commit()
+                _refunded = True
                 # هشدارِ دقیقِ ادمین وقتی سرور «پرداخت‌نشده» ماند با وجودِ موجودیِ
                 # سالم — این باگِ کد نیست، حالتِ پرداختِ اکانتِ تایم‌وب است و تا
                 # درست نشود همه‌ی ساخت‌ها شکست می‌خورند.
@@ -3355,6 +3367,30 @@ async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: 
                     parse_mode="HTML")
         except Exception:
             _log.exception("background build/deliver fatal error")
+            # تورِ آخر: مسیرِ عادیِ برگشت وجه هم شکست (سشن/DB خراب و…). با سشنِ
+            # تازه پول برگردد و کاربر خبردار شود — پولِ مشتری هرگز بی‌صدا گیر نماند.
+            if _debited and not _refunded and not _delivered:
+                try:
+                    async with AsyncSessionFactory() as s2:
+                        await BillingService(s2).credit(
+                            user_db_id, final_price,
+                            description=f"برگشت وجه — شکست ساخت {hostname}")
+                        await s2.commit()
+                    _refunded = True
+                except Exception:
+                    _log.exception("last-ditch refund FAILED for %s (user %s, %s T)",
+                                   hostname, user_db_id, final_price)
+                try:
+                    await bot.send_message(
+                        chat_id,
+                        f"{WARN} <b>سفارش سرور شما لغو شد.</b>\n\n"
+                        "دلیل: بروز مشکل موقت در سرویس‌دهنده.\n"
+                        f"مبلغ <b>{final_price:,.0f} تومان</b> به‌طور کامل به کیف پول شما "
+                        "برگشت داده شد — می‌توانید دوباره سفارش دهید.\n\n"
+                        '‎<tg-emoji emoji-id="5258093637450866522">🤖</tg-emoji> @abrmakerbot',
+                        parse_mode="HTML")
+                except Exception:
+                    pass
 
 
 @router.callback_query(BuyServerStates.confirming, F.data == "confirm_purchase")

@@ -445,18 +445,22 @@ class RootVDSProvider(BaseProvider):
         return out
 
     async def list_locations(self) -> list[dict]:
-        """[{slug, display_name, count}] — نام از لیست لوکیشن‌ها، شمارش از تعرفه‌ها."""
+        """[{slug, display_name, count}] — شکل واقعی (E2E 2026-08-14):
+        {"location":[{"id":"1","name":"ru-1","title":"russian",
+        "city":"Saint-Petersburg","status":"1"}, ...]} → اسلاگ = name،
+        نمایش = city؛ status=0 (مثل Gdansk) حذف؛ اسلاگ تکراری dedupe."""
         locs = await self._list("/api/vds/location/")
         names: dict[str, str] = {}
         for l in locs:
             if not isinstance(l, dict):
                 continue
+            if str(l.get("status", "1")).lower() in ("0", "false"):
+                continue
             slug = str(l.get("location") or l.get("code") or l.get("slug")
-                       or l.get("id") or "").strip()
-            name = str(l.get("name") or l.get("title") or l.get("city")
-                       or slug).strip()
-            if slug:
-                names[slug] = name
+                       or l.get("name") or "").strip()
+            disp = str(l.get("city") or l.get("title") or slug).strip()
+            if slug and slug not in names:
+                names[slug] = disp
         counts: dict[str, int] = {}
         for p in await self.list_plans():
             if p.location:
@@ -471,19 +475,40 @@ class RootVDSProvider(BaseProvider):
         return out
 
     async def list_os_templates(self) -> list[dict]:
+        """شکل واقعی (E2E 2026-08-14): {"os":[{"id":"1","os_id":"37",
+        "family":"windows","name":"windows","version":"2012","version_codename":
+        "standard","requirements":"35840","status":"1","minute_pay":"0.016",
+        "price_sell":"720.00"}, ...]}
+        ⚠️ شناسه‌ی install = **os_id** (نه id که شماره‌ی ردیف است — باگ
+        «os_id not found»). requirements = حداقل دیسک به MB.
+        OSهای لایسنس‌دار (ویندوز: 720₽/ماه) فعلاً عرضه نمی‌شوند تا لایسنس
+        بی‌حساب از جیب ادمین نرود (تصمیم 2026-08-14 — بعداً با قیمت‌گذاری)."""
         items = await self._list("/api/vds/os/")
         out = []
         for o in items:
             if not isinstance(o, dict):
                 continue
-            oid = o.get("id") if o.get("id") is not None else o.get("os_id")
+            if str(o.get("status", "1")).lower() in ("0", "false"):
+                continue
+            oid = o.get("os_id") if o.get("os_id") is not None else o.get("id")
             if oid is None:
                 continue
+            try:
+                if float(o.get("price_sell") or 0) > 0:
+                    continue   # OS لایسنس‌دار — فعلاً خارج از عرضه
+            except (TypeError, ValueError):
+                pass
             name = " ".join(str(x) for x in (
                 o.get("name") or o.get("os_name") or o.get("title"),
                 o.get("version") or o.get("os_version"),
             ) if x).strip()
-            out.append({"id": str(oid), "name": name or f"os-{oid}"})
+            md_gb = 0
+            try:
+                md_gb = int(float(o.get("requirements") or 0)) // 1024
+            except (TypeError, ValueError):
+                pass
+            out.append({"id": str(oid), "name": (name or f"os-{oid}").title(),
+                        "min_disk": md_gb})
         return out
 
     # ── Health / verify ───────────────────────────────────────────────────────

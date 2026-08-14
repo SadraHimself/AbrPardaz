@@ -2465,6 +2465,13 @@ async def _fetch_os_list(session: AsyncSession, account: ProviderAccount, data: 
                        if not o.get("min_disk") or int(o["min_disk"]) <= _disk]
         return os_list
     os_list = await asyncio.wait_for(prov.list_os_templates(), timeout=15)
+    # روت: OSهایی که حداقل دیسک‌شان (requirements) از دیسک پلن بیشتر است حذف
+    if os_list and account.provider_type == ProviderType.ROOTVDS:
+        _plan_rv = await session.get(ServerPlan, data.get("plan_id"))
+        _dk = int(_plan_rv.disk or 0) if _plan_rv else 0
+        if _dk:
+            os_list = [o for o in os_list
+                       if not o.get("min_disk") or int(o["min_disk"]) <= _dk]
     # فیلتر معماری (هتزنر): پلن cax = ARM و بقیه x86 — ایمیج ناهم‌معماری خطای ساخت می‌دهد
     if os_list and account.provider_type == ProviderType.HETZNER:
         _plan_arch = await session.get(ServerPlan, data.get("plan_id"))

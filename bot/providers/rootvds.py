@@ -367,7 +367,12 @@ class RootVDSProvider(BaseProvider):
 
     @staticmethod
     def _preset_fields(p: dict) -> dict:
-        """فیلدهای یک preset با نام‌های متغیر (شکل لیست مستند نیست) — دفاعی."""
+        """فیلدهای یک preset — شکلِ واقعی (E2E 2026-07-28):
+        {"preset_id":"vm.pico","fix_id":"108","location":"ru-3","cpu":"1",
+         "ram":"1024","disk":"40960","disk_type":"nvme","bandwidth":"1000",
+         "price_sell":"640","minute_pay":"0.0148","hour_pay":"0.8889","status":"1"}
+        شناسه‌ی عددیِ create = fix_id (نمونه‌ی install داکس: 2573)؛ preset_id
+        اسمِ اسلاگی است. همه‌ی مقادیر string‌اند."""
         def _num(*keys, default=0):
             for k in keys:
                 v = p.get(k)
@@ -384,16 +389,32 @@ class RootVDSProvider(BaseProvider):
         if disk > 4096:               # اگر MB بود → GB
             disk //= 1024
         return {
-            "id": str(p.get("id") or ""),
-            "name": str(p.get("name") or p.get("title") or "").strip(),
+            "id": str(p.get("fix_id") or p.get("id") or "").strip(),
+            "name": str(p.get("preset_id") or p.get("name")
+                        or p.get("title") or "").strip(),
             "cpu": int(_num("cpu", "cpu_count", "cores", default=1)),
             "ram": ram,
             "disk": disk,
-            "price": _num("price", "price_month", "monthly_price"),
+            "price": _num("price_sell", "price", "price_month", "monthly_price"),
+            "hourly": _num("hour_pay"),
             "location": str(p.get("location") or p.get("location_id") or ""),
             "disk_type": str(p.get("disk_type") or ""),
             "cpu_frequency": p.get("cpu_frequency"),
+            "bandwidth_mbit": int(_num("bandwidth")),
+            # status=1 یعنی قابل‌فروش؛ نبودِ فیلد = فعال فرض می‌شود
+            "active": str(p.get("status", "1")).lower() not in ("0", "false"),
         }
+
+    async def raw_preset_fields(self) -> dict:
+        """map از fix_id → فیلدهای پارس‌شده‌ی preset — برای ایمپورت ادمین
+        (سرعت کانال، نوع دیسک، فرکانس، اسمِ اسلاگی)."""
+        out: dict = {}
+        for raw in await self._list("/api/vds/preset/"):
+            if isinstance(raw, dict):
+                f = self._preset_fields(raw)
+                if f["id"]:
+                    out[f["id"]] = f
+        return out
 
     async def list_plans(self, location: Optional[str] = None) -> list[PlanInfo]:
         presets = await self._list("/api/vds/preset/")
@@ -402,7 +423,7 @@ class RootVDSProvider(BaseProvider):
             if not isinstance(raw, dict):
                 continue
             f = self._preset_fields(raw)
-            if not f["id"] or f["price"] <= 0:
+            if not f["id"] or f["price"] <= 0 or not f["active"]:
                 continue
             if location and f["location"] != location:
                 continue
@@ -411,7 +432,8 @@ class RootVDSProvider(BaseProvider):
                 name=f["name"] or f"rv-{f['id']}",
                 ram=f["ram"], cpu=f["cpu"], disk=f["disk"],
                 bandwidth=0,
-                price_hourly=round(f["price"] / 720.0, 6),
+                # ساعتیِ رسمیِ خودشان (hour_pay)؛ نبود → ماهانه ÷ ۷۲۰
+                price_hourly=round(f["hourly"] or (f["price"] / 720.0), 6),
                 price_monthly=f["price"],
                 location=f["location"] or None,
                 currency="rub",
@@ -452,13 +474,16 @@ class RootVDSProvider(BaseProvider):
         items = await self._list("/api/vds/os/")
         out = []
         for o in items:
-            if not isinstance(o, dict) or o.get("id") is None:
+            if not isinstance(o, dict):
+                continue
+            oid = o.get("id") if o.get("id") is not None else o.get("os_id")
+            if oid is None:
                 continue
             name = " ".join(str(x) for x in (
                 o.get("name") or o.get("os_name") or o.get("title"),
                 o.get("version") or o.get("os_version"),
             ) if x).strip()
-            out.append({"id": str(o["id"]), "name": name or f"os-{o['id']}"})
+            out.append({"id": str(oid), "name": name or f"os-{oid}"})
         return out
 
     # ── Health / verify ───────────────────────────────────────────────────────

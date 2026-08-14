@@ -474,6 +474,18 @@ async def cb_rv_del_do(cb: CallbackQuery, session: AsyncSession):
 # کش کوتاه‌مدت تعرفه‌ها/لوکیشن‌ها — هر کلیک API نخورد
 _plans_cache: dict = {}
 _locs_cache: dict = {}
+_fields_cache: dict = {}
+
+
+async def _raw_fields(account: ProviderAccount) -> dict:
+    """map از fix_id → فیلدهای خامِ preset (کانال/نوع دیسک/فرکانس/اسلاگ) — کش ۵ دقیقه."""
+    cached = _fields_cache.get(account.id)
+    now = time.monotonic()
+    if cached and now - cached[0] < 300:
+        return cached[1]
+    m = await asyncio.wait_for(_prov(account).raw_preset_fields(), timeout=30)
+    _fields_cache[account.id] = (now, m)
+    return m
 
 
 async def _location_plans(account: ProviderAccount, loc: str):
@@ -645,13 +657,17 @@ async def cb_rv_info(cb: CallbackQuery, session: AsyncSession):
         await cb.answer("تعرفه یافت نشد.", show_alert=True)
         return
     ram_g = info.ram // 1024 if info.ram >= 1024 else info.ram
-    # قالبِ خوانا: هر مقدار در خط خودش با لیبل فارسی
+    raw = (await _raw_fields(account)).get(pid) or {}
+    _dt = (raw.get("disk_type") or "").upper()
+    _mb = raw.get("bandwidth_mbit")
+    # قالبِ خوانا: هر مقدار در خط خودش با لیبل فارسی (سقف ۲۰۰ کاراکتر پاپ‌آپ)
     await cb.answer(
-        f"{pid}" + (f" — {info.name}" if info.name else "") + "\n"
-        f"{info.cpu} هسته | {ram_g} گیگ رم | {info.disk} گیگ دیسک\n\n"
-        "قیمت خرید (روبل):\n"
-        f"ساعتی: {round(info.price_hourly or 0, 4):g}\n"
-        f"ماهانه: {round(info.price_monthly or 0, 2):g}",
+        (f"{pid}" + (f" — {info.name}" if info.name else "") + "\n"
+         f"{info.cpu} هسته | {ram_g} گیگ رم | {info.disk} گیگ {_dt}\n"
+         + (f"کانال: {_mb} Mbit — ترافیک نامحدود\n" if _mb else "")
+         + "\nقیمت خرید (روبل):\n"
+         f"ساعتی: {round(info.price_hourly or 0, 4):g}\n"
+         f"ماهانه: {round(info.price_monthly or 0, 2):g}")[:195],
         show_alert=True,
     )
 
@@ -659,13 +675,15 @@ async def cb_rv_info(cb: CallbackQuery, session: AsyncSession):
 async def _import_one(session: AsyncSession, account: ProviderAccount,
                       loc: str, info, group_name: str,
                       display_name: str) -> ServerPlan:
+    # مشخصاتِ خامِ تعرفه (کانال Mbit / نوع دیسک / فرکانس) — از شکل واقعی API
+    raw = (await _raw_fields(account)).get(info.provider_plan_id) or {}
     plan = ServerPlan(
         provider_type=ProviderType.ROOTVDS,
         provider_account_id=account.id,
         name=f"rv{info.provider_plan_id}-{loc}",
         display_name=display_name,
         ram=info.ram, cpu=info.cpu, disk=info.disk,
-        bandwidth=0,                              # ترافیک گزارش نمی‌شود
+        bandwidth=0,                              # ترافیک نامحدود (کانال Mbit جدا)
         price_hourly=None, price_monthly=None,    # فروش با سود سراسری
         location=loc,
         is_active=False,
@@ -673,10 +691,13 @@ async def _import_one(session: AsyncSession, account: ProviderAccount,
         provider_plan_id=info.provider_plan_id,
         extra_data={
             "currency": "rub",
-            "cost_hourly": info.price_hourly,     # خرید ₽/ساعت (ماهانه ÷۷۲۰)
-            "cost_monthly": info.price_monthly,   # خرید ₽/ماه
+            "cost_hourly": info.price_hourly,     # خرید ₽/ساعت (hour_pay رسمی)
+            "cost_monthly": info.price_monthly,   # خرید ₽/ماه (price_sell)
             "region_name": None,                  # پایین‌تر ست می‌شود
-            "preset_name": info.name,
+            "preset_name": info.name,             # اسلاگ (vm.pico)
+            "bandwidth_mbit": raw.get("bandwidth_mbit"),
+            "disk_type": (raw.get("disk_type") or "").upper(),
+            "cpu_frequency": raw.get("cpu_frequency"),
         },
     )
     session.add(plan)

@@ -259,21 +259,21 @@ CELERY_RESULT_BACKEND=redis://localhost:6379/2
 MIN_BALANCE_THRESHOLD=0
 TRAFFIC_GRACE_SECONDS=300
 
-# ── Navasan (نرخ ارز — هر ۸ ساعت) ────────────────────────────
+# ── Navasan (FX rates - refreshed every 8h) ───────────────────
 NAVASAN_API_KEY=
 
-# ── Zohal (احراز هویت: شاهکار + تطابق کارت) ──────────────────
+# ── Zohal (KYC: Shahkar + card match) ─────────────────────────
 ZOHAL_TOKEN=
 ZOHAL_BASE_URL=https://service.zohal.io/api/v0
 
-# ── NOWPayments (درگاه کریپتو) ───────────────────────────────
+# ── NOWPayments (crypto gateway) ──────────────────────────────
 NP_API_KEY=
 NP_IPN_SECRET=
 NP_PRICE_CURRENCY=usd
 NP_OUTCOME_CURRENCY=trx
 NP_WEBHOOK_PORT=8081
 
-# ── Zarinpal (درگاه ریالی) ───────────────────────────────────
+# ── Zarinpal (IRR gateway) ────────────────────────────────────
 ZARINPAL_MERCHANT_ID=
 ZARINPAL_CALLBACK_URL=
 ZARINPAL_SANDBOX=false
@@ -384,8 +384,8 @@ echo "  Install path : $INSTALL_DIR"
 echo "  Config file  : $ENV_FILE"
 echo ""
 echo -e "  ${YELLOW}Fill these API keys in .env, then restart:${NC}"
-echo "    NAVASAN_API_KEY        (نرخ ارز — api.navasan.tech)"
-echo "    ZOHAL_TOKEN            (احراز هویت — zohal.io)"
+echo "    NAVASAN_API_KEY        (FX rates - api.navasan.tech)"
+echo "    ZOHAL_TOKEN            (KYC - zohal.io)"
 echo "    NP_API_KEY / NP_IPN_SECRET      (NOWPayments)"
 echo "    ZARINPAL_MERCHANT_ID / ZARINPAL_CALLBACK_URL"
 echo ""

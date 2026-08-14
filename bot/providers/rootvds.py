@@ -118,11 +118,17 @@ class RootVDSProvider(BaseProvider):
         """لیست‌های مرجع (location/preset/os) — شکل پاسخ مستند نیست، پس هر
         کلیدِ آرایه‌ایِ بدنه را می‌پذیریم (پارس دفاعی)."""
         body = await self._request(path)
-        for key in ("_list", "locations", "presets", "list", "os", "data",
-                    "items", "result", "servers"):
+        for key in ("_list", "locations", "location", "presets", "preset",
+                    "tariffs", "list", "os", "data", "items", "result",
+                    "servers", "vds"):
             v = body.get(key)
             if isinstance(v, list):
                 return v
+            # کلیدِ درست ولی dictِ id→obj (نه آرایه)
+            if isinstance(v, dict):
+                vals = [x for x in v.values() if isinstance(x, dict)]
+                if vals:
+                    return vals
         # بدنه‌ی dict با مقادیر dict (id→obj)
         vals = [v for v in body.values() if isinstance(v, dict)]
         if vals and all("id" in v for v in vals):
@@ -130,6 +136,9 @@ class RootVDSProvider(BaseProvider):
         for v in body.values():
             if isinstance(v, list):
                 return v
+        # شکل ناشناخته — کلیدها و نمونه‌ی بدنه را لاگ کن تا پارس دقیق شود
+        logger.warning("RV_LIST_DIAG path=%s keys=%s sample=%s",
+                       path, list(body.keys())[:10], str(body)[:400])
         return []
 
     async def _get_server_raw(self, server_id: str) -> dict:
@@ -407,6 +416,10 @@ class RootVDSProvider(BaseProvider):
                 location=f["location"] or None,
                 currency="rub",
             ))
+        if presets and not out and not location:
+            # لیست هست ولی فیلدها نمی‌خوانند (id/price با اسم دیگر) — نمونه لاگ شود
+            logger.warning("RV_PRESET_DIAG count=%d sample=%s",
+                           len(presets), str(presets[0])[:400])
         return out
 
     async def list_locations(self) -> list[dict]:

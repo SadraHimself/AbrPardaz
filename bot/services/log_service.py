@@ -1,6 +1,7 @@
 """Telegram forum-group logging service."""
 from __future__ import annotations
 
+import html as _html
 from typing import Optional
 
 from aiogram import Bot
@@ -383,4 +384,97 @@ class LogService:
             "server",
             f"🟢 <b>{self._provider_label(provider_type)} دوباره وصل شد</b>\n\n"
             f"🖥 سرور: <b>{name}</b>",
+        )
+
+    # ── برنامه ریسلر ─────────────────────────────────────────────────────────
+
+    async def log_reseller_sync(self, user: User, account_name: str, summary: dict) -> None:
+        """خلاصه‌ی تغییرات یک دور سینک ریسلر (فقط وقتی چیزی تغییر کرده)."""
+        def _sec(title: str, names: list) -> str:
+            if not names:
+                return ""
+            # نام VM از پنل می‌آید — بدون escape، یک < در hostname کل پیام (از
+            # جمله هشدار «بدون پلن» که سوارش است) را بی‌صدا ساقط می‌کند
+            shown = "، ".join(f"<code>{_html.escape(str(n))}</code>" for n in names[:15])
+            more = f" و {len(names) - 15} مورد دیگر" if len(names) > 15 else ""
+            return f"\n{title}: {shown}{more}"
+        text = (
+            f"🏪 <b>سینک ریسلر</b>\n\n"
+            f"{self._user_line(user)}\n"
+            f"🏢 {account_name}"
+            + _sec("➕ ثبت شد", summary.get("registered") or [])
+            + _sec("🗑 حذف شد (از پنل رفته)", summary.get("deleted") or [])
+            + _sec("🔗 پلن مچ شد", summary.get("rematched") or [])
+        )
+        unmatched = summary.get("unmatched") or []
+        if unmatched:
+            text += _sec("⚠️ VM بدون پلنِ مچ‌شده — دستی تعیین تکلیف شود", unmatched)
+        await self._send("server", text)
+
+    async def log_reseller_warn(self, user: User, reason: str) -> None:
+        await self._send(
+            "server",
+            f"⚠️ <b>هشدار سینک ریسلر</b>\n\n"
+            f"{self._user_line(user)}\n"
+            f"{reason}",
+        )
+
+    async def log_reseller_debt(self, user: User, hours: int, amount_toman: float,
+                                since_iso: Optional[str], backfill_remaining: float) -> None:
+        since = "—"
+        if since_iso:
+            try:
+                from datetime import datetime as _dt
+                since = _dt.fromisoformat(str(since_iso)).strftime("%Y/%m/%d %H:%M")
+            except (TypeError, ValueError):
+                pass
+        extra_line = (f"\n💳 بدهی «محاسبه گذشته» وصول‌نشده: {backfill_remaining:,.0f} تومان"
+                      if backfill_remaining >= 1 else "")
+        await self._send(
+            "moderation",
+            f"🔴 <b>بدهی ریسلر</b>\n\n"
+            f"{self._user_line(user)}\n"
+            f"⏱ بدهکار از: {since}\n"
+            f"💵 انباشته: <b>{hours} ساعت ≈ {amount_toman:,.0f} تومان</b>\n"
+            f"💼 موجودی فعلی: {user.balance:,.0f} تومان{extra_line}",
+        )
+
+    async def log_reseller_backfill(self, user: User, lines: list[str], total_paid: float,
+                                    total_debt: float, admin_tg_id: int) -> None:
+        """اجرای دستی «محاسبه از تاریخ ساخت» توسط ادمین."""
+        body = "\n".join(lines[:20])
+        if len(lines) > 20:
+            body += f"\n… و {len(lines) - 20} مورد دیگر"
+        debt_line = (f"\n📌 ثبت‌شده به‌عنوان بدهی (وصول خودکار): {total_debt:,.0f} تومان"
+                     if total_debt >= 1 else "")
+        await self._send(
+            "finance",
+            f"🧮 <b>محاسبه از تاریخ ساخت (ریسلر)</b>\n\n"
+            f"👮 ادمین: <code>{admin_tg_id}</code>\n"
+            f"👤 کاربر:\n{self._user_line(user)}\n\n"
+            f"{body}\n\n"
+            f"💵 کسرشده: <b>{total_paid:,.0f} تومان</b>{debt_line}\n"
+            f"💼 موجودی جدید: {user.balance:,.0f} تومان",
+        )
+
+    async def log_reseller_backfill_collect(self, user: User, collected: float,
+                                            remaining: float) -> None:
+        """وصول خودکار بدهی «محاسبه گذشته» بعد از شارژ کیف پول."""
+        rem_line = (f"\n📌 باقی‌مانده: {remaining:,.0f} تومان" if remaining >= 1
+                    else "\n✅ بدهی کامل تسویه شد.")
+        await self._send(
+            "finance",
+            f"💳 <b>وصول بدهی محاسبه گذشته (ریسلر)</b>\n\n"
+            f"{self._user_line(user)}\n"
+            f"💵 وصول‌شده: <b>{collected:,.0f} تومان</b>{rem_line}",
+        )
+
+    async def log_reseller_config(self, user: User, action: str, admin_tg_id: int) -> None:
+        """تغییرات کانفیگ ریسلر توسط ادمین (فعال/غیرفعال/ایمیل/تخفیف)."""
+        await self._send(
+            "moderation",
+            f"🏪 <b>تنظیمات ریسلر</b>\n\n"
+            f"👮 ادمین: <code>{admin_tg_id}</code>\n"
+            f"👤 کاربر:\n{self._user_line(user)}\n"
+            f"🔧 {action}",
         )

@@ -7,6 +7,7 @@ from .admin_gcore import router as admin_gcore_router
 from .admin_hetzner import router as admin_hetzner_router
 from .admin_rootvds import router as admin_rootvds_router
 from .admin_timeweb import router as admin_timeweb_router
+from .admin_reseller import router as admin_reseller_router
 from .admin_restore import router as admin_restore_router
 from .admin_stats import router as admin_stats_router
 from .admin_users import router as admin_users_router
@@ -28,6 +29,7 @@ def setup_routers(dp):
     dp.include_router(crypto_payment_router)
     dp.include_router(zarinpal_payment_router)
     # Admin routers — order matters: specific before generic
+    dp.include_router(admin_reseller_router)
     dp.include_router(admin_users_router)
     dp.include_router(admin_stats_router)
     dp.include_router(admin_broadcast_router)

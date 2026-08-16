@@ -97,6 +97,17 @@ app.conf.update(
             "task": "bot.tasks.server.sync_rootvds_catalog",
             "schedule": crontab(minute="15,45"),
         },
+        # ریسلر: کشف/ثبت VMهای پنل + حذف two-strike + وصول بدهی محاسبه گذشته
+        # (دقیقه‌های 4,14,… — دور از سینک‌های کاتالوگ)
+        "reseller-sync": {
+            "task": "bot.tasks.reseller.sync_reseller_servers",
+            "schedule": crontab(minute="4-59/10"),
+        },
+        # ریسلر: هر ۳ ساعت یک پیامِ جمعِ کسرهای ساعتی به هر ریسلر
+        "reseller-billing-summary": {
+            "task": "bot.tasks.reseller.notify_reseller_billing_summary",
+            "schedule": crontab(minute=7, hour="*/3"),
+        },
         # هر ساعت تراکنش‌های قدیمی‌تر از ۷۲ ساعت پاک می‌شوند
         # (قبلاً فقط ۳ روزِ هفته اجرا می‌شد و commit هم نداشت → هیچ‌وقت پاک نمی‌شد)
         "cleanup-transactions": {
@@ -120,6 +131,7 @@ app.conf.update(
 # Import tasks to register them
 import bot.tasks.backup          # noqa: F401, E402
 import bot.tasks.billing         # noqa: F401, E402
+import bot.tasks.reseller        # noqa: F401, E402
 import bot.tasks.server          # noqa: F401, E402
 import bot.tasks.stats           # noqa: F401, E402
 import bot.tasks.crypto_polling  # noqa: F401, E402

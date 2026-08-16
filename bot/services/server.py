@@ -208,6 +208,13 @@ class ServerService:
         """Delete a VM, tolerant of a missing/deleted provider account or a down
         node — the DB record is always cleaned up so the user is never stuck with a
         server whose provider no longer exists."""
+        # ⚠️ سرور ریسلر: VM مال خود ریسلر روی پنل است — از هر مسیری که به اینجا
+        # برسد (کال‌بک جعلی، پنل ادمین، ...) فقط رکورد DELETED می‌شود و هرگز
+        # provider.delete_server صدا زده نمی‌شود.
+        if (server.extra_data or {}).get("reseller"):
+            server.status = ServerStatus.DELETED
+            await self.session.flush()
+            return True
         sid = server.provider_server_id
 
         # Resolve the provider; if the account is gone/inactive, there is nothing to
@@ -346,7 +353,10 @@ class ServerService:
                 Server.status != ServerStatus.DELETED,
             ).order_by(Server.created_at.desc())
         )
-        return list(result.scalars().all())
+        # سرورهای ریسلر در «سرورهای من» (و وب‌اپ) نمایش داده نمی‌شوند — ریسلر
+        # هیچ قابلیت مدیریتی روی آن‌ها از داخل ربات ندارد؛ فقط محاسبه و فاکتور
+        return [s for s in result.scalars().all()
+                if not ((s.extra_data or {}).get("reseller"))]
 
     async def get_available_plans(self, provider_type=None, location=None) -> list[ServerPlan]:
         q = select(ServerPlan).where(ServerPlan.is_active == True)

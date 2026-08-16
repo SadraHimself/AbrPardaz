@@ -870,8 +870,10 @@ async def cb_user_servers(cb: CallbackQuery, session: AsyncSession):
         return
     builder = InlineKeyboardBuilder()
     for s in servers:
+        # سرورهای ریسلر با 🏪 مشخص می‌شوند (مدیریت‌شان از بخش «ریسلر» کاربر است)
+        _tag = "🏪 " if (s.extra_data or {}).get("reseller") else ""
         builder.button(
-            text=f"{s.name} | {s.ip_address or '—'} | {s.status.value}",
+            text=f"{_tag}{s.name} | {s.ip_address or '—'} | {s.status.value}",
             callback_data=f"admin:usrv:{s.id}",
         )
     builder.button(text="بازگشت", callback_data=f"admin:user:{user_id}")
@@ -890,6 +892,13 @@ async def cb_admin_usrv_detail(cb: CallbackQuery, session: AsyncSession):
     if not server:
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
+    if (server.extra_data or {}).get("reseller"):
+        # VM ریسلر: نه کنترل (حذف/ساسپند/ریبیلد پنل ممنوع) و نه sync_server_status
+        # (تعلیقِ سمت پنل نباید رکورد را SUSPENDED و بیلینگ را قطع کند)
+        await cb.answer(
+            "🏪 سرور ریسلر است — مدیریت فقط از بخش «ریسلر» در پروفایل کاربر.",
+            show_alert=True)
+        return
     await cb.answer()
     await _render_admin_server(cb.message, session, server)
 
@@ -904,6 +913,12 @@ async def cb_admin_usrv_action(cb: CallbackQuery, session: AsyncSession):
     server = await session.get(Server, server_id)
     if not server:
         await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    if (server.extra_data or {}).get("reseller"):
+        # کیبورد کهنه/جعلی هم نباید روی VM ریسلر عملی انجام دهد
+        await cb.answer(
+            "🏪 سرور ریسلر است — هیچ عملیاتی از اینجا مجاز نیست.",
+            show_alert=True)
         return
     target = await session.get(User, server.user_id)
     label = _srv_label(server)
@@ -1036,6 +1051,11 @@ async def cb_admin_usrv_vpsid(cb: CallbackQuery, state: FSMContext, session: Asy
     server = await session.get(Server, int(cb.data.split(":")[2]))
     if not server:
         await cb.answer("سرور یافت نشد.", show_alert=True)
+        return
+    if (server.extra_data or {}).get("reseller"):
+        # vpsid ریسلر را تسک سینک خودش مدیریت می‌کند (ثبت جدید + two-strike)
+        await cb.answer("🏪 سرور ریسلر است — vpsid آن دستی ویرایش نمی‌شود.",
+                        show_alert=True)
         return
     await state.update_data(vpsid_server_id=server.id)
     await state.set_state(UserManageFSM.edit_vpsid)

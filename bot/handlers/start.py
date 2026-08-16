@@ -300,6 +300,8 @@ async def _render_profile(target_msg, user: User, session: AsyncSession):
         select(func.count(Server.id)).where(
             Server.user_id == user.id,
             Server.status != ServerStatus.DELETED,
+            # سرورهای ریسلر جزو «سرورهای فعال» پروفایل شمرده نمی‌شوند
+            Server.extra_data.op("->>")("reseller").is_(None),
         )
     )).scalar() or 0
     hourly_limit = (user.extra_data or {}).get("max_hourly_servers", 5)

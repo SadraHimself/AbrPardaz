@@ -506,7 +506,14 @@ async def cb_prov_del_do(cb: CallbackQuery, session: AsyncSession):
                 Server.status != ServerStatus.DELETED,
             )
         )
+        reseller_kept = 0
         for srv in result.scalars().all():
+            if (srv.extra_data or {}).get("reseller"):
+                # VM ریسلر مال خود ریسلر است — فقط رکورد حذف می‌شود، هرگز از پنل
+                srv.status = ServerStatus.DELETED
+                srv.provider_account_id = None
+                reseller_kept += 1
+                continue
             if srv.provider_server_id:
                 try:
                     await get_provider(account).delete_server(srv.provider_server_id)
@@ -526,6 +533,8 @@ async def cb_prov_del_do(cb: CallbackQuery, session: AsyncSession):
     msg = "سرور و محصولات مربوطه حذف شدند."
     if removed_vms:
         msg += f"\n{removed_vms} سرویس فعال مشتریان هم حذف شد."
+    if account and reseller_kept:
+        msg += f"\n{reseller_kept} سرور ریسلری فقط از ربات حذف شد (روی پنل دست‌نخورده ماند)."
     await cb.message.edit_text(msg, reply_markup=back_to_admin_kb("admin:providers"))
     await cb.answer()
 
@@ -1818,6 +1827,10 @@ async def _remap_plan(session: AsyncSession, account: ProviderAccount) -> dict:
             Server.status != _SS.DELETED,
         ).order_by(Server.id)
     )).scalars().all()
+    # سرورهای ریسلر از بازنگاشت مستثنی‌اند: تسک سینک ریسلر خودش vpsid جدید را
+    # به‌عنوان VM تازه ثبت و قدیمی را DELETED می‌کند؛ بازنگاشتِ هم‌زمان تداخل
+    # می‌سازد. (در all_rows می‌مانند تا vpsidشان به رکورد دیگری داده نشود.)
+    servers = [s for s in servers if not ((s.extra_data or {}).get("reseller"))]
     # vpsidهایی که هم‌اکنون در اختیار رکوردهای دیگرند (شامل حذف‌شده‌ها: VM ممکن
     # است هنوز زنده باشد چون حذفِ ناموفق هم رکورد را DELETED می‌کند)
     all_rows = (await session.execute(
@@ -2085,6 +2098,8 @@ async def _remap_manual_plan(session: AsyncSession, account: ProviderAccount,
             Server.status != _SS.DELETED,
         )
     )).scalars().all()
+    # سرورهای ریسلر هدفِ بازنگاشت دستی هم نمی‌شوند (سینک ریسلر خودش مدیریت می‌کند)
+    servers = [s for s in servers if not ((s.extra_data or {}).get("reseller"))]
     all_rows = (await session.execute(
         select(Server).where(Server.provider_account_id == account.id)
     )).scalars().all()

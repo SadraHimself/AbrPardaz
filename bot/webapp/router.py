@@ -121,7 +121,8 @@ async def server_action(server_id: int, body: ServerActionRequest, init_data: st
     user, session = await get_db_user(init_data)
     async with session:
         server = await session.get(Server, server_id)
-        if not server or server.user_id != user.id:
+        if not server or server.user_id != user.id \
+                or (server.extra_data or {}).get("reseller"):
             raise HTTPException(404, "Server not found")
 
         allowed_actions = {"start", "stop", "restart", "rebuild", "change_ip"}
@@ -154,7 +155,8 @@ async def get_server_detail(server_id: int, init_data: str = Query(...)):
     user, session = await get_db_user(init_data)
     async with session:
         server = await session.get(Server, server_id)
-        if not server or server.user_id != user.id:
+        if not server or server.user_id != user.id \
+                or (server.extra_data or {}).get("reseller"):
             raise HTTPException(404, "Server not found")
 
         return {

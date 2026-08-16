@@ -247,7 +247,7 @@ async def cb_server_detail(cb: CallbackQuery, user: User, session: AsyncSession)
 
 async def _render_server_detail(cb: CallbackQuery, user: User, session: AsyncSession, server_id: int):
     server = await session.get(Server, server_id)
-    if not server or server.user_id != user.id:
+    if not server or server.user_id != user.id or (server.extra_data or {}).get("reseller"):
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
 
@@ -338,7 +338,7 @@ async def _render_server_detail(cb: CallbackQuery, user: User, session: AsyncSes
 async def cb_server_refresh(cb: CallbackQuery, user: User, session: AsyncSession):
     server_id = int(cb.data.split(":")[1])
     server = await session.get(Server, server_id)
-    if not server or server.user_id != user.id:
+    if not server or server.user_id != user.id or (server.extra_data or {}).get("reseller"):
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
     try:
@@ -358,7 +358,7 @@ async def cb_server_action(cb: CallbackQuery, user: User, session: AsyncSession)
     _, server_id_str, action = cb.data.split(":")
     server_id = int(server_id_str)
     server = await session.get(Server, server_id)
-    if not server or server.user_id != user.id:
+    if not server or server.user_id != user.id or (server.extra_data or {}).get("reseller"):
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
 
@@ -524,7 +524,7 @@ async def cb_server_rebuild_confirm(cb: CallbackQuery, user: User, session: Asyn
     parts = cb.data.split(":")
     server_id, os_id = int(parts[1]), parts[2]
     server = await session.get(Server, server_id)
-    if not server or server.user_id != user.id:
+    if not server or server.user_id != user.id or (server.extra_data or {}).get("reseller"):
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
     await cb.message.edit_text(
@@ -613,7 +613,7 @@ async def cb_server_rebuild_do(cb: CallbackQuery, user: User, session: AsyncSess
     parts = cb.data.split(":")
     server_id, os_id = int(parts[1]), parts[2]
     server = await session.get(Server, server_id)
-    if not server or server.user_id != user.id:
+    if not server or server.user_id != user.id or (server.extra_data or {}).get("reseller"):
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
     await cb.answer("⏳ ریبیلد شروع می‌شود...")
@@ -748,6 +748,7 @@ async def _perform_renewal(bot, session: AsyncSession, user: User,
     )).scalar_one_or_none()
     now = datetime.now(timezone.utc)
     if (not server or server.user_id != user.id
+            or (server.extra_data or {}).get("reseller")
             or server.billing_type != BillingType.MONTHLY
             or server.status != ServerStatus.ACTIVE):
         return False, f"{ERR} این سرویس قابل تمدید نیست.", server_id
@@ -817,7 +818,7 @@ async def _perform_renewal(bot, session: AsyncSession, user: User,
 @router.callback_query(F.data.startswith("srv_renew:"))
 async def cb_srv_renew(cb: CallbackQuery, user: User, state: FSMContext, session: AsyncSession):
     server = await session.get(Server, int(cb.data.split(":")[1]))
-    if not server or server.user_id != user.id:
+    if not server or server.user_id != user.id or (server.extra_data or {}).get("reseller"):
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
     if server.billing_type != BillingType.MONTHLY or server.status != ServerStatus.ACTIVE:
@@ -980,7 +981,7 @@ async def _current_plan(session: AsyncSession, server: Server):
 
 def _upg_guard(server: Server, user: User) -> str:
     """پیام خطا اگر سرویس قابل ارتقاء نیست؛ رشته‌ی خالی = مجاز."""
-    if not server or server.user_id != user.id:
+    if not server or server.user_id != user.id or (server.extra_data or {}).get("reseller"):
         return "سرور یافت نشد."
     if server.provider_type != ProviderType.VIRTUALIZOR:
         return "ارتقاء پلن فعلاً فقط برای سرورهای ویرچولایزور فعال است."
@@ -1157,6 +1158,10 @@ async def cb_srv_upgrade_do(cb: CallbackQuery, user: User, session: AsyncSession
         for _s in _rows:
             if _s.id == server.id:
                 continue
+            if (_s.extra_data or {}).get("reseller"):
+                # سرور ریسلر با قیمت کاملِ بدون تخفیف جمع می‌شد و گارد را
+                # بی‌دلیل سخت‌گیر می‌کرد — از معیار ارتقاء خارج است
+                continue
             try:
                 _a, _c = await server_live_price(session, _s, hourly=True)
                 _a = float(_a or 0)
@@ -1290,7 +1295,7 @@ async def cb_srv_upgrade_do(cb: CallbackQuery, user: User, session: AsyncSession
 @router.callback_query(F.data.startswith("srv_tomonthly:"))
 async def cb_srv_to_monthly(cb: CallbackQuery, user: User, session: AsyncSession):
     server = await session.get(Server, int(cb.data.split(":")[1]))
-    if not server or server.user_id != user.id:
+    if not server or server.user_id != user.id or (server.extra_data or {}).get("reseller"):
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
     if server.provider_type != ProviderType.VIRTUALIZOR:
@@ -1333,6 +1338,7 @@ async def cb_srv_to_monthly_do(cb: CallbackQuery, user: User, session: AsyncSess
         select(Server).where(Server.id == server_id).with_for_update()
     )).scalar_one_or_none()
     if (not server or server.user_id != user.id
+            or (server.extra_data or {}).get("reseller")
             or server.provider_type != ProviderType.VIRTUALIZOR
             or server.billing_type != BillingType.HOURLY
             or server.status != ServerStatus.ACTIVE):
@@ -1461,7 +1467,7 @@ async def _live_traffic(session: AsyncSession, server: Server) -> tuple[int, flo
 async def cb_srv_buy_traffic(cb: CallbackQuery, user: User, session: AsyncSession):
     from bot.services.traffic_tariffs import get_tariffs, price_toman
     server = await session.get(Server, int(cb.data.split(":")[1]))
-    if not server or server.user_id != user.id:
+    if not server or server.user_id != user.id or (server.extra_data or {}).get("reseller"):
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
     if server.provider_type != ProviderType.VIRTUALIZOR:
@@ -1526,7 +1532,7 @@ async def cb_traffic_confirm(cb: CallbackQuery, user: User, session: AsyncSessio
     parts = cb.data.split(":")
     server_id, tid = int(parts[1]), int(parts[2])
     server = await session.get(Server, server_id)
-    if not server or server.user_id != user.id:
+    if not server or server.user_id != user.id or (server.extra_data or {}).get("reseller"):
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
     account = await _traffic_account(session, server)
@@ -1585,6 +1591,7 @@ async def cb_traffic_do(cb: CallbackQuery, user: User, session: AsyncSession):
         )
     )
     if (not server or server.user_id != user.id
+            or (server.extra_data or {}).get("reseller")
             or server.provider_type != ProviderType.VIRTUALIZOR
             or not allowed_status):
         await _safe_edit(cb.message, f"{ERR} این سرویس در دسترس نیست.", kb)
@@ -3466,11 +3473,13 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
 
     if billing_type == BillingType.HOURLY:
         max_hourly = (user.extra_data or {}).get("max_hourly_servers", 5)
+        # سرورهای ریسلر (extra_data.reseller) در سقف خرید ساعتی حساب نمی‌شوند
         hourly_count = (await session.execute(
             select(func.count(Server.id)).where(
                 Server.user_id == user.id,
                 Server.billing_type == BillingType.HOURLY,
                 Server.status != ServerStatus.DELETED,
+                Server.extra_data.op("->>")("reseller").is_(None),
             )
         )).scalar() or 0
         if hourly_count >= max_hourly:
@@ -3584,7 +3593,7 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
 async def cb_change_ip_confirm(cb: CallbackQuery, user: User, session: AsyncSession):
     server_id = int(cb.data.split(":")[1])
     server = await session.get(Server, server_id)
-    if not server or server.user_id != user.id:
+    if not server or server.user_id != user.id or (server.extra_data or {}).get("reseller"):
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
     if server.status != ServerStatus.ACTIVE:
@@ -3621,7 +3630,7 @@ async def cb_change_ip_confirm(cb: CallbackQuery, user: User, session: AsyncSess
 async def cb_change_ip_do(cb: CallbackQuery, user: User, session: AsyncSession):
     server_id = int(cb.data.split(":")[1])
     server = await session.get(Server, server_id)
-    if not server or server.user_id != user.id:
+    if not server or server.user_id != user.id or (server.extra_data or {}).get("reseller"):
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
     if server.status != ServerStatus.ACTIVE:
@@ -3692,7 +3701,7 @@ async def cb_change_ip_do(cb: CallbackQuery, user: User, session: AsyncSession):
 async def cb_add_ip_confirm(cb: CallbackQuery, user: User, session: AsyncSession):
     server_id = int(cb.data.split(":")[1])
     server = await session.get(Server, server_id)
-    if not server or server.user_id != user.id:
+    if not server or server.user_id != user.id or (server.extra_data or {}).get("reseller"):
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
     if server.status != ServerStatus.ACTIVE:
@@ -3732,7 +3741,7 @@ async def cb_add_ip_confirm(cb: CallbackQuery, user: User, session: AsyncSession
 async def cb_add_ip_do(cb: CallbackQuery, user: User, session: AsyncSession):
     server_id = int(cb.data.split(":")[1])
     server = await session.get(Server, server_id)
-    if not server or server.user_id != user.id:
+    if not server or server.user_id != user.id or (server.extra_data or {}).get("reseller"):
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
     if server.status != ServerStatus.ACTIVE or server.billing_type != BillingType.MONTHLY:
@@ -3804,7 +3813,7 @@ async def cb_add_ip_do(cb: CallbackQuery, user: User, session: AsyncSession):
 async def cb_server_usage(cb: CallbackQuery, user: User, session: AsyncSession):
     server_id = int(cb.data.split(":")[1])
     server = await session.get(Server, server_id)
-    if not server or server.user_id != user.id:
+    if not server or server.user_id != user.id or (server.extra_data or {}).get("reseller"):
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
 
@@ -3868,7 +3877,7 @@ async def cb_server_usage(cb: CallbackQuery, user: User, session: AsyncSession):
 async def cb_mute_hourly(cb: CallbackQuery, user: User, session: AsyncSession):
     server_id = int(cb.data.split(":")[1])
     server = await session.get(Server, server_id)
-    if not server or server.user_id != user.id:
+    if not server or server.user_id != user.id or (server.extra_data or {}).get("reseller"):
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
     extra = dict(server.extra_data or {})
@@ -3884,7 +3893,7 @@ async def cb_mute_hourly(cb: CallbackQuery, user: User, session: AsyncSession):
 async def cb_server_subproducts(cb: CallbackQuery, user: User, session: AsyncSession):
     server_id = int(cb.data.split(":")[1])
     server = await session.get(Server, server_id)
-    if not server or server.user_id != user.id:
+    if not server or server.user_id != user.id or (server.extra_data or {}).get("reseller"):
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
 
@@ -3921,7 +3930,7 @@ async def cb_buy_subprod(cb: CallbackQuery, user: User, session: AsyncSession):
     server = await session.get(Server, server_id)
     sp = await session.get(SubProduct, sp_id)
 
-    if not server or server.user_id != user.id or not sp:
+    if not server or server.user_id != user.id or (server.extra_data or {}).get("reseller") or not sp:
         await cb.answer("یافت نشد.", show_alert=True)
         return
 
@@ -3956,7 +3965,7 @@ async def cb_buy_subprod(cb: CallbackQuery, user: User, session: AsyncSession):
 async def cb_change_password_confirm(cb: CallbackQuery, user: User, session: AsyncSession):
     server_id = int(cb.data.split(":")[1])
     server = await session.get(Server, server_id)
-    if not server or server.user_id != user.id:
+    if not server or server.user_id != user.id or (server.extra_data or {}).get("reseller"):
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
     if server.status != ServerStatus.ACTIVE:
@@ -3979,7 +3988,7 @@ async def cb_change_password_confirm(cb: CallbackQuery, user: User, session: Asy
 async def cb_change_password_do(cb: CallbackQuery, user: User, session: AsyncSession):
     server_id = int(cb.data.split(":")[1])
     server = await session.get(Server, server_id)
-    if not server or server.user_id != user.id:
+    if not server or server.user_id != user.id or (server.extra_data or {}).get("reseller"):
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
     if server.status != ServerStatus.ACTIVE:
@@ -4040,7 +4049,7 @@ async def cb_change_password_do(cb: CallbackQuery, user: User, session: AsyncSes
 async def cb_srv_edit(cb: CallbackQuery, user: User, session: AsyncSession, state: FSMContext):
     server_id = int(cb.data.split(":")[1])
     server = await session.get(Server, server_id)
-    if not server or server.user_id != user.id:
+    if not server or server.user_id != user.id or (server.extra_data or {}).get("reseller"):
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
     await state.update_data(server_id=server_id)
@@ -4074,7 +4083,7 @@ async def edit_disk(message: Message, user: User, state: FSMContext, session: As
     data = await state.get_data()
     await state.clear()
     server = await session.get(Server, data["server_id"])
-    if not server or server.user_id != user.id:
+    if not server or server.user_id != user.id or (server.extra_data or {}).get("reseller"):
         await message.answer("سرور یافت نشد.")
         return
     kwargs = {k: v for k, v in {

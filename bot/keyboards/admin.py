@@ -215,6 +215,7 @@ def user_detail_kb(user_id: int, is_banned: bool, is_kyc: bool, hourly_limit: in
     builder.button(text="تاریخچه پرداخت", callback_data=f"admin:user_payments:{user_id}")
     builder.button(text="سرویس‌های فعال", callback_data=f"admin:user_servers:{user_id}")
     builder.button(text=f"لیمیت ساعتی: {hourly_limit}", callback_data=f"admin:user_limit:{user_id}")
+    builder.button(text="ریسلر", callback_data=f"admin:ursl:{user_id}")
     if is_kyc:
         builder.button(text="حذف احراز هویت", callback_data=f"admin:user_unverify:{user_id}")
     else:

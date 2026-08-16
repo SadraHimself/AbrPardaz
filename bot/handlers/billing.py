@@ -10,7 +10,7 @@ from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.database.models import Server, Transaction, TransactionType, User
+from bot.database.models import Server, ServerStatus, Transaction, TransactionType, User
 from bot.keyboards.main import back_kb, charge_amount_kb, wallet_kb
 from bot.utils.loading import answer_loading, edit_loading
 
@@ -284,10 +284,13 @@ async def cb_tx_srv_detail(cb: CallbackQuery, user: User, session: AsyncSession)
     count = len(hourly_txs)
     total = sum(t.amount for t in hourly_txs)
 
-    # سرورِ با قیمت ارزی (دلار/یورو): نرخ ساعتیِ تعریف‌شده به همان ارز نمایش داده می‌شود
+    # سرورِ با قیمت ارزی (دلار/یورو): نرخ ساعتیِ تعریف‌شده به همان ارز نمایش داده می‌شود.
+    # سرور ریسلر مستثنی: کپیِ price_hourly عمداً بدون تخفیف است (ضد دابل-تخفیف)
+    # و نمایش ارزی‌اش با مبلغ واقعیِ کسرشده تناقض پیدا می‌کرد — تومانی نشان بده.
     from bot.services.currency import CURRENCY_LABELS, obj_currency
     _cur = obj_currency(server) if server else "irt"
-    if _cur != "irt" and server and server.price_hourly:
+    _is_rsl = bool((server.extra_data or {}).get("reseller")) if server else False
+    if _cur != "irt" and server and server.price_hourly and not _is_rsl:
         unit = CURRENCY_LABELS[_cur]
         duration_line = f"مدت: {count} ساعت × {server.price_hourly:g} {unit}\n"
         total_line = (
@@ -415,10 +418,12 @@ async def cb_traffic_overview(cb: CallbackQuery, user: User, session: AsyncSessi
     result = await session.execute(
         select(Server).where(
             Server.user_id == user.id,
-            Server.status == Server.status.ACTIVE,
+            Server.status == ServerStatus.ACTIVE,
         )
     )
-    servers = list(result.scalars().all())
+    # سرورهای ریسلر در نمای کاربر نمی‌آیند (ترافیک‌شان اصلاً محاسبه نمی‌شود)
+    servers = [s for s in result.scalars().all()
+               if not ((s.extra_data or {}).get("reseller"))]
 
     if not servers:
         await cb.message.edit_text("هیچ سرور فعالی ندارید.", reply_markup=back_kb())

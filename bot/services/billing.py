@@ -118,6 +118,16 @@ class BillingService:
         if amount <= 0:
             return True
         self._sync_price_copy(server, amount, currency, hourly=True)
+        # سرور ریسلر: قیمت = قیمت زنده‌ی پلن × (۱ − تخفیف ریسلر). تخفیف «بعد از»
+        # _sync_price_copy اعمال می‌شود تا کپیِ fallback قیمتِ کاملِ پلن بماند
+        # (وگرنه با حذف پلن، تخفیف دوبار اعمال می‌شد).
+        if (server.extra_data or {}).get("reseller"):
+            from bot.services.reseller import reseller_discount_percent
+            owner = await self.session.get(User, server.user_id)
+            if owner is not None:
+                d = reseller_discount_percent(owner)
+                if d:
+                    amount = amount * (1 - d / 100.0)
         if currency == "irt":
             amount_toman = amount
         else:

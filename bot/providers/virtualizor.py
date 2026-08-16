@@ -977,6 +977,15 @@ class VirtualizorProvider(BaseProvider):
                     "serid": vs.get("serid"),
                     "bandwidth": vs.get("bandwidth"),
                     "used_bandwidth": vs.get("used_bandwidth"),
+                    # فیلدهای لازم برای ثبت سرورهای ریسلر (مچ پلن + تاریخ ساخت).
+                    # افزایشی است — مصرف‌کننده‌های قبلی (بازنگاشت) فقط کلیدهای
+                    # بالا را می‌خوانند.
+                    "ram": vs.get("ram"),
+                    "cores": vs.get("cores"),
+                    "space": vs.get("space"),
+                    "plid": str(vs.get("plid") or ""),
+                    "os_name": (vs.get("os_name") or "").strip(),
+                    "time": vs.get("time"),
                 })
             if fresh == 0:
                 # پنل پارامتر page را نادیده گرفته (همان صفحه دوباره) — اگر صفحه‌ی

@@ -30,6 +30,10 @@ def sync_all_traffic():
             for server in servers:
                 if not server.provider_account_id or not server.provider_server_id:
                     continue
+                if (server.extra_data or {}).get("reseller"):
+                    # ترافیک سرورهای ریسلر اصلاً محاسبه/بیل نمی‌شود و تعلیق
+                    # TRAFFIC_EXCEEDED هم برایشان ممنوع است
+                    continue
                 try:
                     account = await session.get(
                         __import__("bot.database.models", fromlist=["ProviderAccount"]).ProviderAccount,

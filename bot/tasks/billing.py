@@ -35,6 +35,7 @@ def run_hourly_billing(self):
 
             users_empty_balance: set[int] = set()
             users_charged_ok: set[int] = set()
+            users_reseller_debt: set[int] = set()
 
             from bot.services.currency import obj_currency, to_toman
 
@@ -56,7 +57,13 @@ def run_hourly_billing(self):
                         float(user_obj.balance if user_obj else 0),
                     )
                 else:
-                    users_empty_balance.add(server.user_id)
+                    if (server.extra_data or {}).get("reseller"):
+                        # ⚠️ بدهی ریسلری هرگز فلوی «مهلت ۳ساعته + حذف» را تریگر
+                        # نمی‌کند — فقط هشدار (کاربر هر ۳h / ادمین هر ۱h) و
+                        # انباشتِ لنگر تا شارژ بعدی (بدهی بخشیده نمی‌شود)
+                        users_reseller_debt.add(server.user_id)
+                    else:
+                        users_empty_balance.add(server.user_id)
 
             # کاربری که همه‌ی کسرهایش دوباره موفق شد → grace کهنه پاک شود، وگرنه
             # timestamp قدیمی در شکستِ بعدی باعث حذف فوریِ بدون اخطار می‌شود
@@ -74,6 +81,11 @@ def run_hourly_billing(self):
 
         for uid in users_empty_balance:
             handle_balance_empty.delay(uid)
+
+        if users_reseller_debt:
+            from bot.tasks.reseller import handle_reseller_debt
+            for uid in users_reseller_debt:
+                handle_reseller_debt.delay(uid)
 
     try:
         _run(_do())
@@ -221,6 +233,11 @@ def handle_balance_empty(user_id: int):
                 )
             )
             hourly_servers = list(srv_rows.scalars().all())
+            # سرورهای ریسلر از این فلو کاملاً مستثنی‌اند: نه در معیار ریکاوری
+            # حساب می‌شوند (وگرنه بدهی ریسلری جلوی پاک‌شدن grace سرورهای عادی را
+            # می‌گرفت و حذفِ ناحق رخ می‌داد) و نه حذف می‌شوند.
+            hourly_servers = [s for s in hourly_servers
+                              if not ((s.extra_data or {}).get("reseller"))]
             if not hourly_servers:
                 # سرور ساعتی فعالی نمانده — grace بی‌موضوع است
                 if _clear_grace():
@@ -299,6 +316,10 @@ def handle_balance_empty(user_id: int):
                         )
                     )
                     servers = list(srv_result.scalars().all())
+                    # ⚠️ سرور ریسلر هرگز اینجا حذف نمی‌شود — VM مال خود ریسلر
+                    # روی پنل است و فقط بدهی‌اش انباشته می‌شود
+                    servers = [s for s in servers
+                               if not ((s.extra_data or {}).get("reseller"))]
                     for server in servers:
                         try:
                             if server.provider_account_id and server.provider_server_id:
@@ -474,6 +495,9 @@ def run_monthly_expiry_check(self):
                         Server.billing_type == BillingType.MONTHLY,
                         Server.status == ServerStatus.ACTIVE,
                         Server.expires_at <= now,
+                        # دفاع تکمیلی: ردیف ریسلر (حتی اگر روزی MONTHLY شود)
+                        # هرگز وارد چرخه‌ی ساسپند/حذف ماهانه نشود
+                        Server.extra_data.op("->>")("reseller").is_(None),
                     )
                 )
                 for server in result.scalars().all():
@@ -508,6 +532,7 @@ def run_monthly_expiry_check(self):
                         Server.status == ServerStatus.SUSPENDED,
                         Server.suspend_reason == SuspendReason.EXPIRED,
                         Server.suspended_at <= now - timedelta(hours=24),
+                        Server.extra_data.op("->>")("reseller").is_(None),
                     )
                 )
                 for server in res.scalars().all():

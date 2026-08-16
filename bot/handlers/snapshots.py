@@ -44,7 +44,7 @@ def _hz_provider(account: ProviderAccount) -> HetznerProvider:
 async def cb_snap_menu(cb: CallbackQuery, user: User, session: AsyncSession):
     server_id = int(cb.data.split(":")[1])
     server = await session.get(Server, server_id)
-    if not server or server.user_id != user.id:
+    if not server or server.user_id != user.id or (server.extra_data or {}).get("reseller"):
         await cb.answer("سرور یافت نشد.", show_alert=True)
         return
     if server.provider_type != ProviderType.HETZNER:
@@ -339,7 +339,8 @@ async def cb_snap_restore_confirm(cb: CallbackQuery, user: User, session: AsyncS
     _, snap_id, server_id = cb.data.split(":")
     snap = await session.get(Snapshot, int(snap_id))
     server = await session.get(Server, int(server_id))
-    if not snap or snap.user_id != user.id or not snap.is_active or not server or server.user_id != user.id:
+    if not snap or snap.user_id != user.id or not snap.is_active or not server \
+            or server.user_id != user.id or (server.extra_data or {}).get("reseller"):
         await cb.answer("یافت نشد.", show_alert=True)
         return
     await cb.answer()
@@ -365,7 +366,8 @@ async def cb_snap_restore_do(cb: CallbackQuery, user: User, session: AsyncSessio
     _, snap_id, server_id = cb.data.split(":")
     snap = await session.get(Snapshot, int(snap_id))
     server = await session.get(Server, int(server_id))
-    if not snap or snap.user_id != user.id or not snap.is_active or not server or server.user_id != user.id:
+    if not snap or snap.user_id != user.id or not snap.is_active or not server \
+            or server.user_id != user.id or (server.extra_data or {}).get("reseller"):
         await cb.answer("یافت نشد.", show_alert=True)
         return
     account = await session.get(ProviderAccount, server.provider_account_id) if server.provider_account_id else None

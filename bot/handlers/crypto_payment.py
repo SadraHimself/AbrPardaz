@@ -270,7 +270,8 @@ async def cb_np_custom(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
 
 
-@router.callback_query(CryptoFSM.custom_amount, F.data == "np_custom_cancel")
+# بدون فیلتر state — اگر state به هر دلیلی از دست رفته باشد دکمه نباید بی‌اثر شود
+@router.callback_query(F.data == "np_custom_cancel")
 async def cb_np_custom_cancel(cb: CallbackQuery, state: FSMContext):
     await state.clear()
     await cb.message.edit_text(_AMOUNT_TEXT, parse_mode="HTML", reply_markup=_amount_kb())

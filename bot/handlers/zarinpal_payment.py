@@ -161,7 +161,8 @@ async def cb_zp_custom(cb: CallbackQuery, user: User, state: FSMContext):
     await cb.answer()
 
 
-@router.callback_query(ZarinpalFSM.custom_amount, F.data == "zp_custom_cancel")
+# بدون فیلتر state — اگر state به هر دلیلی از دست رفته باشد دکمه نباید بی‌اثر شود
+@router.callback_query(F.data == "zp_custom_cancel")
 async def cb_zp_custom_cancel(cb: CallbackQuery, state: FSMContext):
     await state.clear()
     await cb.message.edit_text(

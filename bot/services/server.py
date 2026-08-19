@@ -16,6 +16,31 @@ from bot.providers import CreateServerParams, get_provider
 
 logger = logging.getLogger(__name__)
 
+# تاریخچه‌ی IPهای هر سرور — تعویضِ بعدی از این‌ها دوری می‌کند تا کاربر بین
+# دو-سه IP تکراری نچرخد. سقف دارد چون استخر بعضی پروایدرها کوچک است و
+# لیستِ بی‌انتها فقط دیتا هدر می‌دهد (پیاده‌سازی‌ها هم fallback دارند).
+_IP_HISTORY_MAX = 50
+
+
+def _ip_history(server: Server) -> list[str]:
+    """IPهای قبلیِ سرور + IP فعلی — چیزی که تعویض بعدی نباید تحویل بدهد."""
+    hist = (server.extra_data or {}).get("ip_history") or []
+    out = [str(ip) for ip in hist if ip]
+    if server.ip_address and str(server.ip_address) not in out:
+        out.append(str(server.ip_address))
+    return out
+
+
+def _remember_ips(server: Server, *ips: str | None) -> None:
+    """IPها را به تاریخچه اضافه می‌کند (ستون JSON باید بازتخصیص شود)."""
+    hist = [str(ip) for ip in ((server.extra_data or {}).get("ip_history") or []) if ip]
+    for ip in ips:
+        if ip and str(ip) not in hist:
+            hist.append(str(ip))
+    extra = dict(server.extra_data or {})
+    extra["ip_history"] = hist[-_IP_HISTORY_MAX:]
+    server.extra_data = extra
+
 
 class ServerService:
 
@@ -302,9 +327,11 @@ class ServerService:
                 await BillingService(self.session).unsuspend_server_db(server)
             return ok
         if action == "change_ip":
-            new_ip = await provider.change_ip(sid)
+            old_ip = server.ip_address
+            new_ip = await provider.change_ip(sid, exclude_ips=_ip_history(server))
             if new_ip:
                 server.ip_address = new_ip
+                _remember_ips(server, old_ip, new_ip)
                 await self.session.flush()
             return bool(new_ip)
         if action == "edit":

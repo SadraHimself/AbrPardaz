@@ -346,22 +346,42 @@ class RootVDSProvider(BaseProvider):
     async def get_traffic(self, server_id: str) -> float:
         return 0.0   # API ترافیک مصرفی نمی‌دهد
 
-    async def change_ip(self, server_id: str) -> Optional[str]:
-        """تغییر IPv4 — سرور با IP جدید ریبوت می‌شود."""
-        old = (await self._get_server_raw(server_id)).get("ipv4")
-        await self._request("/api/vds/change_ipv4/",
-                            {"server_id": int(server_id)}, timeout=60)
-        deadline = asyncio.get_event_loop().time() + 300
-        while asyncio.get_event_loop().time() < deadline:
-            await asyncio.sleep(5)
-            try:
-                srv = await self._get_server_raw(server_id)
-            except RuntimeError:
-                continue
-            ip = srv.get("ipv4")
-            if ip and ip != old and (srv.get("status") or "").lower() == "on":
-                return ip
-        return None
+    # هر تلاش یک ریبوت کامل است → بیش از یک بار تکرار نمی‌کنیم
+    _IP_ATTEMPTS = 2
+
+    async def change_ip(self, server_id: str, exclude_ips: list[str] | None = None) -> Optional[str]:
+        """تغییر IPv4 — سرور با IP جدید ریبوت می‌شود.
+
+        API اجازه‌ی انتخاب IP نمی‌دهد؛ اگر IPِ تحویلی جزو IPهای قبلیِ همین سرور
+        بود یک بار دیگر تلاش می‌کنیم. بیشتر از این تکرار نمی‌کنیم چون هر تلاش
+        سرور را ریبوت می‌کند."""
+        blocked = {str(ip) for ip in (exclude_ips or []) if ip}
+        result: Optional[str] = None
+
+        for _ in range(self._IP_ATTEMPTS):
+            old = (await self._get_server_raw(server_id)).get("ipv4")
+            await self._request("/api/vds/change_ipv4/",
+                                {"server_id": int(server_id)}, timeout=60)
+            new_ip = None
+            deadline = asyncio.get_event_loop().time() + 300
+            while asyncio.get_event_loop().time() < deadline:
+                await asyncio.sleep(5)
+                try:
+                    srv = await self._get_server_raw(server_id)
+                except RuntimeError:
+                    continue
+                ip = srv.get("ipv4")
+                if ip and ip != old and (srv.get("status") or "").lower() == "on":
+                    new_ip = ip
+                    break
+            if not new_ip:
+                return result          # تلاش قبلی (اگر بود) بهتر از هیچ
+            result = new_ip
+            if str(new_ip) not in blocked:
+                return new_ip
+            logger.info("change_ip: %s already used on server %s — retrying", new_ip, server_id)
+
+        return result
 
     # ── کاتالوگ ───────────────────────────────────────────────────────────────
 

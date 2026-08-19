@@ -796,7 +796,7 @@ class VirtualizorProvider(BaseProvider):
             out[0]["primary"] = True
         return out
 
-    async def change_ip(self, server_id: str) -> str:
+    async def change_ip(self, server_id: str, exclude_ips: list[str] | None = None) -> str:
         """Assign a new free IP taken ONLY from this VPS's allowed pool.
 
         The right source is the VPS's own Manage page `ips` list — i.e. the IPs shown
@@ -804,7 +804,11 @@ class VirtualizorProvider(BaseProvider):
         plan's permitted pool(s). The node-wide `act=ips` listing was wrong: it returns
         IPs from every pool on the node (other subnets the plan can't use), so the new
         IP could land outside the plan's range (old bug) or filter to nothing (the
-        "No free IP" bug). Sourcing from managevps fixes both."""
+        "No free IP" bug). Sourcing from managevps fixes both.
+
+        `exclude_ips` = IPهایی که قبلاً روی همین VPS بوده‌اند. اول از میان IPهای
+        دست‌نخورده انتخاب می‌شود؛ فقط وقتی هیچ IP تازه‌ای در pool نمانده باشد به
+        کل لیست آزاد برمی‌گردیم (تعویض هرگز به‌خاطر این فیلتر شکست نمی‌خورد)."""
         import random as _random
 
         # Load the Manage VPS page (no editvps) → its `ips` are this VPS's allowed pool.
@@ -825,13 +829,18 @@ class VirtualizorProvider(BaseProvider):
         )
 
         free = [e for e in entries if str(e.get("vpsid", "0")) in ("0", "")]
-        # Every entry here already belongs to the plan's allowed pool; when the pool/
-        # subnet of the current IP is identifiable, prefer staying inside it.
-        candidates = [e for e in free if cur_pool and _pool(e) == cur_pool]
-        if not candidates and cur_subnet:
-            candidates = [e for e in free if str(e.get("ip", "")).rsplit(".", 1)[0] == cur_subnet]
-        if not candidates:
-            candidates = free
+
+        def _narrow(src: list[dict]) -> list[dict]:
+            """ترجیح: همان pool → همان subnet → هرچه هست."""
+            c = [e for e in src if cur_pool and _pool(e) == cur_pool]
+            if not c and cur_subnet:
+                c = [e for e in src if str(e.get("ip", "")).rsplit(".", 1)[0] == cur_subnet]
+            return c or src
+
+        # IPهای سابقِ همین VPS کنار گذاشته می‌شوند تا تعویض واقعاً تازه باشد
+        blocked = {str(ip) for ip in (exclude_ips or []) if ip}
+        fresh = [e for e in free if str(e.get("ip")) not in blocked]
+        candidates = _narrow(fresh) if fresh else _narrow(free)
 
         ip_values = [e.get("ip") for e in candidates if e.get("ip")]
         if not ip_values:

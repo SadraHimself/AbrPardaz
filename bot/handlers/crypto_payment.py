@@ -7,7 +7,9 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from aiogram import F, Router
-from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config import settings
@@ -27,9 +29,32 @@ _AMOUNT_ICONS = {
     50:  "5447203607294265305",
     100: "5440539497383087970",
 }
+# کف = کمترین مبلغِ آماده (حداقلِ واقعیِ هر ارز را خودِ NOWPayments هنگام
+# ساخت پرداخت رد می‌کند و پیام خطایش نمایش داده می‌شود)
+_MIN_USD = 3
+_MAX_USD = 10_000
+_CUSTOM_ICON = "6021858463288663100"
+
+# ارقام فارسی/عربی + جداکننده‌های هزارگان → عددِ خام
+_DIGIT_TRANS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+_STRIP_CHARS = (",", "٬", "،", ".", "٫", " ", "‏", "‎", "_", "-", "$")
+
 _BACK_KB = InlineKeyboardMarkup(inline_keyboard=[[
     InlineKeyboardButton(text="بازگشت به کیف پول", callback_data="wallet", **{"icon_custom_emoji_id": "5258236805890710909"})
 ]])
+
+
+class CryptoFSM(StatesGroup):
+    custom_amount = State()
+
+
+def _parse_usd(text: str) -> int | None:
+    """مبلغِ دلاریِ تایپ‌شده را به عدد صحیح تبدیل می‌کند (None = ورودی نامعتبر)."""
+    raw = (text or "").strip().translate(_DIGIT_TRANS)
+    raw = raw.replace("دلار", "").replace("usd", "").replace("USD", "")
+    for ch in _STRIP_CHARS:
+        raw = raw.replace(ch, "")
+    return int(raw) if raw.isdigit() and raw else None
 
 # Display names for NOWPayments currency codes
 _CURRENCY_NAMES: dict[str, str] = {
@@ -105,12 +130,33 @@ async def _get_setting(session: AsyncSession, key: str) -> str | None:
 
 
 def _amount_kb() -> InlineKeyboardMarkup:
-    rows = [
-        [InlineKeyboardButton(text=f"{a}$", callback_data=f"np_amount:{a}", **{"icon_custom_emoji_id": _AMOUNT_ICONS[a]})]
-        for a in reversed(_USD_AMOUNTS)
-    ]
+    """مبالغ آماده دو-ستونی، «مبلغ دلخواه» سبز بالای بازگشت."""
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for a in reversed(_USD_AMOUNTS):
+        row.append(InlineKeyboardButton(
+            text=f"{a}$",
+            callback_data=f"np_amount:{a}",
+            **{"icon_custom_emoji_id": _AMOUNT_ICONS[a]},
+        ))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(
+        text="مبلغ دلخواه",
+        callback_data="np_custom",
+        **{"style": "success", "icon_custom_emoji_id": _CUSTOM_ICON},
+    )])
     rows.append([InlineKeyboardButton(text="بازگشت", callback_data="wallet", **{"icon_custom_emoji_id": "5258236805890710909"})])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+_AMOUNT_TEXT = (
+    '<tg-emoji emoji-id="5769403330761593044">👛</tg-emoji> <b>شارژ کیف پول با کریپتو</b>\n\n'
+    "مبلغ دلاری را انتخاب کنید:"
+)
 
 
 _CURRENCY_PAIRS = [
@@ -173,41 +219,96 @@ def _make_qr_bytes(data: str) -> bytes:
     return buf.getvalue()
 
 
-@router.callback_query(F.data == "crypto_pay")
-async def cb_crypto_pay(cb: CallbackQuery, session: AsyncSession):
-    if not settings.NP_API_KEY:
-        await cb.answer("درگاه کریپتو فعال نیست.", show_alert=True)
-        return
-
-    lines = [
-        '<tg-emoji emoji-id="5769403330761593044">👛</tg-emoji> <b>شارژ کیف پول با کریپتو</b>\n',
-        "مبلغ دلاری را انتخاب کنید:",
-    ]
-    await cb.message.edit_text("\n".join(lines), parse_mode="HTML", reply_markup=_amount_kb())
-    await cb.answer()
-
-
-@router.callback_query(F.data.startswith("np_amount:"))
-async def cb_np_amount(cb: CallbackQuery, session: AsyncSession):
-    amount_usd = int(cb.data.split(":")[1])
-    await cb.answer("⏳ در حال دریافت ارزهای موجود...")
-
+async def _currency_choice(amount_usd: int) -> tuple[str, InlineKeyboardMarkup]:
+    """ارزهای فعالِ مرچنت را می‌گیرد و (متن، کیبورد) انتخاب ارز را برمی‌گرداند."""
     client = NOWPaymentsClient()
     try:
         coins = [c.lower() for c in await client.get_merchant_coins()]
     except Exception:
         coins = []
-
     if not coins:
         coins = list(_CURRENCY_PRIORITY)
 
-    await cb.message.edit_text(
+    return (
         f'<tg-emoji emoji-id="5769403330761593044">👛</tg-emoji> <b>شارژ کیف پول با کریپتو</b>\n\n'
         f"مبلغ: <b>{amount_usd}$</b>\n\n"
         f"ارز پرداختی را انتخاب کنید:",
-        parse_mode="HTML",
-        reply_markup=_currency_kb(amount_usd, coins),
+        _currency_kb(amount_usd, coins),
     )
+
+
+@router.callback_query(F.data == "crypto_pay")
+async def cb_crypto_pay(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
+    if not settings.NP_API_KEY:
+        await cb.answer("درگاه کریپتو فعال نیست.", show_alert=True)
+        return
+
+    await state.clear()
+    await cb.message.edit_text(_AMOUNT_TEXT, parse_mode="HTML", reply_markup=_amount_kb())
+    await cb.answer()
+
+
+# ── مبلغ دلخواه ───────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "np_custom")
+async def cb_np_custom(cb: CallbackQuery, state: FSMContext):
+    if not settings.NP_API_KEY:
+        await cb.answer("درگاه کریپتو فعال نیست.", show_alert=True)
+        return
+    await state.set_state(CryptoFSM.custom_amount)
+    await cb.message.edit_text(
+        '<tg-emoji emoji-id="5769403330761593044">👛</tg-emoji> <b>شارژ کیف پول — مبلغ دلخواه</b>\n\n'
+        "مبلغ مورد نظر را به <b>دلار</b> بفرستید.\n\n"
+        f"حداقل: <b>{_MIN_USD}$</b>\n"
+        f"حداکثر: <b>{_MAX_USD:,}$</b>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="انصراف", callback_data="np_custom_cancel",
+                                 **{"style": "danger", "icon_custom_emoji_id": "5240241223632954241"}),
+        ]]),
+    )
+    await cb.answer()
+
+
+@router.callback_query(CryptoFSM.custom_amount, F.data == "np_custom_cancel")
+async def cb_np_custom_cancel(cb: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await cb.message.edit_text(_AMOUNT_TEXT, parse_mode="HTML", reply_markup=_amount_kb())
+    await cb.answer()
+
+
+@router.message(CryptoFSM.custom_amount)
+async def msg_np_custom_amount(message: Message, state: FSMContext, session: AsyncSession):
+    amount_usd = _parse_usd(message.text or "")
+    if amount_usd is None:
+        await message.answer(f"{ERR} مبلغ نامعتبر است. فقط عدد بفرستید.", parse_mode="HTML")
+        return
+    if amount_usd < _MIN_USD:
+        await message.answer(f"{ERR} حداقل مبلغ شارژ <b>{_MIN_USD}$</b> است.", parse_mode="HTML")
+        return
+    if amount_usd > _MAX_USD:
+        await message.answer(f"{ERR} حداکثر مبلغ هر پرداخت <b>{_MAX_USD:,}$</b> است.", parse_mode="HTML")
+        return
+
+    await state.clear()
+    wait = await message.answer(
+        '‏<tg-emoji emoji-id="5386367538735104399">⌛️</tg-emoji> در حال دریافت ارزهای موجود...',
+        parse_mode="HTML",
+    )
+    text, kb = await _currency_choice(amount_usd)
+    await wait.edit_text(text, parse_mode="HTML", reply_markup=kb)
+
+
+# ── مبالغ آماده ───────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("np_amount:"))
+async def cb_np_amount(cb: CallbackQuery, state: FSMContext, session: AsyncSession):
+    amount_usd = int(cb.data.split(":")[1])
+    await state.clear()
+    await cb.answer("⏳ در حال دریافت ارزهای موجود...")
+
+    text, kb = await _currency_choice(amount_usd)
+    await cb.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("np_cur:"))

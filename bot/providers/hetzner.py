@@ -390,10 +390,19 @@ class HetznerProvider(BaseProvider):
         await self.reset_password(server_id)
         return True
 
-    async def change_ip(self, server_id: str) -> Optional[str]:
+    # چند بار حاضریم Primary IP تازه بسازیم تا به IPِ تکراری نخوریم
+    _IP_ATTEMPTS = 6
+
+    async def change_ip(self, server_id: str, exclude_ips: list[str] | None = None) -> Optional[str]:
         """تعویض IPv4 اصلی از مسیر Primary IP:
         ساخت IP جدید → خاموش (unassign فقط روی سرور خاموش) → جداکردن قدیمی →
-        اتصال جدید → حذف قدیمی (توقف بیل آن) → روشن. در خطا، برگشت به IP قبلی."""
+        اتصال جدید → حذف قدیمی (توقف بیل آن) → روشن. در خطا، برگشت به IP قبلی.
+
+        هتزنر اجازه‌ی انتخاب IP نمی‌دهد و از استخر پروژه هرچه آزاد باشد می‌دهد —
+        یعنی به‌راحتی همان IP قبلیِ همین سرور دوباره برمی‌گردد. راه‌حل: IPِ
+        نامناسب را «نگه می‌داریم» (فقط unassign، بدون حذف) و دوباره می‌سازیم؛
+        چون هنوز تخصیص‌یافته است، هتزنر آن را دوباره تحویل نمی‌دهد. در پایان
+        همه‌ی IPهای ردشده حذف می‌شوند (چند ثانیه بیل ساعتی = عملاً صفر)."""
         import secrets as _sec
 
         data = await self._request("GET", f"/servers/{server_id}")
@@ -404,6 +413,10 @@ class HetznerProvider(BaseProvider):
             raise RuntimeError("این سرور IPv4 اصلی ندارد")
         was_running = srv.get("status") == "running"
 
+        blocked = {str(ip) for ip in (exclude_ips or []) if ip}
+        if old_ip:
+            blocked.add(str(old_ip))
+
         # سرور فقط یک IPv4 اصلی می‌تواند داشته باشد → اول جدا، بعد ساختِ
         # مستقیماً-متصل (assignee_id) — ساخت آزاد با datacenter خطای invalid_input می‌داد
         if was_running:
@@ -412,25 +425,47 @@ class HetznerProvider(BaseProvider):
         await self._wait_action(d.get("action"))
 
         new_id = new_ip = None
+        rejected: list[int] = []      # IPهای تکراری — تا آخر کار آزاد نمی‌شوند
         try:
-            created = await self._request("POST", "/primary_ips", json={
-                "type": "ipv4",
-                "name": f"ip-{server_id}-{_sec.token_hex(3)}",
-                "assignee_type": "server",
-                "assignee_id": int(server_id),
-                "auto_delete": True,   # با حذف سرور، این IP هم حذف شود (بیل نماند)
-            })
-            new_pi = created.get("primary_ip") or {}
-            new_id, new_ip = new_pi.get("id"), new_pi.get("ip")
-            await self._wait_action(created.get("action"))
-            if not new_ip:
-                raise RuntimeError("ساخت Primary IP جدید ناموفق بود")
+            for attempt in range(self._IP_ATTEMPTS):
+                created = await self._request("POST", "/primary_ips", json={
+                    "type": "ipv4",
+                    "name": f"ip-{server_id}-{_sec.token_hex(3)}",
+                    "assignee_type": "server",
+                    "assignee_id": int(server_id),
+                    "auto_delete": True,   # با حذف سرور، این IP هم حذف شود (بیل نماند)
+                })
+                new_pi = created.get("primary_ip") or {}
+                new_id, new_ip = new_pi.get("id"), new_pi.get("ip")
+                await self._wait_action(created.get("action"))
+                if not new_ip:
+                    raise RuntimeError("ساخت Primary IP جدید ناموفق بود")
+                if str(new_ip) not in blocked or attempt == self._IP_ATTEMPTS - 1:
+                    break
+                # تکراری بود → جدا کن و برو سراغ بعدی (هنوز حذفش نمی‌کنیم)
+                logger.info("change_ip: %s already used on server %s — retrying", new_ip, server_id)
+                d = await self._request("POST", f"/primary_ips/{new_id}/actions/unassign")
+                await self._wait_action(d.get("action"))
+                rejected.append(new_id)
+                new_id = new_ip = None
+
+            # از این‌جا نقطه‌ی بی‌بازگشت است (IP قدیمی حذف می‌شود) — هیچ استثنایی
+            # نباید بالا برود، وگرنه rollback همان IP جدیدِ سالم را هم پاک می‌کند
+            # و سرور بی‌IP می‌ماند.
             try:
                 await self._request("DELETE", f"/primary_ips/{old_id}")
             except Exception as e:
                 logger.warning("change_ip: old primary ip %s not deleted: %s", old_id, e)
+            for pid in rejected:
+                try:
+                    await self._request("DELETE", f"/primary_ips/{pid}")
+                except Exception as e:
+                    logger.warning("change_ip: rejected primary ip %s not deleted: %s", pid, e)
             if was_running:
-                await self._server_action(server_id, "poweron")
+                try:
+                    await self._server_action(server_id, "poweron")
+                except Exception as e:
+                    logger.warning("change_ip: poweron after ip change failed: %s", e)
             return new_ip
         except Exception:
             # برگشت: IP جدید (اگر ساخته شد) حذف و IP قدیمی دوباره وصل شود
@@ -442,6 +477,11 @@ class HetznerProvider(BaseProvider):
                     pass
                 try:
                     await self._request("DELETE", f"/primary_ips/{new_id}")
+                except Exception:
+                    pass
+            for pid in rejected:
+                try:
+                    await self._request("DELETE", f"/primary_ips/{pid}")
                 except Exception:
                     pass
             try:

@@ -104,8 +104,14 @@ class BaseProvider(ABC):
 
     # ── Optional overrides ────────────────────────────────────────────────────
 
-    async def change_ip(self, server_id: str) -> Optional[str]:
-        """تغییر IP - برخی پروایدرها پشتیبانی می‌کنند"""
+    async def change_ip(self, server_id: str, exclude_ips: Optional[list[str]] = None) -> Optional[str]:
+        """تغییر IP - برخی پروایدرها پشتیبانی می‌کنند.
+
+        `exclude_ips` = IPهایی که قبلاً روی همین سرور بوده‌اند. پیاده‌سازی باید
+        تا جای ممکن از این لیست دوری کند (وگرنه کاربر با هر تعویض بین دو-سه IP
+        تکراری می‌چرخد). اگر هیچ IP تازه‌ای در دسترس نبود، تعویض نباید شکست
+        بخورد — به IPهای قدیمی برمی‌گردیم.
+        """
         raise NotImplementedError("This provider does not support IP change")
 
     async def edit_server(self, server_id: str, ram: Optional[int] = None,

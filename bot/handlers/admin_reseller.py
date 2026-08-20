@@ -1,6 +1,6 @@
 """پنل ادمین — بخش «ریسلر» هر کاربر (فقط ویرچولایزور).
 
-فعال‌سازی/ویرایش کانفیگ ریسلر (اکانت + ایمیل پنل + درصد تخفیف)، نمای
+فعال‌سازی/ویرایش کانفیگ ریسلر (اکانت + ایمیل پنل + درصد کارمزد)، نمای
 جدول‌بندی‌شده‌ی سرورهای ثبت‌شده، سینک فوری، و ابزار «محاسبه از تاریخ ساخت»
 با پیش‌نمایش و انتخاب per-VM. ثبت‌نام ریسلر آزاد نیست — فقط از همین‌جا.
 """
@@ -104,9 +104,9 @@ async def _show_reseller_view(msg, session: AsyncSession, user: User, edit: bool
             f"<b>ریسلر — کاربر #{user.id}</b>\n\n"
             "برای این کاربر برنامه ریسلر تنظیم نشده است.\n\n"
             "ریسلر با API ادمینِ خودش VM را مستقیم روی پنل ویرچولایزور می‌سازد "
-            "(همه زیر یک ایمیل مشخص). ربات VMها را ثبت می‌کند و ساعتی با تخفیف "
-            "از کیف پول همین کاربر کسر می‌کند. هیچ کنترلی روی سرورها به کاربر "
-            "داده نمی‌شود و ترافیک محاسبه نمی‌شود."
+            "(همه زیر یک ایمیل مشخص). ربات VMها را ثبت می‌کند و ساعتی به نرخ "
+            "«قیمت خرید پلن × (۱ + کارمزد)» از کیف پول همین کاربر کسر می‌کند. "
+            "هیچ کنترلی روی سرورها به کاربر داده نمی‌شود و ترافیک محاسبه نمی‌شود."
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="فعال‌سازی ریسلر",
@@ -134,11 +134,11 @@ async def _show_reseller_view(msg, session: AsyncSession, user: User, edit: bool
             f"اکانت: {account.name if account else '—'}",
             f"{_RLM}ایمیل پنل: <code>{_iso(_html.escape(str(cfg.get('email') or '—')))}</code>",
             f"{_RLM}شناسه پنل (uid): {_iso(cfg.get('uid') or '—')}",
-            f"تخفیف: {rs.reseller_discount_percent(user):g}٪",
+            f"کارمزد (روی قیمت خرید): {rs.reseller_markup_percent(user):g}٪",
             "",
             f"سرورهای ثبت‌شده: {len(servers)}"
             + (f" (⚠️ {unmatched} بدون پلن)" if unmatched else ""),
-            f"جمع نرخ ساعتی با تخفیف: {rate_sum:,.0f} تومان/ساعت",
+            f"جمع نرخ ساعتی (خرید + کارمزد): {rate_sum:,.0f} تومان/ساعت",
             f"موجودی کاربر: {user.balance:,.0f} تومان",
         ]
         if backfill >= 1:
@@ -151,7 +151,7 @@ async def _show_reseller_view(msg, session: AsyncSession, user: User, edit: bool
         builder.button(text="لیست سرورها", callback_data=f"admin:ursl_srv:{user.id}")
         builder.button(text="سینک فوری", callback_data=f"admin:ursl_sync:{user.id}")
         builder.button(text="محاسبه از تاریخ ساخت", callback_data=f"admin:ursl_bf:{user.id}")
-        builder.button(text="ویرایش تخفیف", callback_data=f"admin:ursl_disc:{user.id}")
+        builder.button(text="ویرایش کارمزد", callback_data=f"admin:ursl_disc:{user.id}")
         builder.button(text="ویرایش ایمیل", callback_data=f"admin:ursl_email:{user.id}")
         builder.button(text="غیرفعال‌سازی" if active else "فعال‌سازی مجدد",
                        callback_data=f"admin:ursl_toggle:{user.id}")
@@ -308,7 +308,8 @@ async def msg_reseller_email(message: Message, session: AsyncSession, state: FSM
                                              "email": email, "uid": uid})
         await message.answer(
             f"{_RLM}✅ کاربر پنل پیدا شد (uid: {_iso(uid)}).{warn_line}\n\n"
-            "حالا <b>درصد تخفیف</b> ریسلر را بفرستید (عدد ۰ تا ۹۹):",
+            "حالا <b>درصد کارمزد</b> ریسلر را بفرستید (عدد ۰ تا ۳۰۰ — روی قیمت "
+            "خریدِ پلن‌ها اعمال می‌شود):",
             parse_mode="HTML", reply_markup=_cancel_kb(user_id))
         return
 
@@ -352,9 +353,10 @@ async def cb_reseller_edit_discount(cb: CallbackQuery, session: AsyncSession, st
     await state.update_data(target_user_id=user_id, mode="disc")
     await _safe_edit(
         cb.message,
-        f"<b>ویرایش تخفیف ریسلر</b>\n\n"
-        f"تخفیف فعلی: {rs.reseller_discount_percent(user):g}٪\n"
-        "درصد جدید را بفرستید (عدد ۰ تا ۹۹). از کسر ساعتیِ بعدی اعمال می‌شود.",
+        f"<b>ویرایش کارمزد ریسلر</b>\n\n"
+        f"کارمزد فعلی: {rs.reseller_markup_percent(user):g}٪\n"
+        "نرخ ریسلر = قیمت خریدِ پلن × (۱ + کارمزد٪).\n"
+        "درصد جدید را بفرستید (عدد ۰ تا ۳۰۰). از کسر ساعتیِ بعدی اعمال می‌شود.",
         _cancel_kb(user_id),
     )
 
@@ -365,8 +367,8 @@ async def msg_reseller_discount(message: Message, session: AsyncSession, state: 
     user_id = int(data.get("target_user_id") or 0)
     mode = data.get("mode") or "disc"
     value = float(message.text)
-    if not (0 <= value <= 99):
-        await message.answer("درصد باید بین ۰ تا ۹۹ باشد — دوباره بفرستید.",
+    if not (0 <= value <= 300):
+        await message.answer("درصد کارمزد باید بین ۰ تا ۳۰۰ باشد — دوباره بفرستید.",
                              reply_markup=_cancel_kb(user_id))
         return
     await state.clear()
@@ -401,11 +403,12 @@ async def msg_reseller_discount(message: Message, session: AsyncSession, state: 
         for k in ("account_id", "email", "uid"):
             if pend.get(k) is not None:
                 cfg[k] = pend[k]
-        cfg["discount_percent"] = value
+        cfg["markup_percent"] = value
+        cfg.pop("discount_percent", None)  # کلید مدل قدیمی «تخفیف» حذف شود
         cfg["active"] = True
         cfg["activated_at"] = datetime.now(timezone.utc).isoformat()
         rs.set_reseller_cfg(user, cfg)
-        log_text = f"ریسلر فعال شد — ایمیل {cfg.get('email')} | تخفیف {value:g}٪"
+        log_text = f"ریسلر فعال شد — ایمیل {cfg.get('email')} | کارمزد {value:g}٪"
         ok_msg = (
             "✅ ریسلر فعال شد.\n\n"
             "VMهای موجود و جدیدِ این ایمیل در سینک بعدی (حداکثر ۱۰ دقیقه، یا با "
@@ -418,11 +421,12 @@ async def msg_reseller_discount(message: Message, session: AsyncSession, state: 
             await session.rollback()
             await message.answer("کانفیگ ریسلر یافت نشد.")
             return
-        old = rs.reseller_discount_percent(user)
-        cfg["discount_percent"] = value
+        old = rs.reseller_markup_percent(user)
+        cfg["markup_percent"] = value
+        cfg.pop("discount_percent", None)  # کلید مدل قدیمی «تخفیف» حذف شود
         rs.set_reseller_cfg(user, cfg)
-        log_text = f"تخفیف ریسلر از {old:g}٪ به {value:g}٪ تغییر کرد."
-        ok_msg = f"✅ تخفیف ریسلر: {value:g}٪"
+        log_text = f"کارمزد ریسلر از {old:g}٪ به {value:g}٪ تغییر کرد."
+        ok_msg = f"✅ کارمزد ریسلر: {value:g}٪"
 
     # قفل ردیف کاربر قبل از ارسال‌های تلگرامی آزاد شود
     await session.commit()
@@ -556,7 +560,7 @@ async def cb_reseller_servers(cb: CallbackQuery, session: AsyncSession, state: F
             f"{_RLM}   شروع بیلینگ: {_fmt_dt(s.created_at)} │ "
             f"ساخت در پنل: {_fmt_dt(ex.get('panel_created_at'))}"
         )
-    lines += ["", f"جمع نرخ ساعتی (با تخفیف): <b>{total:,.0f} تومان/ساعت</b>"]
+    lines += ["", f"جمع نرخ ساعتی (خرید + کارمزد): <b>{total:,.0f} تومان/ساعت</b>"]
     await _safe_edit(cb.message, _cap_msg("\n".join(lines)), _cancel_kb(user_id))
 
 

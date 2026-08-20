@@ -112,32 +112,35 @@ class BillingService:
         )).scalar_one_or_none()
         if locked is None or locked.billing_type != BillingType.HOURLY:
             return True
-        # قیمت لحظه‌ای از خودِ پلن — تغییر قیمت پلن فوراً روی سرورهای موجود اعمال می‌شود
-        from bot.services.currency import server_live_price
-        amount, currency = await server_live_price(self.session, server, hourly=True)
-        if amount <= 0:
-            return True
-        self._sync_price_copy(server, amount, currency, hourly=True)
-        # سرور ریسلر: قیمت = قیمت زنده‌ی پلن × (۱ − تخفیف ریسلر). تخفیف «بعد از»
-        # _sync_price_copy اعمال می‌شود تا کپیِ fallback قیمتِ کاملِ پلن بماند
-        # (وگرنه با حذف پلن، تخفیف دوبار اعمال می‌شد).
         if (server.extra_data or {}).get("reseller"):
-            from bot.services.reseller import reseller_discount_percent
+            # سرور ریسلر: نرخ = قیمت خریدِ پلن × (۱ + کارمزد٪) — مستقل از قیمت
+            # فروش ربات (تصمیم 2026-08-20). صفر (قیمت خرید تعریف‌نشده / پلن
+            # حذف‌شده / نرخ ارز ناموجود) = این ساعت بدون advance لنگر رد می‌شود
+            # تا بعد از تعیین تکلیف توسط ادمین جبران شود، نه بخشیده.
+            from bot.services.reseller import reseller_hourly_toman
             owner = await self.session.get(User, server.user_id)
-            if owner is not None:
-                d = reseller_discount_percent(owner)
-                if d:
-                    amount = amount * (1 - d / 100.0)
-        if currency == "irt":
-            amount_toman = amount
-        else:
-            amount_toman = await to_toman(self.session, amount, currency)
-            if amount_toman <= 0:
-                # نرخ ارز در دسترس نیست — این ساعت را رد نکن؛ بدون advance کردن
-                # last_billed_at برگرد تا اجرای بعدی (بعد از آپدیت نرخ) جبران شود.
-                logger.warning("charge_hourly: no %s rate — postponing billing for server %s",
-                               currency, server.id)
+            if owner is None:
                 return True
+            amount_toman = await reseller_hourly_toman(self.session, owner, server)
+            if amount_toman <= 0:
+                return True
+        else:
+            # قیمت لحظه‌ای از خودِ پلن — تغییر قیمت پلن فوراً روی سرورهای موجود اعمال می‌شود
+            from bot.services.currency import server_live_price
+            amount, currency = await server_live_price(self.session, server, hourly=True)
+            if amount <= 0:
+                return True
+            self._sync_price_copy(server, amount, currency, hourly=True)
+            if currency == "irt":
+                amount_toman = amount
+            else:
+                amount_toman = await to_toman(self.session, amount, currency)
+                if amount_toman <= 0:
+                    # نرخ ارز در دسترس نیست — این ساعت را رد نکن؛ بدون advance کردن
+                    # last_billed_at برگرد تا اجرای بعدی (بعد از آپدیت نرخ) جبران شود.
+                    logger.warning("charge_hourly: no %s rate — postponing billing for server %s",
+                                   currency, server.id)
+                    return True
 
         success = await self.debit(
             server.user_id, amount_toman,

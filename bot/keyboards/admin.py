@@ -167,6 +167,8 @@ def plan_detail_kb(plan_id: int, is_active: bool, provider_type=None) -> InlineK
     # گزینه‌های مخصوص ویرچولایزور فقط برای محصولات ویرچولایزور
     if provider_type is None or provider_type == _PT.VIRTUALIZOR:
         builder.button(text="Plan ID ویرچو", callback_data=f"admin:plan_edit:{plan_id}:provider_plan_id")
+        # مبنای بیلینگ ریسلر: نرخ = قیمت خرید × (۱ + کارمزد) — §۱۱.۸
+        builder.button(text="قیمت خرید (ریسلر)", callback_data=f"admin:plan_edit:{plan_id}:reseller_cost")
     toggle_text = "غیرفعال کردن" if is_active else "فعال کردن"
     builder.button(text=toggle_text, callback_data=f"admin:plan_toggle:{plan_id}")
     builder.button(text="حذف", callback_data=f"admin:plan_del:{plan_id}")

@@ -941,12 +941,24 @@ async def _render_plan_detail(cb: CallbackQuery, session: AsyncSession, plan_id:
         billing_lines.append(f"{fmt_price(plan.price_monthly, _cur)}/ماه")
     if _cur != "irt":
         billing_lines.append(f"واحد قیمت: {CURRENCY_LABELS[_cur]} (تبدیل با نرخ روز)")
-    # قیمت خرید (برای محصولات ایمپورت‌شده از API مثل هتزنر) — راهنمای مارجین‌گذاری
+    # قیمت خرید — برای محصولات API-دار (هتزنر و…) راهنمای مارجین است؛ برای
+    # ویرچولایزور مبنای بیلینگ ریسلر (cost_monthly + cost_currency دستی)
     _px = plan.extra_data or {}
     if _px.get("cost_hourly") or _px.get("cost_monthly"):
-        billing_lines.append(
-            f"قیمت خرید: €{_px.get('cost_hourly', 0):g}/ساعت · €{_px.get('cost_monthly', 0):g}/ماه"
-        )
+        _ccur = str(_px.get("cost_currency") or "").lower()
+        if _ccur == "irt":
+            billing_lines.append(
+                f"قیمت خرید: {float(_px.get('cost_monthly') or 0):,.0f} تومان/ماه (مبنای ریسلر)"
+            )
+        elif _ccur in ("usd", "eur", "rub"):
+            _sym = {"usd": "$", "eur": "€", "rub": "₽"}[_ccur]
+            billing_lines.append(
+                f"قیمت خرید: {_sym}{float(_px.get('cost_monthly') or 0):g}/ماه (مبنای ریسلر)"
+            )
+        else:
+            billing_lines.append(
+                f"قیمت خرید: €{_px.get('cost_hourly', 0):g}/ساعت · €{_px.get('cost_monthly', 0):g}/ماه"
+            )
 
     prov_name = "—"
     if plan.provider_account_id:
@@ -1464,6 +1476,33 @@ async def cb_plan_edit_start(cb: CallbackQuery, state: FSMContext, session: Asyn
         await cb.answer()
         return
 
+    # قیمت خرید ماهانه (مبنای بیلینگ ریسلر): «عدد + ارز» در یک پیام
+    if field == "reseller_cost":
+        _plan_chk = await session.get(ServerPlan, plan_id)
+        if _plan_chk and _plan_chk.provider_type != ProviderType.VIRTUALIZOR:
+            await cb.answer("این گزینه فقط برای محصولات ویرچولایزور است.", show_alert=True)
+            return
+        _ex = (_plan_chk.extra_data or {}) if _plan_chk else {}
+        _cur_now = str(_ex.get("cost_currency") or "irt")
+        _now_line = ""
+        if _ex.get("cost_monthly"):
+            _now_line = (f"مقدار فعلی: <b>{float(_ex.get('cost_monthly') or 0):g} "
+                         f"{CURRENCY_LABELS.get(_cur_now, 'تومان')}/ماه</b>\n\n")
+        await state.update_data(edit_plan_id=plan_id, edit_field=field)
+        await state.set_state(PlanFSM.edit_value)
+        await cb.message.edit_text(
+            "<b>قیمت خرید ماهانه — مبنای بیلینگ ریسلر</b>\n\n"
+            + _now_line +
+            "قیمت خرید «ماهانه» + ارز را در یک پیام بفرستید:\n"
+            "<i>مثال: <code>3.67 eur</code> یا <code>4.1 usd</code> یا "
+            "<code>2500000</code> (بدون ارز = تومان)</i>\n\n"
+            "نرخ ریسلر = این قیمت ÷ ۷۲۰ × (۱ + کارمزد٪) — تبدیل با نرخ روز.\n"
+            "برای حذف قیمت خرید، <code>0</code> بفرستید.",
+            parse_mode="HTML", reply_markup=cancel_admin_kb(),
+        )
+        await cb.answer()
+        return
+
     # ویرایش قیمت: اول واحد ارز پرسیده می‌شود (قابل تغییر از یورو به تومان/دلار و برعکس)
     if field in ("price_hourly", "price_monthly"):
         _plan = await session.get(ServerPlan, plan_id)
@@ -1697,6 +1736,24 @@ async def plan_edit_value(message: Message, state: FSMContext, session: AsyncSes
             synced = await _propagate_plan_price(session, plan)
             if synced:
                 warn += f"\n\nقیمت جدید روی {synced} سرور فعال مشتری‌ها هم اعمال شد."
+        elif field == "reseller_cost":
+            # «عدد [irt|usd|eur]» — بدون ارز = تومان؛ 0 = حذف قیمت خرید
+            _p = raw.lower().split()
+            val = float(_p[0].replace(",", "."))
+            cur = _p[1] if len(_p) > 1 else "irt"
+            if cur not in CURRENCY_LABELS:
+                raise ValueError("bad currency")
+            extra = dict(plan.extra_data or {})
+            if val > 0:
+                extra["cost_monthly"] = val
+                extra["cost_currency"] = cur
+                warn = (f"\n\nنرخ پایه ریسلر: {val:g} {CURRENCY_LABELS[cur]}"
+                        f" ÷ ۷۲۰ در ساعت (+ کارمزد، با نرخ روز).")
+            else:
+                extra.pop("cost_monthly", None)
+                extra.pop("cost_currency", None)
+                warn = "\n\n⚠️ قیمت خرید حذف شد — بیلینگ ریسلریِ این پلن تا تعیین قیمت متوقف می‌ماند."
+            plan.extra_data = extra
         elif field in ("ram", "cpu", "disk", "bandwidth"):
             setattr(plan, field, int(raw))
         else:

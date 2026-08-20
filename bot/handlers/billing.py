@@ -285,8 +285,9 @@ async def cb_tx_srv_detail(cb: CallbackQuery, user: User, session: AsyncSession)
     total = sum(t.amount for t in hourly_txs)
 
     # سرورِ با قیمت ارزی (دلار/یورو): نرخ ساعتیِ تعریف‌شده به همان ارز نمایش داده می‌شود.
-    # سرور ریسلر مستثنی: کپیِ price_hourly عمداً بدون تخفیف است (ضد دابل-تخفیف)
-    # و نمایش ارزی‌اش با مبلغ واقعیِ کسرشده تناقض پیدا می‌کرد — تومانی نشان بده.
+    # سرور ریسلر مستثنی: بیلینگش بر مبنای «قیمت خرید پلن + کارمزد» است و کپیِ
+    # price_hourly (قیمت فروش) ربطی به مبلغ کسرشده ندارد — تومانی از روی
+    # تراکنش‌ها نشان بده تا با واقعیت نخواند تناقض پیش نیاید.
     from bot.services.currency import CURRENCY_LABELS, obj_currency
     _cur = obj_currency(server) if server else "irt"
     _is_rsl = bool((server.extra_data or {}).get("reseller")) if server else False

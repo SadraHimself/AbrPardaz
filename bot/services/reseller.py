@@ -2,7 +2,8 @@
 
 ریسلر کاربر رباتی است که با دسترسی API ادمینِ خودش VMهایش را مستقیم روی پنل
 ویرچولایزور می‌سازد؛ همه زیر یک ایمیل (کاربر پنل) مشخص. نقش ربات فقط:
-کشف/ثبت VMها، کسر ساعتیِ تخفیف‌دار از کیف پول و فاکتور. هیچ عملیات مدیریتی یا
+کشف/ثبت VMها، کسر ساعتی به نرخ «قیمت خریدِ پلن × (۱ + کارمزد٪)» و فاکتور.
+هیچ عملیات مدیریتی یا
 مخربی (حذف/ساسپند/…) علیه VMهای ریسلر انجام نمی‌شود — «سرور رفت که رفت» فقط
 با غیب‌شدن از خود پنل تشخیص داده می‌شود و صرفاً رکورد DELETED می‌شود.
 
@@ -56,13 +57,20 @@ def is_reseller_server(server: Server) -> bool:
     return bool((server.extra_data or {}).get("reseller"))
 
 
-def reseller_discount_percent(user: User) -> float:
-    """درصد تخفیف معتبر (۰ تا ۹۹)؛ هر مقدار خراب = صفر."""
+def reseller_markup_percent(user: User) -> float:
+    """درصد کارمزد معتبر (۰ تا ۳۰۰)؛ مقدار خراب = صفر.
+
+    مدل قیمت (تصمیم 2026-08-20): نرخ ریسلر = قیمت خریدِ پلن × (۱ + کارمزد٪) —
+    مستقل از قیمت فروش ربات. کلید قدیمی discount_percent (مدل اولیه‌ی «تخفیف
+    روی قیمت فروش») به‌عنوان fallback خوانده می‌شود چون عددِ توافق همان است.
+    """
+    cfg = get_reseller_cfg(user)
+    raw = cfg.get("markup_percent", cfg.get("discount_percent"))
     try:
-        d = float(get_reseller_cfg(user).get("discount_percent") or 0)
+        m = float(raw or 0)
     except (TypeError, ValueError):
         return 0.0
-    return d if 0 <= d < 100 else 0.0
+    return m if 0 <= m <= 300 else 0.0
 
 
 def parse_panel_time(val) -> Optional[str]:
@@ -93,10 +101,17 @@ async def match_plan(session: AsyncSession, account_id: int, row: dict) -> Optio
             ServerPlan.provider_account_id == account_id,
         )
     )).scalars().all())
-    # بیلینگ ریسلر فقط ساعتی است — پلن بدون قیمت ساعتی نباید مچ شود، وگرنه VM
-    # با نرخ صفر «مچ‌شده» ثبت می‌شود و شبکه‌ی امنیتی plan_unmatched (هشدار ادمین
-    # + rematch خودکار) بی‌صدا دور زده می‌شود
-    plans = [p for p in plans if (p.price_hourly or 0) > 0]
+    # بیلینگ ریسلر بر مبنای «قیمت خرید» پلن است — پلن بدون cost_monthly نباید
+    # مچ شود، وگرنه VM با نرخ صفر «مچ‌شده» ثبت می‌شود و شبکه‌ی امنیتی
+    # plan_unmatched (هشدار ادمین + rematch خودکار) بی‌صدا دور زده می‌شود.
+    # نکته: پلنِ «فقط-ریسلری» ممکن است (plid + قیمت خرید، بدون قیمت فروش و
+    # غیرفعال) — در فروشگاه دیده نمی‌شود ولی برای مچ ریسلر معتبر است.
+    def _has_cost(p) -> bool:
+        try:
+            return float(((p.extra_data or {}).get("cost_monthly")) or 0) > 0
+        except (TypeError, ValueError):
+            return False
+    plans = [p for p in plans if _has_cost(p)]
 
     plid = str(row.get("plid") or "").strip()
     if plid and plid != "0":
@@ -318,25 +333,49 @@ async def sync_user_reseller_servers(
 
 # ── قیمت/بدهی ساعتی ──────────────────────────────────────────────────────────
 
-async def reseller_hourly_toman(session: AsyncSession, user: User, server: Server) -> float:
-    """نرخ ساعتیِ تخفیف‌خورده‌ی یک سرور ریسلر به تومان (نرخ لحظه‌ای؛ 0 = نامشخص)."""
-    from bot.services.currency import server_live_price, to_toman
+async def plan_cost_hourly_toman(session: AsyncSession, plan) -> float:
+    """قیمت خریدِ ساعتی یک پلن به تومان (cost_monthly ÷ ۷۲۰ با نرخ روز).
+
+    قیمت خرید در extra_data پلن: `cost_monthly` + `cost_currency` (پیش‌فرض irt؛
+    ارزِ خرید مستقل از ارزِ فروش پلن است). 0 = تعریف‌نشده یا نرخ ارز ناموجود.
+    """
+    from bot.services.currency import to_toman
+    ex = getattr(plan, "extra_data", None) or {}
     try:
-        amount, cur = await server_live_price(session, server, hourly=True)
-        amount = float(amount or 0)
-    except Exception:
+        monthly = float(ex.get("cost_monthly") or 0)
+    except (TypeError, ValueError):
         return 0.0
-    if amount <= 0:
+    if monthly <= 0:
         return 0.0
-    d = reseller_discount_percent(user)
-    if d:
-        amount = amount * (1 - d / 100.0)
+    hourly = monthly / 720.0
+    cur = str(ex.get("cost_currency") or "irt").lower()
     if cur == "irt":
-        return amount
+        return hourly
     try:
-        return float(await to_toman(session, amount, cur) or 0)
+        return float(await to_toman(session, hourly, cur) or 0)
     except Exception:
         return 0.0
+
+
+async def reseller_hourly_toman(session: AsyncSession, user: User, server: Server) -> float:
+    """نرخ ساعتی ریسلر به تومان: قیمت خریدِ پلن × (۱ + کارمزد٪) — زنده؛ 0 = نامشخص.
+
+    مستقل از قیمت فروش ربات (server_live_price اینجا نقشی ندارد). پلن حذف‌شده
+    یا بدون قیمت خرید → 0 → لنگر جلو نمی‌رود تا ادمین تعیین تکلیف کند.
+    """
+    plan_id = (server.extra_data or {}).get("plan_id")
+    if not plan_id:
+        return 0.0
+    try:
+        plan = await session.get(ServerPlan, plan_id)
+    except Exception:
+        return 0.0
+    if plan is None:
+        return 0.0
+    cost = await plan_cost_hourly_toman(session, plan)
+    if cost <= 0:
+        return 0.0
+    return cost * (1 + reseller_markup_percent(user) / 100.0)
 
 
 async def get_reseller_servers(session: AsyncSession, user_id: int,
@@ -349,7 +388,7 @@ async def get_reseller_servers(session: AsyncSession, user_id: int,
 
 
 async def compute_reseller_owed(session: AsyncSession, user: User) -> tuple[int, float]:
-    """(مجموع ساعت‌های عقب‌افتاده، مبلغ تقریبی تومان با تخفیف) سرورهای ریسلر فعال."""
+    """(مجموع ساعت‌های عقب‌افتاده، مبلغ تقریبی تومان با کارمزد) سرورهای ریسلر فعال."""
     now = datetime.now(timezone.utc)
     hours_total, toman_total = 0, 0.0
     for s in await get_reseller_servers(session, user.id):

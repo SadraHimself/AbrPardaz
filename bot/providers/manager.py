@@ -6,6 +6,7 @@ from .base import BaseProvider
 from .gcore import GcoreProvider
 from .hetzner import HetznerProvider
 from .rootvds import RootVDSProvider
+from .scaleway import ScalewayProvider
 from .timeweb import TimewebProvider
 from .virtualizor import VirtualizorProvider
 
@@ -28,4 +29,9 @@ def get_provider(account: ProviderAccount) -> BaseProvider:
         return TimewebProvider(api_token=account.api_key or "")
     if account.provider_type == ProviderType.ROOTVDS:
         return RootVDSProvider(api_token=account.api_key or "")
+    if account.provider_type == ProviderType.SCALEWAY:
+        return ScalewayProvider(
+            api_token=account.api_key or "",
+            project_id=(account.extra_config or {}).get("project_id") or "",
+        )
     raise ValueError(f"Unsupported provider type: {account.provider_type}")

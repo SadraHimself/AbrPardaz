@@ -42,6 +42,7 @@ class ProviderType(str, enum.Enum):
     GCORE = "gcore"
     TIMEWEB = "timeweb"
     ROOTVDS = "rootvds"
+    SCALEWAY = "scaleway"
 
 
 class TransactionType(str, enum.Enum):

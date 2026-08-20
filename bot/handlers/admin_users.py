@@ -19,7 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.config import settings
 from bot.database.models import (
     BillingType, DiscountCode, PaymentOrder, ProviderAccount, ProviderType, Server,
-    ServerStatus, SuspendReason, Transaction, TransactionType, User, UserStatus,
+    ServerPlan, ServerStatus, SuspendReason, Transaction, TransactionType, User,
+    UserStatus,
 )
 from bot.keyboards.admin import (
     back_to_admin_kb, cancel_admin_kb, confirm_kb, user_detail_kb, users_list_kb,
@@ -807,7 +808,8 @@ async def _render_admin_server(msg, session: AsyncSession, server: Server):
     # جیکور: rebuild/تغییر IP/آیپی اضافه در API وجود ندارد → دکمه‌ها مخفی
     # تایم‌وب: rebuild دارد ولی تغییر IP/آیپی اضافه در نسخه اول ارائه نمی‌شود
     _is_gcore = server.provider_type == ProviderType.GCORE
-    _no_ip_ops = server.provider_type in (ProviderType.GCORE, ProviderType.TIMEWEB)
+    _no_ip_ops = server.provider_type in (ProviderType.GCORE, ProviderType.TIMEWEB,
+                                          ProviderType.SCALEWAY)
     _rows = [
         [
             InlineKeyboardButton(text="روشن", callback_data=f"admin:usrva:{sid}:start"),
@@ -1277,7 +1279,17 @@ async def cb_admin_usrv_rebuild(cb: CallbackQuery, session: AsyncSession):
     await cb.answer()
     try:
         prov = get_provider(account)
-        os_list = await _ai.wait_for(prov.list_os_templates(), timeout=15)
+        if server.provider_type == ProviderType.SCALEWAY:
+            # اسکیل‌وی: لیست ایمیج per-zone و per-architecture است
+            _pl = await session.get(ServerPlan, (server.extra_data or {}).get("plan_id")) \
+                if (server.extra_data or {}).get("plan_id") else None
+            os_list = await _ai.wait_for(prov.list_os_templates(
+                location=server.location,
+                commercial_type=(_pl.provider_plan_id if _pl else None),
+                arch=((_pl.extra_data or {}).get("arch") if _pl else None),
+            ), timeout=30)
+        else:
+            os_list = await _ai.wait_for(prov.list_os_templates(), timeout=15)
     except Exception as e:
         await cb.message.answer(f"خطا در دریافت لیست OS: {e}")
         return

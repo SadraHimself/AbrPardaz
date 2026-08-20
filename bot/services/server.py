@@ -49,6 +49,10 @@ class ServerService:
         # رمز واقعیِ آخرین rebuild/change_password — برخی سرویس‌دهنده‌ها (هتزنر)
         # رمز دلخواه نمی‌پذیرند و رمز تولیدی خودشان را برمی‌گردانند
         self.last_root_password: str | None = None
+        # نام OSِ آخرین ریبیلد — بعضی سرویس‌دهنده‌ها (اسکیل‌وی) بعد از نصب مجدد
+        # هنوز ایمیجِ زمانِ ساخت را گزارش می‌کنند، پس رکورد سرور باید از اینجا
+        # به‌روز شود نه از get_server
+        self.last_os_name: str | None = None
 
     async def _get_account(self, account_id: int) -> ProviderAccount:
         result = await self.session.execute(
@@ -100,6 +104,14 @@ class ServerService:
             # روت‌وی‌دی‌اس تک-اکانتی است (تصمیم 2026-07-26)
             from bot.services.rootvds_settings import pick_account as rootvds_pick
             account = await rootvds_pick(self.session)
+            if not account:
+                raise RuntimeError(
+                    "ظرفیت ساخت سرور در حال حاضر تکمیل است — لطفاً بعداً تلاش کنید"
+                )
+        elif plan.provider_type == ProviderType.SCALEWAY:
+            # اسکیل‌وی تک-اکانتی است (تصمیم 2026-08-20)
+            from bot.services.scaleway_settings import pick_account as scaleway_pick
+            account = await scaleway_pick(self.session)
             if not account:
                 raise RuntimeError(
                     "ظرفیت ساخت سرور در حال حاضر تکمیل است — لطفاً بعداً تلاش کنید"
@@ -304,6 +316,9 @@ class ServerService:
             if ok:
                 real = getattr(provider, "last_root_password", None) or kwargs.get("new_password", "")
                 self.last_root_password = real or None
+                self.last_os_name = getattr(provider, "last_os_name", None)
+                if self.last_os_name:
+                    server.os_name = self.last_os_name
                 if real:
                     _extra = dict(server.extra_data or {})
                     _extra["root_password"] = real

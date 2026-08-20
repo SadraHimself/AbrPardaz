@@ -841,7 +841,8 @@ async def group_edit_name(message: Message, state: FSMContext, session: AsyncSes
     # ذخیره‌شده هم باید همراهش عوض شود — وگرنه ایمپورت/سینکِ بعدی گروهی با اسمِ
     # قدیمی از نو می‌سازد و محصولات جدید آنجا می‌روند (دوپارگی کاتالوگ).
     from bot.database.models import BotSettings
-    for _key in ("hetzner_group", "gcore_group", "timeweb_group", "rootvds_group"):
+    for _key in ("hetzner_group", "gcore_group", "timeweb_group", "rootvds_group",
+                 "scaleway_group"):
         _row = await session.get(BotSettings, _key)
         if _row and (_row.value or "") == old_name:
             _row.value = new_name

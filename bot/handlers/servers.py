@@ -39,6 +39,10 @@ import html as _html
 # (مشتری فقط برندِ خودِ ما را می‌بیند). _esc در این فایل روی متنِ خطا/پیامِ
 # مشتری صدا زده می‌شود → یک نقطه‌ی مرکزی برای پاک‌سازی.
 _BRAND_HIDE = (
+    ("Scaleway API", "خطای سرویس‌دهنده"),
+    ("Scaleway", "سرویس‌دهنده"),
+    ("scaleway", "سرویس‌دهنده"),
+    ("اسکیل‌وی", "سرویس‌دهنده"),
     ("RootVDS API", "خطای سرویس‌دهنده"),
     ("RootVDS", "سرویس‌دهنده"),
     ("rootvds", "سرویس‌دهنده"),
@@ -97,6 +101,7 @@ _HZ_LOC_META = {
 # پرچم پریمیوم لوکیشن‌های تایم‌وب — بر اساس کشورِ اسلاگ (ru-3 → روسیه؛
 # همه‌ی شهرهای روسیه یک پرچم دارند)
 _TW_COUNTRY_FLAGS = {
+    "fr": "5931269906434624310",   # فرانسه (اسلاگ‌های fr-par-* اسکیل‌وی)
     "ru": "5449408995691341691",   # روسیه (همه‌ی ریجن‌ها)
     "de": "5409360418520967565",   # آلمان
     "nl": "5411124743841524806",   # هلند
@@ -574,7 +579,9 @@ async def _bg_rebuild_and_notify(bot, chat_id: int, server_db_id: int, user_db_i
                     info = await get_provider(account).get_server(server.provider_server_id)
                     if (info.extra_data or {}).get("username"):
                         _extra["username"] = info.extra_data["username"]
-                    if info.os_name:
+                    # اگر خودِ ریبیلد نام OS جدید را داده، همان معتبر است —
+                    # بعضی سرویس‌دهنده‌ها هنوز ایمیجِ زمانِ ساخت را گزارش می‌کنند
+                    if info.os_name and not svc.last_os_name:
                         server.os_name = info.os_name
             except Exception:
                 pass
@@ -632,7 +639,8 @@ async def cb_server_rebuild_do(cb: CallbackQuery, user: User, session: AsyncSess
         # می‌آید): اعلام فوری شروع + ادامه در پس‌زمینه و ارسال یوزرنیم/رمز در
         # پایان. ویرچولایزور (رمز را خودمان تعیین می‌کنیم) و هتزنر (رمز آنی در
         # پاسخ) مثل قبل همان لحظه رمز را می‌دهند.
-        if server.provider_type in (ProviderType.TIMEWEB, ProviderType.ROOTVDS):
+        if server.provider_type in (ProviderType.TIMEWEB, ProviderType.ROOTVDS,
+                                    ProviderType.SCALEWAY):
             await cb.message.answer(
                 '<tg-emoji emoji-id="4987757216040747796">💎</tg-emoji> '
                 "<b>ریبیلد شروع شد.</b>\n\n"
@@ -1929,7 +1937,7 @@ async def _select_category(cb: CallbackQuery, user: User, state: FSMContext,
 
     # گروه‌های چند-لوکیشنه (هتزنر/جیکور/تایم‌وب/روت): اول لوکیشن، بعد محصولات همان لوکیشن
     _MULTI_LOC = (ProviderType.HETZNER, ProviderType.GCORE, ProviderType.TIMEWEB,
-                  ProviderType.ROOTVDS)
+                  ProviderType.ROOTVDS, ProviderType.SCALEWAY)
     if any(p.provider_type in _MULTI_LOC for p in plans):
         gid = _grp.id if _grp else 0
         locs = sorted({p.location for p in plans if p.location})
@@ -2482,6 +2490,19 @@ async def _fetch_os_list(session: AsyncSession, account: ProviderAccount, data: 
         # (رفتار سایت جیکور: انتخاب ویندوز → دیسک ۴۰ گیگ + هزینه لایسنس)
         return await asyncio.wait_for(
             prov.list_os_templates(location=str(_rid)), timeout=20)
+    if account.provider_type == ProviderType.SCALEWAY:
+        # اسکیل‌وی: ایمیج‌ها per-zone و per-architecture اند و هر ایمیج فقط با
+        # مجموعه‌ای از تایپ‌ها سازگار است (`compatible_commercial_types`) —
+        # فیلتر را خودِ provider با همین دو پارامتر انجام می‌دهد.
+        _plan = await session.get(ServerPlan, data.get("plan_id"))
+        if not _plan or not _plan.location:
+            return []
+        return await asyncio.wait_for(
+            prov.list_os_templates(
+                location=_plan.location,
+                commercial_type=_plan.provider_plan_id or None,
+                arch=(_plan.extra_data or {}).get("arch"),
+            ), timeout=30)
     if account.provider_type == ProviderType.TIMEWEB:
         # تایم‌وب: لیست OS سراسری است؛ دیسک تعرفه ثابت است (بامپ ندارد) →
         # OSهایی که min_disk شان از دیسک پلن بیشتر است نمایش داده نمی‌شوند.
@@ -3157,7 +3178,7 @@ def _friendly_fail_reason(err: str) -> str:
     پیام‌های فارسیِ از قبل کاربرپسند (ظرفیت/موجودی/سازگاری) همان‌طور می‌مانند."""
     e = (err or "").strip()
     # موجودیِ اکانتِ ما (داخلی) کافی نیست — به مشتری فقط «ظرفیت موقتاً پر است»
-    if "__TW_FUNDS__" in e or "__RV_FUNDS__" in e:
+    if "__TW_FUNDS__" in e or "__RV_FUNDS__" in e or "__SCW_QUOTA__" in e:
         return "ظرفیت ساخت سرور موقتاً تکمیل است — لطفاً کمی بعد دوباره تلاش کنید"
     # سهمیه‌ی روزانه‌ی IP سرویس‌دهنده (داخلی) — پیامِ عمومی
     if "__TW_IP_LIMIT__" in e:
@@ -3168,7 +3189,8 @@ def _friendly_fail_reason(err: str) -> str:
     if "مهلت انتظار" in e or "timeout" in e.lower():
         return ("زمان آماده‌سازی و تحویل سرویس بیش از حد مجاز طول کشید و سفارش "
                 "به‌صورت خودکار لغو شد")
-    if e.startswith(("Timeweb API", "Gcore API", "Hetzner API", "RootVDS API")) \
+    if e.startswith(("Timeweb API", "Gcore API", "Hetzner API", "RootVDS API",
+                     "Scaleway API")) \
             or "retry limit" in e:
         return "بروز مشکل موقت در سرویس‌دهنده"
     return e[:200] if e else "بروز مشکل موقت در سرویس‌دهنده"
@@ -3395,6 +3417,13 @@ async def _bg_build_and_deliver(bot, chat_id: int, user_db_id: int, plan_db_id: 
                         await LogService(bot, session).log_rootvds_funds(hostname)
                     except Exception:
                         pass
+                elif _ptype == ProviderType.SCALEWAY and "__SCW_QUOTA__" in _emsg:
+                    # سهمیه‌ی per-Organization اسکیل‌وی پر شده — فقط با تیکت باز می‌شود
+                    try:
+                        await LogService(bot, session).log_scaleway_quota(
+                            hostname, plan=_plan_pid)
+                    except Exception:
+                        pass
                 elif _ptype == ProviderType.TIMEWEB and "no_paid" in _emsg.lower():
                     try:
                         await LogService(bot, session).log_timeweb_unpaid(
@@ -3537,7 +3566,7 @@ async def cb_confirm_purchase(cb: CallbackQuery, user: User, state: FSMContext, 
     # سرویس‌دهنده‌های با ساخت طولانی (جیکور/تایم‌وب/روت): پیام «در حال ساخت» فوری،
     # و ادامه‌ی ساخت/کسر/تحویل در پس‌زمینه با سشن مستقل (سشن هندلر بسته می‌شود)
     if plan.provider_type in (ProviderType.GCORE, ProviderType.TIMEWEB,
-                              ProviderType.ROOTVDS):
+                              ProviderType.ROOTVDS, ProviderType.SCALEWAY):
         await cb.message.edit_text(
             '‏<tg-emoji emoji-id="5258503720928288433">🔔</tg-emoji> '
             "سرویس شما در حال ساخت است و بین ۱۰ تا ۱۵ دقیقه دیگر برای شما ارسال میشود.\n"

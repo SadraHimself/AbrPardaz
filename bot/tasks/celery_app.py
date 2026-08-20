@@ -97,6 +97,12 @@ app.conf.update(
             "task": "bot.tasks.server.sync_rootvds_catalog",
             "schedule": crontab(minute="15,45"),
         },
+        # هر ۳۰ دقیقه قیمت خرید + موجودی (availability) کاتالوگ اسکیل‌وی sync می‌شود
+        # (آفست از بقیه: هتزنر ۱۰,۴۰ · جیکور ۲۰,۵۰ · تایم‌وب ۵,۳۵ · روت ۱۵,۴۵)
+        "scaleway-catalog-sync": {
+            "task": "bot.tasks.server.sync_scaleway_catalog",
+            "schedule": crontab(minute="25,55"),
+        },
         # ریسلر: کشف/ثبت VMهای پنل + حذف two-strike + وصول بدهی محاسبه گذشته
         # (دقیقه‌های 4,14,… — دور از سینک‌های کاتالوگ)
         "reseller-sync": {

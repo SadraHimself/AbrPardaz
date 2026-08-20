@@ -358,10 +358,22 @@ class LogService:
             "برای ادامه‌ی فروش، حساب rootvds.ru را شارژ کن.",
         )
 
+    async def log_scaleway_quota(self, hostname: str, plan: str = "") -> None:
+        await self._send(
+            "server",
+            f"⛔ <b>ساخت سرور Scaleway رد شد — سهمیه (quota) پر است</b>\n\n"
+            f"سرور <code>{hostname}</code>{f' ({plan})' if plan else ''} ساخته نشد "
+            "و وجه کاربر کامل برگشت.\n"
+            "کوتای Scaleway per-Organization و برای هر نوع سرور جداست (مثلاً فقط "
+            "چند عدد از یک تایپ). افزایش آن فقط با <b>تیکت پشتیبانی</b> و پس از "
+            "تأیید هویت ممکن است.\n"
+            "تا آن موقع یا لیمیت VM ربات را کم کن یا این تایپ را از فروش بردار.",
+        )
+
     # نامِ نمایشیِ هر سرویس‌دهنده برای پیام‌های قطعی/وصل
     _PROVIDER_LABEL = {
         "virtualizor": "ویرچولایزور", "hetzner": "هتزنر", "gcore": "جیکور",
-        "timeweb": "تایم‌وب", "rootvds": "روت",
+        "timeweb": "تایم‌وب", "rootvds": "روت", "scaleway": "اسکیل‌وی",
     }
 
     @classmethod

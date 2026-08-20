@@ -61,6 +61,13 @@ async def on_startup(bot: Bot) -> None:
             ))
     except Exception as e:
         logger.warning("enum migration (ROOTVDS) skipped: %s", e)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(_sql_text(
+                "ALTER TYPE providertype ADD VALUE IF NOT EXISTS 'SCALEWAY'"
+            ))
+    except Exception as e:
+        logger.warning("enum migration (SCALEWAY) skipped: %s", e)
 
     # drift ستون: servers.provider_account_id در دیتابیس‌های قدیمی NOT NULL است
     # ولی مدل Optional است (لازم برای حذف اکانت provider). با lock_timeout تا

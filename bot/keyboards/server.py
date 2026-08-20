@@ -56,6 +56,9 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
     is_gcore = server.provider_type == ProviderType.GCORE
     # تایم‌وب: ریبیلد و تغییر رمز دارد؛ تغییر IP/آیپی اضافه/اسنپ‌شات در نسخه اول نه
     is_timeweb = server.provider_type == ProviderType.TIMEWEB
+    # اسکیل‌وی: ریبیلد دارد (تعویض دیسک بوت)؛ تغییر رمز/تغییر IP/آیپی اضافه/
+    # اسنپ‌شات در نسخه اول ارائه نمی‌شوند
+    is_scaleway = server.provider_type == ProviderType.SCALEWAY
     # ⚠️ در سطح تابع تعریف می‌شود: شاخه‌ی SUSPENDED هم به آن نیاز دارد
     # (اگر داخل شاخه‌ی ACTIVE بماند → UnboundLocalError روی سرورهای تعلیق‌شده)
     is_virt = server.provider_type == ProviderType.VIRTUALIZOR
@@ -75,6 +78,10 @@ def server_actions_kb(server: Server) -> InlineKeyboardMarkup:
         # سیاست IP: ویرچولایزور فقط ماهانه؛ هتزنر (IP رایگان) ساعتی و ماهانه
         if is_gcore:
             pass  # قابلیت‌های اختیاری جیکور در نسخه اول ارائه نمی‌شوند
+        elif is_scaleway:
+            rows.append([
+                _btn("آمار مصرف", f"srv_usage:{sid}", icon="5936143551854285132"),
+            ])
         elif is_timeweb:
             rows.append([
                 _btn("تغییر رمز", f"srv_chpass:{sid}", icon="4904500559203009298"),

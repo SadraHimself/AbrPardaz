@@ -32,6 +32,7 @@ def provider_types_kb() -> InlineKeyboardMarkup:
     builder.button(text="جیکور (Gcore)", callback_data="admin:gcore")
     builder.button(text="تایم‌وب (Timeweb)", callback_data="admin:timeweb")
     builder.button(text="روت (RootVDS)", callback_data="admin:rootvds")
+    builder.button(text="اسکیل‌وی (Scaleway)", callback_data="admin:scaleway")
     builder.button(text="بازگشت", callback_data="admin:plans")
     builder.adjust(1)
     return builder.as_markup()

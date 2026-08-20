@@ -6,6 +6,7 @@ from .admin_broadcast import router as admin_broadcast_router
 from .admin_gcore import router as admin_gcore_router
 from .admin_hetzner import router as admin_hetzner_router
 from .admin_rootvds import router as admin_rootvds_router
+from .admin_scaleway import router as admin_scaleway_router
 from .admin_timeweb import router as admin_timeweb_router
 from .admin_reseller import router as admin_reseller_router
 from .admin_restore import router as admin_restore_router
@@ -37,5 +38,6 @@ def setup_routers(dp):
     dp.include_router(admin_gcore_router)
     dp.include_router(admin_timeweb_router)
     dp.include_router(admin_rootvds_router)
+    dp.include_router(admin_scaleway_router)
     dp.include_router(admin_restore_router)
     dp.include_router(admin_router)

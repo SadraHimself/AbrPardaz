@@ -633,8 +633,11 @@ class VirtualizorProvider(BaseProvider):
           • بعد از اعمال، سهمیه‌ی ترافیک بازخوانی و اگر عوض شده بود برگردانده
             می‌شود (پنل ممکن است بی‌خبر آن را تغییر دهد).
 
-        خروجی: {"ram":int|None, "cores":int|None, "disk":int|None,
-                 "disk_skipped":bool, "bandwidth_restored":bool}
+        خروجی: {"ram":int, "cores":int, "disk":int, "disk_req":int,
+                 "disk_skipped":bool, "changed":bool, "unverified":[str],
+                 "verify_read_failed":bool, "traffic_alert":str}
+        تأیید poll‌دار است (تا ~۲۴ ثانیه)؛ caller باید «هر» unverified یا
+        verify_read_failed را شکست حساب کند (برگشت وجه).
         """
         def _i(v) -> int:
             try:
@@ -696,29 +699,38 @@ class VirtualizorProvider(BaseProvider):
         #    برود، وگرنه caller وجه را برمی‌گرداند در حالی که منابع اعمال شده‌اند
         result = {"ram": cur_ram, "cores": cur_cores, "disk": _i(before.get("space")),
                   "disk_req": disk_req, "disk_skipped": disk_skipped, "changed": True,
-                  "unverified": list(want.keys()), "traffic_alert": ""}
+                  "unverified": list(want.keys()), "verify_read_failed": False,
+                  "traffic_alert": ""}
+        # تأیید با poll (تا ~۲۴ ثانیه): پنل گاهی با تأخیر اعمال می‌کند — «هنوز
+        # ننشسته» نباید با «اعمال‌نشده» اشتباه شود. باگ قبلی: یک‌بار خواندنِ فوری
+        # + گِیتِ شُلِ «≥۲ تأییدنشده» در caller → ارتقاءِ اعمال‌نشده «موفق» اعلام
+        # می‌شد (DB پلن جدید، پنل پلن قدیمی).
         after: dict = {}
-        for attempt in range(3):
+        a_ram = a_cores = 0
+        for attempt in range(6):
             if attempt:
-                await asyncio.sleep(2)
+                await asyncio.sleep(4)
             try:
-                after = await self._vs_row(server_id)
+                cur = await self._vs_row(server_id)
             except Exception:
-                after = {}
+                cur = {}
+            if not cur:
                 continue
-            if after:
+            after = cur
+            a_ram, a_cores = _i(after.get("ram")), _i(after.get("cores"))
+            result["unverified"] = [
+                k for k, v in want.items()
+                if (a_ram if k == "ram" else a_cores) < v
+            ]
+            if not result["unverified"]:
                 break
         if not after:
             logger.warning("apply_resources: verify read failed for vps %s", server_id)
+            result["verify_read_failed"] = True
             return result
 
-        a_ram, a_cores = _i(after.get("ram")), _i(after.get("cores"))
         result["ram"], result["cores"] = a_ram or cur_ram, a_cores or cur_cores
         result["disk"] = _i(after.get("space")) or result["disk"]
-        result["unverified"] = [
-            k for k, v in want.items()
-            if (a_ram if k == "ram" else a_cores) < v
-        ]
 
         # ── ترافیک: نه سهمیه نه مصرف نباید عوض شده باشد ──
         bw_after = _i(after.get("bandwidth"))

@@ -1206,15 +1206,35 @@ async def cb_srv_upgrade_do(cb: CallbackQuery, user: User, session: AsyncSession
             prov.apply_resources(server.provider_server_id,
                                  ram=new_plan.ram, cores=new_plan.cpu,
                                  disk=new_plan.disk),
-            timeout=90)
-        # هیچ‌کدام از تغییرات درخواستی تأیید نشد → مثل شکست رفتار کن (برگشت وجه)
-        if applied.get("changed") and len(applied.get("unverified") or []) >= 2:
-            raise RuntimeError("پنل تغییر منابع را اعمال نکرد.")
+            timeout=120)
+        # گِیتِ سخت‌گیر (فیکس باگ «موفق ولی اعمال‌نشده»): تأیید حالا poll‌دار است
+        # (تا ~۲۴ ثانیه داخل provider)، پس «حتی یک» منبعِ تأییدنشده = شکست واقعی
+        # → برگشت وجه. گِیتِ قبلی (≥۲) ارتقاءِ نصفه/اعمال‌نشده را موفق اعلام می‌کرد.
+        if applied.get("verify_read_failed"):
+            raise RuntimeError("تأیید اعمال منابع از پنل ممکن نشد")
+        if applied.get("changed") and (applied.get("unverified") or []):
+            raise RuntimeError(
+                "پنل تغییر منابع را اعمال نکرد "
+                f"({', '.join(applied['unverified'])})")
     except Exception as e:
         if not hourly and pay_now > 0:
             await billing.credit(user.id, pay_now,
                                  description=f"برگشت وجه ارتقاء پلن — {server.name}")
         await session.flush()
+        # هشدار ادمین: اگر پنل «دیرتر از پنجره‌ی تأیید» اعمال کرده باشد، وجه
+        # برگشته ولی منابع بالا رفته — دستی چک شود
+        try:
+            from bot.services.log_service import LogService
+            await LogService(cb.bot, session)._send(
+                "server",
+                f"⚠️ <b>ارتقاء پلن ناموفق</b>\n\n"
+                f"سرور: {server.name} (id {server.id})\n"
+                f"پلن هدف: {new_plan.display_name or new_plan.name}\n"
+                f"خطا: {str(e)[:200]}\n"
+                f"وجه کاربر ({pay_now:,.0f} تومان) برگشت خورد — اگر پنل دیرتر "
+                "اعمال کرده باشد، وضعیت VM را دستی چک کن.")
+        except Exception:
+            pass
         await _safe_edit(
             cb.message,
             f"{ERR} ارتقاء انجام نشد: {_esc(e)}"
